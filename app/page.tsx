@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect, useRef, createRef } from "react"
+import { useState, useEffect, useRef, createRef, useCallback } from "react"
 import { jsPDF } from "jspdf"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
@@ -943,7 +943,7 @@ export default function ADRChecklist() {
       pdf.setTextColor(inspectorColor)
       pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
-      pdf.save("ADR_Checklist.pdf")
+      pdf.save(`ADR_Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, "_")}.pdf`)
     } catch (error) {
       console.error("Error generating PDF:", error)
     } finally {
@@ -1164,7 +1164,9 @@ export default function ADRChecklist() {
       // Simulate upload delay
       await new Promise((resolve) => setTimeout(resolve, 2000))
 
-      setUploadStatus(`PDF successfully uploaded to Coglas for order ${orderNum}`)
+      setUploadStatus(
+        `PDF successfully uploaded to Coglas: ADR_Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, "_")}.pdf`,
+      )
     } catch (error) {
       console.error("Error uploading PDF:", error)
       setUploadStatus("Error uploading PDF. Please try again.")
@@ -1232,42 +1234,87 @@ export default function ADRChecklist() {
     setInspectionMonth(today.getMonth() + 1)
     setInspectionYear(today.getFullYear())
 
-    // Initialize checkbox states
-    const initialEquipmentState: Record<string, boolean> = {}
-    equipmentItems.forEach((item) => {
-      initialEquipmentState[item.name] = false
-    })
-    setCheckedItems(initialEquipmentState)
+    // Try to load saved data from localStorage
+    const savedData = localStorage.getItem("adrChecklistData")
+    if (savedData) {
+      try {
+        const parsedData = JSON.parse(savedData)
 
-    const initialBeforeLoadingState: Record<string, boolean> = {}
-    beforeLoadingItems.forEach((item) => {
-      initialBeforeLoadingState[item] = false
-    })
-    setBeforeLoadingChecked(initialBeforeLoadingState)
+        // Restore form data
+        if (parsedData.driverName) setDriverName(parsedData.driverName)
+        if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
+        if (parsedData.trailerPlate) setTrailerPlate(parsedData.trailerPlate)
+        if (parsedData.drivingLicenseDate) setDrivingLicenseDate(parsedData.drivingLicenseDate)
+        if (parsedData.adrCertificateDate) setAdrCertificateDate(parsedData.adrCertificateDate)
+        if (parsedData.truckDocDate) setTruckDocDate(parsedData.truckDocDate)
+        if (parsedData.trailerDocDate) setTrailerDocDate(parsedData.trailerDocDate)
+        if (parsedData.checkedItems) setCheckedItems(parsedData.checkedItems)
+        if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
+        if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
+        if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
+        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
 
-    const initialAfterLoadingState: Record<string, boolean> = {}
-    afterLoadingItems.forEach((item) => {
-      initialAfterLoadingState[item] = false
-    })
-    setAfterLoadingChecked(initialAfterLoadingState)
-
-    // Initialize expiry date refs and states
-    const initialDates: Record<string, { month: string; year: string }> = {}
-    const initialExpiredItems: Record<string, boolean> = {}
-
-    equipmentItems.forEach((item) => {
-      if (item.hasDate) {
-        initialDates[item.name] = { month: "", year: "" }
-        initialExpiredItems[item.name] = false
-        dateInputRefs.current[item.name] = {
-          month: createRef<HTMLInputElement>(),
-          year: createRef<HTMLInputElement>(),
+        // Validate dates after loading
+        if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
+          setTimeout(() => validateLicenseDate("drivingLicense"), 0)
         }
-      }
-    })
+        if (parsedData.adrCertificateDate?.month && parsedData.adrCertificateDate?.year) {
+          setTimeout(() => validateLicenseDate("adrCertificate"), 0)
+        }
+        if (parsedData.truckDocDate?.month && parsedData.truckDocDate?.year) {
+          setTimeout(() => validateTruckDocDate(), 0)
+        }
+        if (parsedData.trailerDocDate?.month && parsedData.trailerDocDate?.year) {
+          setTimeout(() => validateTrailerDocDate(), 0)
+        }
 
-    setExpiryDates(initialDates)
-    setExpiredItems(initialExpiredItems)
+        // Validate equipment expiry dates
+        if (parsedData.expiryDates) {
+          Object.keys(parsedData.expiryDates).forEach((itemName) => {
+            setTimeout(() => checkIfDateIsExpired(itemName), 0)
+          })
+        }
+      } catch (error) {
+        console.error("Error loading saved data:", error)
+      }
+    } else {
+      // Initialize checkbox states if no saved data
+      const initialEquipmentState: Record<string, boolean> = {}
+      equipmentItems.forEach((item) => {
+        initialEquipmentState[item.name] = false
+      })
+      setCheckedItems(initialEquipmentState)
+
+      const initialBeforeLoadingState: Record<string, boolean> = {}
+      beforeLoadingItems.forEach((item) => {
+        initialBeforeLoadingState[item] = false
+      })
+      setBeforeLoadingChecked(initialBeforeLoadingState)
+
+      const initialAfterLoadingState: Record<string, boolean> = {}
+      afterLoadingItems.forEach((item) => {
+        initialAfterLoadingState[item] = false
+      })
+      setAfterLoadingChecked(initialAfterLoadingState)
+
+      // Initialize expiry date refs and states
+      const initialDates: Record<string, { month: string; year: string }> = {}
+      const initialExpiredItems: Record<string, boolean> = {}
+
+      equipmentItems.forEach((item) => {
+        if (item.hasDate) {
+          initialDates[item.name] = { month: "", year: "" }
+          initialExpiredItems[item.name] = false
+          dateInputRefs.current[item.name] = {
+            month: createRef<HTMLInputElement>(),
+            year: createRef<HTMLInputElement>(),
+          }
+        }
+      })
+
+      setExpiryDates(initialDates)
+      setExpiredItems(initialExpiredItems)
+    }
 
     // Initialize signature canvases
     initializeCanvas()
@@ -1294,6 +1341,39 @@ export default function ADRChecklist() {
       if (cleanupInspector) cleanupInspector()
     }
   }, [])
+
+  // Add an effect to save data to localStorage whenever relevant state changes
+  useEffect(() => {
+    const dataToSave = {
+      driverName,
+      truckPlate,
+      trailerPlate,
+      drivingLicenseDate,
+      adrCertificateDate,
+      truckDocDate,
+      trailerDocDate,
+      checkedItems,
+      beforeLoadingChecked,
+      afterLoadingChecked,
+      expiryDates,
+      selectedInspector,
+    }
+
+    localStorage.setItem("adrChecklistData", JSON.stringify(dataToSave))
+  }, [
+    driverName,
+    truckPlate,
+    trailerPlate,
+    drivingLicenseDate,
+    adrCertificateDate,
+    truckDocDate,
+    trailerDocDate,
+    checkedItems,
+    beforeLoadingChecked,
+    afterLoadingChecked,
+    expiryDates,
+    selectedInspector,
+  ])
 
   const handleSendEmail = async () => {
     setIsSendingEmail(true)
@@ -1516,7 +1596,8 @@ export default function ADRChecklist() {
       pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
       // Get PDF as base64
-      const pdfBase64 = pdf.output("datauristring").split(",")[1]
+      const pdfBuffer = pdf.output("arraybuffer")
+      const pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
 
       // Send email
       const response = await fetch("/api/send-email", {
@@ -1538,7 +1619,13 @@ export default function ADRChecklist() {
         throw new Error(data.message || "Failed to send email")
       }
 
-      setEmailStatus("Email sent successfully!")
+      if (data.success) {
+        setEmailStatus("Email sent successfully!")
+        // Reset form after successful email
+        resetForm()
+      } else {
+        setEmailStatus(data.message || "Email sent successfully!")
+      }
     } catch (err: any) {
       console.error(err)
       setEmailStatus("Failed to send email. Please try again.")
@@ -1546,6 +1633,74 @@ export default function ADRChecklist() {
       setIsSendingEmail(false)
     }
   }
+
+  const resetForm = useCallback(() => {
+    setDriverName("")
+    setTruckPlate("")
+    setTrailerPlate("")
+    setDrivingLicenseDate({ month: "", year: "" })
+    setAdrCertificateDate({ month: "", year: "" })
+    setTruckDocDate({ month: "", year: "" })
+    setTrailerDocDate({ month: "", year: "" })
+    setDrivingLicenseExpired(false)
+    setAdrCertificateExpired(false)
+    setTruckDocExpired(false)
+    setTrailerDocExpired(false)
+    setDateValid({
+      drivingLicense: false,
+      adrCertificate: false,
+      truckDoc: false,
+      trailerDoc: false,
+    })
+
+    // Reset equipment items
+    const resetEquipmentState: Record<string, boolean> = {}
+    equipmentItems.forEach((item) => {
+      resetEquipmentState[item.name] = false
+    })
+    setCheckedItems(resetEquipmentState)
+
+    // Reset before loading items
+    const resetBeforeLoadingState: Record<string, boolean> = {}
+    beforeLoadingItems.forEach((item) => {
+      resetBeforeLoadingState[item] = false
+    })
+    setBeforeLoadingChecked(resetBeforeLoadingState)
+
+    // Reset after loading items
+    const resetAfterLoadingState: Record<string, boolean> = {}
+    afterLoadingItems.forEach((item) => {
+      resetAfterLoadingState[item] = false
+    })
+    setAfterLoadingChecked(resetAfterLoadingState)
+
+    // Reset expiry dates
+    const resetDates: Record<string, { month: string; year: string }> = {}
+    const resetExpiredItems: Record<string, boolean> = {}
+    equipmentItems.forEach((item) => {
+      if (item.hasDate) {
+        resetDates[item.name] = { month: "", year: "" }
+        resetExpiredItems[item.name] = false
+      }
+    })
+    setExpiryDates(resetDates)
+    setExpiredItems(resetExpiredItems)
+
+    // Reset signatures
+    clearSignature()
+    clearInspectorSignature()
+
+    // Reset inspector
+    setSelectedInspector("")
+
+    // Reset other states
+    setShowResult(false)
+    setMissingItems([])
+    setAllChecked(false)
+
+    // Clear localStorage
+    localStorage.removeItem("adrChecklistData")
+  }, [equipmentItems, beforeLoadingItems, afterLoadingItems])
 
   return (
     <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
@@ -1716,19 +1871,19 @@ export default function ADRChecklist() {
             </div>
           </div>
 
-          {/* Truck Document Box */}
+          {/* Combined Vehicle Documents Box */}
           <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
             <Image
               src="/images/truck-document.jpg"
-              alt="Truck Document"
+              alt="Vehicle Documents"
               fill
               className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
             />
-            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
-              <div className="flex items-center justify-between mb-2 min-h-[120px]">
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[160px]">
+              <div className="flex items-center justify-between mb-2">
                 <div className="flex-1">
                   <div className="flex items-center">
-                    <Label className="font-medium">Truck Document</Label>
+                    <Label className="font-medium">Vehicle Documents</Label>
                   </div>
                   <div className="text-sm text-gray-600 mt-1">
                     <div>de - Fahrzeugschein</div>
@@ -1740,8 +1895,10 @@ export default function ADRChecklist() {
                   </div>
                 </div>
               </div>
+
+              {/* Truck Document Expiry */}
               <div className="mt-2">
-                <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                <Label className="text-sm font-medium">Truck Document Expiry (MM/YYYY):</Label>
                 <div className="flex items-center">
                   <Input
                     value={truckDocDate.month}
@@ -1774,35 +1931,10 @@ export default function ADRChecklist() {
                   {truckDocExpired && <span className="ml-2 text-red-500">Expired</span>}
                 </div>
               </div>
-            </div>
-          </div>
 
-          {/* Trailer Document Box */}
-          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
-            <Image
-              src="/images/trailer-document.jpg"
-              alt="Trailer Document"
-              fill
-              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
-            />
-            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
-              <div className="flex items-center justify-between mb-2 min-h-[120px]">
-                <div className="flex-1">
-                  <div className="flex items-center">
-                    <Label className="font-medium">Trailer Document</Label>
-                  </div>
-                  <div className="text-sm text-gray-600 mt-1">
-                    <div>de - Anhängerschein</div>
-                    <div>nl - Aanhangwagen registratie</div>
-                    <div>pl - Dowód rejestracyjny przyczepy</div>
-                    <div>ru - Свидетельство о регистрации прицепа</div>
-                    <div>ro - Certificat de înmatriculare pentru remorcă</div>
-                    <div>rs - Саобраћајна дозвола за приколицу</div>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-2">
-                <Label className="text-sm">Expiry (MM/YYYY):</Label>
+              {/* Trailer Document Expiry */}
+              <div className="mt-3">
+                <Label className="text-sm font-medium">Trailer Document Expiry (MM/YYYY):</Label>
                 <div className="flex items-center">
                   <Input
                     value={trailerDocDate.month}

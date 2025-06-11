@@ -93,7 +93,7 @@ This checklist was generated automatically by the ADR Checklist System.`,
       `,
       attachments: [
         {
-          filename: `ADR_Checklist_${driverName}_${truckPlate}_${trailerPlate}_${inspectionDate}.pdf`,
+          filename: `ADR_Check_${driverName}_${inspectionDate.replace(/-/g, "_")}.pdf`,
           content: pdfBuffer,
           contentType: "application/pdf",
         },
@@ -104,6 +104,7 @@ This checklist was generated automatically by the ADR Checklist System.`,
     await transporter.sendMail(mailOptions)
 
     return NextResponse.json({
+      success: true,
       message: `Email sent successfully to ${recipients.length} recipient(s)`,
     })
   } catch (error) {
