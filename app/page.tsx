@@ -48,7 +48,8 @@ const [trailerDocExpired, setTrailerDocExpired] = useState(false);
   const [orderNumber, setOrderNumber] = useState("")
   const [isUploading, setIsUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
-
+ const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<string | null>(null);
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [signatureData, setSignatureData] = useState<string | null>(null)
@@ -957,6 +958,258 @@ if (trailerDocDate.month && trailerDocDate.year) {
       setIsPdfGenerating(false)
     }
   }
+const handleSendEmail = async () => {
+  setIsSendingEmail(true);
+  setEmailStatus(null);
+
+  try {
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const margin = 20
+      let y = 20
+
+      // Load watermark image
+      const watermarkUrl = "/images/albias-watermark.png"
+      const watermarkImage = await fetch(watermarkUrl)
+        .then((res) => res.blob())
+        .then((blob) => {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(reader.result as string)
+            reader.readAsDataURL(blob)
+          })
+        })
+
+      // Draw watermark (centered and semi-transparent)
+      pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
+
+      const inspectorColors = {
+        "Alexandru Dogariu": "#FF8C00",
+        "Robert Kerekes": "#8B4513",
+        "Eduard Tudose": "#000000",
+        "Angela Ilis": "#FF69B4",
+        "Lucian Sistac": "#1E90FF",
+        "Martian Gherasim": "#008000",
+        "Alexandru Florea": "#DAA520",
+      }
+
+      const drawCheckbox = (x, y, checked) => {
+        pdf.setDrawColor(0)
+        pdf.setLineWidth(0.5) // Increased line width for bolder boxes
+        pdf.rect(x, y, 4, 4)
+        if (checked) {
+          pdf.setDrawColor(0, 100, 0)
+          pdf.setLineWidth(0.8) // Increased line width for bolder check marks
+          pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
+          pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
+        } else {
+          pdf.setDrawColor(255, 0, 0)
+          pdf.setLineWidth(0.8) // Increased line width for bolder X marks
+          pdf.line(x, y, x + 4, y + 4)
+          pdf.line(x + 4, y, x, y + 4)
+        }
+        pdf.setDrawColor(0)
+        pdf.setLineWidth(0.5) // Reset line width
+      }
+
+      const addSafeText = (text, x, y, options = {}, color = "#000000", bold = true) => {
+        // Always use bold for all text
+        pdf.setTextColor(color)
+        pdf.setFont("helvetica", bold ? "bold" : "bold") // Always use bold
+        pdf.text(text, x, y, options)
+        pdf.setTextColor("#000000")
+      }
+
+      const addLine = (text, value, x, y, color = "#000000", bold = true) => {
+        // Always use bold for all text
+        const label = `${text} `
+        pdf.setFont("helvetica", "bold") // Always use bold
+        pdf.setTextColor("#000000")
+        pdf.text(label, x, y)
+        const labelWidth = pdf.getTextWidth(label)
+        pdf.setFont("helvetica", "bold") // Always use bold
+        pdf.setTextColor(color)
+        pdf.text(value, x + labelWidth, y)
+        pdf.setTextColor("#000000")
+      }
+
+      pdf.setFontSize(18)
+      addSafeText("ADR Checklist", pageWidth / 2, y, { align: "center" })
+      y += 10
+
+      pdf.setFontSize(10)
+
+      const lines = [
+        { label: "Driver's Name:", value: driverName, color: "#191970", bold: true },
+        { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
+        { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
+      ]
+
+      if (drivingLicenseDate.month && drivingLicenseDate.year) {
+        const expired = drivingLicenseExpired
+        lines.push({
+          label: "Driving License Expiry:",
+          value: `${drivingLicenseDate.month}/${drivingLicenseDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      if (adrCertificateDate.month && adrCertificateDate.year) {
+        const expired = adrCertificateExpired
+        lines.push({
+          label: "ADR Certificate Expiry:",
+          value: `${adrCertificateDate.month}/${adrCertificateDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+if (truckDocDate.month && truckDocDate.year) {
+  const expired = truckDocExpired;
+  lines.push({
+    label: "Truck Document Expiry:",
+    value: `${truckDocDate.month}/${truckDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+    color: expired ? "#FF0000" : "#006400",
+  });
+}
+
+if (trailerDocDate.month && trailerDocDate.year) {
+  const expired = trailerDocExpired;
+  lines.push({
+    label: "Trailer Document Expiry:",
+    value: `${trailerDocDate.month}/${trailerDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+    color: expired ? "#FF0000" : "#006400",
+  });
+}
+      lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
+
+      lines.forEach(({ label, value, color, bold }) => {
+        addLine(label, value, margin, y, color, bold)
+        y += 6
+      })
+
+      y += 4
+      addSafeText("Equipment Checklist", margin, y)
+      y += 6
+
+      const leftColumnItems = equipmentItems.slice(0, 6)
+      const rightColumnItems = equipmentItems.slice(6)
+      const columnGap = 10
+      const leftX = margin
+      const rightX = pageWidth / 2 + columnGap
+      const columnHeight = Math.max(leftColumnItems.length, rightColumnItems.length)
+      const rowHeight = 8
+
+      for (let i = 0; i < columnHeight; i++) {
+        const currentY = y + i * rowHeight
+
+        const renderItem = (item, x) => {
+          if (!item) return
+          const isChecked = checkedItems[item.name]
+          const date = expiryDates[item.name]
+          let label = item.name
+
+          if (item.hasDate && date?.month && date?.year) {
+            const now = new Date()
+            const expiry = new Date(`${date.year}-${date.month}-01`)
+            expiry.setMonth(expiry.getMonth() + 1)
+            expiry.setDate(0)
+            const expired = now > expiry
+            const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
+            label = `${item.name} - `
+            drawCheckbox(x, currentY - 3, isChecked && !expired)
+            addSafeText(label, x + 6, currentY)
+            addSafeText(dateStr, x + 6 + pdf.getTextWidth(label), currentY, {}, expired ? "#FF0000" : "#006400")
+            return
+          }
+
+          drawCheckbox(x, currentY - 3, isChecked)
+          addSafeText(label, x + 6, currentY)
+        }
+
+        renderItem(leftColumnItems[i], leftX)
+        renderItem(rightColumnItems[i], rightX)
+      }
+
+      y += columnHeight * rowHeight + 10
+      addSafeText("Before Loading", margin, y)
+      y += 6
+      beforeLoadingItems.forEach((item) => {
+        drawCheckbox(margin, y - 3, beforeLoadingChecked[item])
+        addSafeText(item, margin + 6, y)
+        y += 6
+      })
+
+      y += 4
+      addSafeText("After Loading", margin, y)
+      y += 6
+      afterLoadingItems.forEach((item) => {
+        drawCheckbox(margin, y - 3, afterLoadingChecked[item])
+        addSafeText(item, margin + 6, y)
+        y += 6
+      })
+
+      y += 10
+
+      if (signatureData) {
+        pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
+        addSafeText("Driver Signature", margin, y + 25)
+      } else {
+        pdf.setLineWidth(0.5) // Bolder line for signature
+        pdf.line(margin, y + 20, margin + 70, y + 20)
+        addSafeText("Driver Signature (Not Signed)", margin, y + 25)
+      }
+
+      const inspectorX = pageWidth - margin - 70
+      if (inspectorSignatureData) {
+        pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
+      } else {
+        pdf.setLineWidth(0.5) // Bolder line for signature
+        pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
+      }
+
+      const inspectorColor = inspectorColors[selectedInspector] || "#000000"
+      const isBoldInspector = true // Always bold
+      const inspectorLabel = "Inspector: "
+      pdf.setFont("helvetica", "bold") // Always bold
+      pdf.setTextColor("#000000")
+      pdf.text(inspectorLabel, inspectorX, y + 25)
+      const labelWidth = pdf.getTextWidth(inspectorLabel)
+      pdf.setFont("helvetica", "bold") // Always bold
+      pdf.setTextColor(inspectorColor)
+      pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
+
+    const pdfBlob = pdf.output("blob");
+    const arrayBuffer = await pdfBlob.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+    const response = await fetch("/api/send-pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        inspectorName: selectedInspector,
+        pdfBase64: base64,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to send email");
+    }
+
+    setEmailStatus("Email sent successfully!");
+  } catch (err: any) {
+    console.error(err);
+    setEmailStatus("Failed to send email.");
+  } finally {
+    setIsSendingEmail(false);
+  }
+};
+
 
   // FTP Upload function (placeholder for FTP implementation)
   const uploadPDFToFTP = async (orderNum: string) => {
@@ -1702,10 +1955,26 @@ const validateTrailerDocDate = () => {
 >
   Load the PDF to COGLAS
 </Button>
-        <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
+<Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
           {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
         </Button>
-      
+       <Button 
+  onClick={handleSendEmail} 
+  disabled={isSendingEmail || isPdfGenerating}
+  className="w-full bg-purple-600 hover:bg-purple-700"
+>
+  {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+</Button>
+
+{emailStatus && (
+  <div className={`mt-2 p-2 rounded ${
+    emailStatus.includes("Error") 
+      ? "bg-red-100 text-red-700" 
+      : "bg-green-100 text-green-700"
+  }`}>
+    {emailStatus}
+  </div>
+)}
       </div>
 
       {/* FTP Upload Modal */}
@@ -1751,6 +2020,14 @@ const validateTrailerDocDate = () => {
               >
                 {isUploading ? "Uploading..." : "Upload PDF"}
               </Button>
+              <Button 
+  onClick={handleSendEmail} // ✅ FIXED
+  disabled={isSendingEmail || isPdfGenerating}
+  className="w-full bg-purple-600 hover:bg-purple-700"
+>
+  {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+</Button>
+
             </div>
           </div>
         </div>
