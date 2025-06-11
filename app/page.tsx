@@ -35,21 +35,22 @@ export default function ADRChecklist() {
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
   const [selectedInspector, setSelectedInspector] = useState("")
   const [dateValid, setDateValid] = useState({
-  drivingLicense: false,
-  adrCertificate: false,
-  truckDoc: false,
-  trailerDoc: false,
-});
-const [truckDocDate, setTruckDocDate] = useState({ month: "", year: "" });
-const [trailerDocDate, setTrailerDocDate] = useState({ month: "", year: "" });
-const [truckDocExpired, setTruckDocExpired] = useState(false);
-const [trailerDocExpired, setTrailerDocExpired] = useState(false);
+    drivingLicense: false,
+    adrCertificate: false,
+    truckDoc: false,
+    trailerDoc: false,
+  })
+  const [truckDocDate, setTruckDocDate] = useState({ month: "", year: "" })
+  const [trailerDocDate, setTrailerDocDate] = useState({ month: "", year: "" })
+  const [truckDocExpired, setTruckDocExpired] = useState(false)
+  const [trailerDocExpired, setTrailerDocExpired] = useState(false)
   const [showFtpModal, setShowFtpModal] = useState(false)
   const [orderNumber, setOrderNumber] = useState("")
   const [isUploading, setIsUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
- const [isSendingEmail, setIsSendingEmail] = useState(false);
-  const [emailStatus, setEmailStatus] = useState<string | null>(null);
+  const [isSendingEmail, setIsSendingEmail] = useState(false)
+  const [emailStatus, setEmailStatus] = useState<string | null>(null)
+
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [signatureData, setSignatureData] = useState<string | null>(null)
@@ -63,7 +64,6 @@ const [trailerDocExpired, setTrailerDocExpired] = useState(false);
   const [expiryDates, setExpiryDates] = useState<Record<string, { month: string; year: string }>>({})
   const [expiredItems, setExpiredItems] = useState<Record<string, boolean>>({})
 
-
   // Refs for date inputs
   const dateInputRefs = useRef<
     Record<
@@ -76,8 +76,8 @@ const [trailerDocExpired, setTrailerDocExpired] = useState(false);
   >({})
   const drivingLicenseYearRef = useRef<HTMLInputElement>(null)
   const adrCertificateYearRef = useRef<HTMLInputElement>(null)
-const truckDocYearRef = useRef<HTMLInputElement>(null);
-const trailerDocYearRef = useRef<HTMLInputElement>(null);
+  const truckDocYearRef = useRef<HTMLInputElement>(null)
+  const trailerDocYearRef = useRef<HTMLInputElement>(null)
   // Equipment items with translations and images
   const equipmentItems = [
     {
@@ -604,49 +604,41 @@ const trailerDocYearRef = useRef<HTMLInputElement>(null);
       dateInputRefs.current[itemName]?.year.current?.focus()
     }
   }
-const handleTruckDocDateChange = (
-  field: "month" | "year",
-  value: string
-) => {
-  const numericValue = value.replace(/[^0-9]/g, "");
-  const updatedDate = { ...truckDocDate, [field]: numericValue };
-  setTruckDocDate(updatedDate);
+  const handleTruckDocDateChange = (field: "month" | "year", value: string) => {
+    const numericValue = value.replace(/[^0-9]/g, "")
+    const updatedDate = { ...truckDocDate, [field]: numericValue }
+    setTruckDocDate(updatedDate)
 
-  if (field === "month" && numericValue.length === 2) {
-    truckDocYearRef.current?.focus();
+    if (field === "month" && numericValue.length === 2) {
+      truckDocYearRef.current?.focus()
+    }
+
+    if (updatedDate.month.length === 2 && updatedDate.year.length === 4) {
+      const month = Number.parseInt(updatedDate.month, 10)
+      const year = Number.parseInt(updatedDate.year, 10)
+      const isExpired = year < inspectionYear || (year === inspectionYear && month < inspectionMonth)
+      setTruckDocExpired(isExpired)
+      setDateValid((prev) => ({ ...prev, truckDoc: !isExpired }))
+    }
   }
 
-  if (updatedDate.month.length === 2 && updatedDate.year.length === 4) {
-    const month = Number.parseInt(updatedDate.month, 10);
-    const year = Number.parseInt(updatedDate.year, 10);
-    const isExpired = year < inspectionYear || 
-                     (year === inspectionYear && month < inspectionMonth);
-    setTruckDocExpired(isExpired);
-    setDateValid((prev) => ({ ...prev, truckDoc: !isExpired }));
-  }
-};
+  const handleTrailerDocDateChange = (field: "month" | "year", value: string) => {
+    const numericValue = value.replace(/[^0-9]/g, "")
+    const updatedDate = { ...trailerDocDate, [field]: numericValue }
+    setTrailerDocDate(updatedDate)
 
-const handleTrailerDocDateChange = (
-  field: "month" | "year",
-  value: string
-) => {
-  const numericValue = value.replace(/[^0-9]/g, "");
-  const updatedDate = { ...trailerDocDate, [field]: numericValue };
-  setTrailerDocDate(updatedDate);
+    if (field === "month" && numericValue.length === 2) {
+      trailerDocYearRef.current?.focus()
+    }
 
-  if (field === "month" && numericValue.length === 2) {
-    trailerDocYearRef.current?.focus();
+    if (updatedDate.month.length === 2 && updatedDate.year.length === 4) {
+      const month = Number.parseInt(updatedDate.month, 10)
+      const year = Number.parseInt(updatedDate.year, 10)
+      const isExpired = year < inspectionYear || (year === inspectionYear && month < inspectionMonth)
+      setTrailerDocExpired(isExpired)
+      setDateValid((prev) => ({ ...prev, trailerDoc: !isExpired }))
+    }
   }
-
-  if (updatedDate.month.length === 2 && updatedDate.year.length === 4) {
-    const month = Number.parseInt(updatedDate.month, 10);
-    const year = Number.parseInt(updatedDate.year, 10);
-    const isExpired = year < inspectionYear || 
-                     (year === inspectionYear && month < inspectionMonth);
-    setTrailerDocExpired(isExpired);
-    setDateValid((prev) => ({ ...prev, trailerDoc: !isExpired }));
-  }
-};
   // Handle equipment checkbox changes
   const handleEquipmentCheck = (itemName: string, checked: boolean) => {
     setCheckedItems((prev) => ({
@@ -836,23 +828,23 @@ const handleTrailerDocDateChange = (
           color: expired ? "#FF0000" : "#006400",
         })
       }
-if (truckDocDate.month && truckDocDate.year) {
-  const expired = truckDocExpired;
-  lines.push({
-    label: "Truck Document Expiry:",
-    value: `${truckDocDate.month}/${truckDocDate.year}${expired ? " (EXPIRED)" : ""}`,
-    color: expired ? "#FF0000" : "#006400",
-  });
-}
+      if (truckDocDate.month && truckDocDate.year) {
+        const expired = truckDocExpired
+        lines.push({
+          label: "Truck Document Expiry:",
+          value: `${truckDocDate.month}/${truckDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
 
-if (trailerDocDate.month && trailerDocDate.year) {
-  const expired = trailerDocExpired;
-  lines.push({
-    label: "Trailer Document Expiry:",
-    value: `${trailerDocDate.month}/${trailerDocDate.year}${expired ? " (EXPIRED)" : ""}`,
-    color: expired ? "#FF0000" : "#006400",
-  });
-}
+      if (trailerDocDate.month && trailerDocDate.year) {
+        const expired = trailerDocExpired
+        lines.push({
+          label: "Trailer Document Expiry:",
+          value: `${trailerDocDate.month}/${trailerDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
       lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
 
       lines.forEach(({ label, value, color, bold }) => {
@@ -958,258 +950,6 @@ if (trailerDocDate.month && trailerDocDate.year) {
       setIsPdfGenerating(false)
     }
   }
-const handleSendEmail = async () => {
-  setIsSendingEmail(true);
-  setEmailStatus(null);
-
-  try {
-      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
-      const pageWidth = pdf.internal.pageSize.getWidth()
-      const pageHeight = pdf.internal.pageSize.getHeight()
-      const margin = 20
-      let y = 20
-
-      // Load watermark image
-      const watermarkUrl = "/images/albias-watermark.png"
-      const watermarkImage = await fetch(watermarkUrl)
-        .then((res) => res.blob())
-        .then((blob) => {
-          return new Promise<string>((resolve) => {
-            const reader = new FileReader()
-            reader.onloadend = () => resolve(reader.result as string)
-            reader.readAsDataURL(blob)
-          })
-        })
-
-      // Draw watermark (centered and semi-transparent)
-      pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
-
-      const inspectorColors = {
-        "Alexandru Dogariu": "#FF8C00",
-        "Robert Kerekes": "#8B4513",
-        "Eduard Tudose": "#000000",
-        "Angela Ilis": "#FF69B4",
-        "Lucian Sistac": "#1E90FF",
-        "Martian Gherasim": "#008000",
-        "Alexandru Florea": "#DAA520",
-      }
-
-      const drawCheckbox = (x, y, checked) => {
-        pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5) // Increased line width for bolder boxes
-        pdf.rect(x, y, 4, 4)
-        if (checked) {
-          pdf.setDrawColor(0, 100, 0)
-          pdf.setLineWidth(0.8) // Increased line width for bolder check marks
-          pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
-          pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
-        } else {
-          pdf.setDrawColor(255, 0, 0)
-          pdf.setLineWidth(0.8) // Increased line width for bolder X marks
-          pdf.line(x, y, x + 4, y + 4)
-          pdf.line(x + 4, y, x, y + 4)
-        }
-        pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5) // Reset line width
-      }
-
-      const addSafeText = (text, x, y, options = {}, color = "#000000", bold = true) => {
-        // Always use bold for all text
-        pdf.setTextColor(color)
-        pdf.setFont("helvetica", bold ? "bold" : "bold") // Always use bold
-        pdf.text(text, x, y, options)
-        pdf.setTextColor("#000000")
-      }
-
-      const addLine = (text, value, x, y, color = "#000000", bold = true) => {
-        // Always use bold for all text
-        const label = `${text} `
-        pdf.setFont("helvetica", "bold") // Always use bold
-        pdf.setTextColor("#000000")
-        pdf.text(label, x, y)
-        const labelWidth = pdf.getTextWidth(label)
-        pdf.setFont("helvetica", "bold") // Always use bold
-        pdf.setTextColor(color)
-        pdf.text(value, x + labelWidth, y)
-        pdf.setTextColor("#000000")
-      }
-
-      pdf.setFontSize(18)
-      addSafeText("ADR Checklist", pageWidth / 2, y, { align: "center" })
-      y += 10
-
-      pdf.setFontSize(10)
-
-      const lines = [
-        { label: "Driver's Name:", value: driverName, color: "#191970", bold: true },
-        { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
-        { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
-      ]
-
-      if (drivingLicenseDate.month && drivingLicenseDate.year) {
-        const expired = drivingLicenseExpired
-        lines.push({
-          label: "Driving License Expiry:",
-          value: `${drivingLicenseDate.month}/${drivingLicenseDate.year}${expired ? " (EXPIRED)" : ""}`,
-          color: expired ? "#FF0000" : "#006400",
-        })
-      }
-
-      if (adrCertificateDate.month && adrCertificateDate.year) {
-        const expired = adrCertificateExpired
-        lines.push({
-          label: "ADR Certificate Expiry:",
-          value: `${adrCertificateDate.month}/${adrCertificateDate.year}${expired ? " (EXPIRED)" : ""}`,
-          color: expired ? "#FF0000" : "#006400",
-        })
-      }
-if (truckDocDate.month && truckDocDate.year) {
-  const expired = truckDocExpired;
-  lines.push({
-    label: "Truck Document Expiry:",
-    value: `${truckDocDate.month}/${truckDocDate.year}${expired ? " (EXPIRED)" : ""}`,
-    color: expired ? "#FF0000" : "#006400",
-  });
-}
-
-if (trailerDocDate.month && trailerDocDate.year) {
-  const expired = trailerDocExpired;
-  lines.push({
-    label: "Trailer Document Expiry:",
-    value: `${trailerDocDate.month}/${trailerDocDate.year}${expired ? " (EXPIRED)" : ""}`,
-    color: expired ? "#FF0000" : "#006400",
-  });
-}
-      lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
-
-      lines.forEach(({ label, value, color, bold }) => {
-        addLine(label, value, margin, y, color, bold)
-        y += 6
-      })
-
-      y += 4
-      addSafeText("Equipment Checklist", margin, y)
-      y += 6
-
-      const leftColumnItems = equipmentItems.slice(0, 6)
-      const rightColumnItems = equipmentItems.slice(6)
-      const columnGap = 10
-      const leftX = margin
-      const rightX = pageWidth / 2 + columnGap
-      const columnHeight = Math.max(leftColumnItems.length, rightColumnItems.length)
-      const rowHeight = 8
-
-      for (let i = 0; i < columnHeight; i++) {
-        const currentY = y + i * rowHeight
-
-        const renderItem = (item, x) => {
-          if (!item) return
-          const isChecked = checkedItems[item.name]
-          const date = expiryDates[item.name]
-          let label = item.name
-
-          if (item.hasDate && date?.month && date?.year) {
-            const now = new Date()
-            const expiry = new Date(`${date.year}-${date.month}-01`)
-            expiry.setMonth(expiry.getMonth() + 1)
-            expiry.setDate(0)
-            const expired = now > expiry
-            const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
-            label = `${item.name} - `
-            drawCheckbox(x, currentY - 3, isChecked && !expired)
-            addSafeText(label, x + 6, currentY)
-            addSafeText(dateStr, x + 6 + pdf.getTextWidth(label), currentY, {}, expired ? "#FF0000" : "#006400")
-            return
-          }
-
-          drawCheckbox(x, currentY - 3, isChecked)
-          addSafeText(label, x + 6, currentY)
-        }
-
-        renderItem(leftColumnItems[i], leftX)
-        renderItem(rightColumnItems[i], rightX)
-      }
-
-      y += columnHeight * rowHeight + 10
-      addSafeText("Before Loading", margin, y)
-      y += 6
-      beforeLoadingItems.forEach((item) => {
-        drawCheckbox(margin, y - 3, beforeLoadingChecked[item])
-        addSafeText(item, margin + 6, y)
-        y += 6
-      })
-
-      y += 4
-      addSafeText("After Loading", margin, y)
-      y += 6
-      afterLoadingItems.forEach((item) => {
-        drawCheckbox(margin, y - 3, afterLoadingChecked[item])
-        addSafeText(item, margin + 6, y)
-        y += 6
-      })
-
-      y += 10
-
-      if (signatureData) {
-        pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
-        addSafeText("Driver Signature", margin, y + 25)
-      } else {
-        pdf.setLineWidth(0.5) // Bolder line for signature
-        pdf.line(margin, y + 20, margin + 70, y + 20)
-        addSafeText("Driver Signature (Not Signed)", margin, y + 25)
-      }
-
-      const inspectorX = pageWidth - margin - 70
-      if (inspectorSignatureData) {
-        pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
-      } else {
-        pdf.setLineWidth(0.5) // Bolder line for signature
-        pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
-      }
-
-      const inspectorColor = inspectorColors[selectedInspector] || "#000000"
-      const isBoldInspector = true // Always bold
-      const inspectorLabel = "Inspector: "
-      pdf.setFont("helvetica", "bold") // Always bold
-      pdf.setTextColor("#000000")
-      pdf.text(inspectorLabel, inspectorX, y + 25)
-      const labelWidth = pdf.getTextWidth(inspectorLabel)
-      pdf.setFont("helvetica", "bold") // Always bold
-      pdf.setTextColor(inspectorColor)
-      pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
-
-    const pdfBlob = pdf.output("blob");
-    const arrayBuffer = await pdfBlob.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-
-    const response = await fetch("/api/send-pdf", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        inspectorName: selectedInspector,
-        pdfBase64: base64,
-        driverName,
-        truckPlate,
-        trailerPlate,
-        inspectionDate: checkDate,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.message || "Failed to send email");
-    }
-
-    setEmailStatus("Email sent successfully!");
-  } catch (err: any) {
-    console.error(err);
-    setEmailStatus("Failed to send email.");
-  } finally {
-    setIsSendingEmail(false);
-  }
-};
-
 
   // FTP Upload function (placeholder for FTP implementation)
   const uploadPDFToFTP = async (orderNum: string) => {
@@ -1446,25 +1186,23 @@ if (trailerDocDate.month && trailerDocDate.year) {
     setOrderNumber("")
     setUploadStatus(null)
   }
-const validateTruckDocDate = () => {
-  const month = Number.parseInt(truckDocDate.month, 10);
-  const year = Number.parseInt(truckDocDate.year, 10);
-  if (isNaN(month) || isNaN(year) || month < 1 || month > 12 || year < 1000) return;
-  const isExpired = year < inspectionYear || 
-                   (year === inspectionYear && month < inspectionMonth);
-  setTruckDocExpired(isExpired);
-  setDateValid((prev) => ({ ...prev, truckDoc: !isExpired }));
-};
+  const validateTruckDocDate = () => {
+    const month = Number.parseInt(truckDocDate.month, 10)
+    const year = Number.parseInt(truckDocDate.year, 10)
+    if (isNaN(month) || isNaN(year) || month < 1 || month > 12 || year < 1000) return
+    const isExpired = year < inspectionYear || (year === inspectionYear && month < inspectionMonth)
+    setTruckDocExpired(isExpired)
+    setDateValid((prev) => ({ ...prev, truckDoc: !isExpired }))
+  }
 
-const validateTrailerDocDate = () => {
-  const month = Number.parseInt(trailerDocDate.month, 10);
-  const year = Number.parseInt(trailerDocDate.year, 10);
-  if (isNaN(month) || isNaN(year) || month < 1 || month > 12 || year < 1000) return;
-  const isExpired = year < inspectionYear || 
-                   (year === inspectionYear && month < inspectionMonth);
-  setTrailerDocExpired(isExpired);
-  setDateValid((prev) => ({ ...prev, trailerDoc: !isExpired }));
-};
+  const validateTrailerDocDate = () => {
+    const month = Number.parseInt(trailerDocDate.month, 10)
+    const year = Number.parseInt(trailerDocDate.year, 10)
+    if (isNaN(month) || isNaN(year) || month < 1 || month > 12 || year < 1000) return
+    const isExpired = year < inspectionYear || (year === inspectionYear && month < inspectionMonth)
+    setTrailerDocExpired(isExpired)
+    setDateValid((prev) => ({ ...prev, trailerDoc: !isExpired }))
+  }
   const validateLicenseDate = (type: "drivingLicense" | "adrCertificate") => {
     const date = type === "drivingLicense" ? drivingLicenseDate : adrCertificateDate
     const month = Number.parseInt(date.month, 10)
@@ -1484,86 +1222,337 @@ const validateTrailerDocDate = () => {
 
   // Initialize component
   useEffect(() => {
-  // Set today's date and inspection info
-  const today = new Date();
-  const day = String(today.getDate()).padStart(2, "0");
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  const year = today.getFullYear();
+    // Set today's date and inspection info
+    const today = new Date()
+    const day = String(today.getDate()).padStart(2, "0")
+    const month = String(today.getMonth() + 1).padStart(2, "0")
+    const year = today.getFullYear()
 
-  setCheckDate(`${day}-${month}-${year}`);
-  setInspectionMonth(today.getMonth() + 1);
-  setInspectionYear(today.getFullYear());
+    setCheckDate(`${day}-${month}-${year}`)
+    setInspectionMonth(today.getMonth() + 1)
+    setInspectionYear(today.getFullYear())
 
-  // Initialize checkbox states
-  const initialEquipmentState: Record<string, boolean> = {};
-  equipmentItems.forEach((item) => {
-    initialEquipmentState[item.name] = false;
-  });
-  setCheckedItems(initialEquipmentState);
+    // Initialize checkbox states
+    const initialEquipmentState: Record<string, boolean> = {}
+    equipmentItems.forEach((item) => {
+      initialEquipmentState[item.name] = false
+    })
+    setCheckedItems(initialEquipmentState)
 
-  const initialBeforeLoadingState: Record<string, boolean> = {};
-  beforeLoadingItems.forEach((item) => {
-    initialBeforeLoadingState[item] = false;
-  });
-  setBeforeLoadingChecked(initialBeforeLoadingState);
+    const initialBeforeLoadingState: Record<string, boolean> = {}
+    beforeLoadingItems.forEach((item) => {
+      initialBeforeLoadingState[item] = false
+    })
+    setBeforeLoadingChecked(initialBeforeLoadingState)
 
-  const initialAfterLoadingState: Record<string, boolean> = {};
-  afterLoadingItems.forEach((item) => {
-    initialAfterLoadingState[item] = false;
-  });
-  setAfterLoadingChecked(initialAfterLoadingState);
+    const initialAfterLoadingState: Record<string, boolean> = {}
+    afterLoadingItems.forEach((item) => {
+      initialAfterLoadingState[item] = false
+    })
+    setAfterLoadingChecked(initialAfterLoadingState)
 
-  // Initialize expiry date refs and states
-  const initialDates: Record<string, { month: string; year: string }> = {};
-  const initialExpiredItems: Record<string, boolean> = {};
+    // Initialize expiry date refs and states
+    const initialDates: Record<string, { month: string; year: string }> = {}
+    const initialExpiredItems: Record<string, boolean> = {}
 
-  equipmentItems.forEach((item) => {
-    if (item.hasDate) {
-      initialDates[item.name] = { month: "", year: "" };
-      initialExpiredItems[item.name] = false;
-      dateInputRefs.current[item.name] = {
-        month: createRef<HTMLInputElement>(),
-        year: createRef<HTMLInputElement>(),
-      };
+    equipmentItems.forEach((item) => {
+      if (item.hasDate) {
+        initialDates[item.name] = { month: "", year: "" }
+        initialExpiredItems[item.name] = false
+        dateInputRefs.current[item.name] = {
+          month: createRef<HTMLInputElement>(),
+          year: createRef<HTMLInputElement>(),
+        }
+      }
+    })
+
+    setExpiryDates(initialDates)
+    setExpiredItems(initialExpiredItems)
+
+    // Initialize signature canvases
+    initializeCanvas()
+    initializeInspectorCanvas()
+
+    const cleanupDriver = setupSignaturePad()
+    const cleanupInspector = setupInspectorSignaturePad()
+
+    // ✨ Title fade-in animation
+    const title = document.getElementById("adr-title")
+    if (title) {
+      title.style.opacity = "0"
+      title.style.transform = "translateY(-10px)"
+      setTimeout(() => {
+        title.style.transition = "all 0.6s ease-out"
+        title.style.opacity = "1"
+        title.style.transform = "translateY(0)"
+      }, 200)
     }
-  });
 
-  setExpiryDates(initialDates);
-  setExpiredItems(initialExpiredItems);
+    // Cleanup event listeners on unmount
+    return () => {
+      if (cleanupDriver) cleanupDriver()
+      if (cleanupInspector) cleanupInspector()
+    }
+  }, [])
 
-  // Initialize signature canvases
-  initializeCanvas();
-  initializeInspectorCanvas();
+  const handleSendEmail = async () => {
+    setIsSendingEmail(true)
+    setEmailStatus(null)
 
-  const cleanupDriver = setupSignaturePad();
-  const cleanupInspector = setupInspectorSignaturePad();
+    try {
+      // Generate PDF first
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const margin = 20
+      let y = 20
 
-  // ✨ Title fade-in animation
-  const title = document.getElementById("adr-title");
-  if (title) {
-    title.style.opacity = "0";
-    title.style.transform = "translateY(-10px)";
-    setTimeout(() => {
-      title.style.transition = "all 0.6s ease-out";
-      title.style.opacity = "1";
-      title.style.transform = "translateY(0)";
-    }, 200);
+      // Load watermark image
+      const watermarkUrl = "/images/albias-watermark.png"
+      const watermarkImage = await fetch(watermarkUrl)
+        .then((res) => res.blob())
+        .then((blob) => {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(reader.result as string)
+            reader.readAsDataURL(blob)
+          })
+        })
+
+      // Draw watermark (centered and semi-transparent)
+      pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
+
+      const inspectorColors = {
+        "Alexandru Dogariu": "#FF8C00",
+        "Robert Kerekes": "#8B4513",
+        "Eduard Tudose": "#000000",
+        "Angela Ilis": "#FF69B4",
+        "Lucian Sistac": "#1E90FF",
+        "Martian Gherasim": "#008000",
+        "Alexandru Florea": "#DAA520",
+      }
+
+      const drawCheckbox = (x, y, checked) => {
+        pdf.setDrawColor(0)
+        pdf.setLineWidth(0.5)
+        pdf.rect(x, y, 4, 4)
+        if (checked) {
+          pdf.setDrawColor(0, 100, 0)
+          pdf.setLineWidth(0.8)
+          pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
+          pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
+        } else {
+          pdf.setDrawColor(255, 0, 0)
+          pdf.setLineWidth(0.8)
+          pdf.line(x, y, x + 4, y + 4)
+          pdf.line(x + 4, y, x, y + 4)
+        }
+        pdf.setDrawColor(0)
+        pdf.setLineWidth(0.5)
+      }
+
+      const addSafeText = (text, x, y, options = {}, color = "#000000", bold = true) => {
+        pdf.setTextColor(color)
+        pdf.setFont("helvetica", bold ? "bold" : "bold")
+        pdf.text(text, x, y, options)
+        pdf.setTextColor("#000000")
+      }
+
+      const addLine = (text, value, x, y, color = "#000000", bold = true) => {
+        const label = `${text} `
+        pdf.setFont("helvetica", "bold")
+        pdf.setTextColor("#000000")
+        pdf.text(label, x, y)
+        const labelWidth = pdf.getTextWidth(label)
+        pdf.setFont("helvetica", "bold")
+        pdf.setTextColor(color)
+        pdf.text(value, x + labelWidth, y)
+        pdf.setTextColor("#000000")
+      }
+
+      pdf.setFontSize(18)
+      addSafeText("ADR Checklist", pageWidth / 2, y, { align: "center" })
+      y += 10
+
+      pdf.setFontSize(10)
+
+      const lines = [
+        { label: "Driver's Name:", value: driverName, color: "#191970", bold: true },
+        { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
+        { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
+      ]
+
+      if (drivingLicenseDate.month && drivingLicenseDate.year) {
+        const expired = drivingLicenseExpired
+        lines.push({
+          label: "Driving License Expiry:",
+          value: `${drivingLicenseDate.month}/${drivingLicenseDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      if (adrCertificateDate.month && adrCertificateDate.year) {
+        const expired = adrCertificateExpired
+        lines.push({
+          label: "ADR Certificate Expiry:",
+          value: `${adrCertificateDate.month}/${adrCertificateDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      if (truckDocDate.month && truckDocDate.year) {
+        const expired = truckDocExpired
+        lines.push({
+          label: "Truck Document Expiry:",
+          value: `${truckDocDate.month}/${truckDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      if (trailerDocDate.month && trailerDocDate.year) {
+        const expired = trailerDocExpired
+        lines.push({
+          label: "Trailer Document Expiry:",
+          value: `${trailerDocDate.month}/${trailerDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
+
+      lines.forEach(({ label, value, color, bold }) => {
+        addLine(label, value, margin, y, color, bold)
+        y += 6
+      })
+
+      y += 4
+      addSafeText("Equipment Checklist", margin, y)
+      y += 6
+
+      const leftColumnItems = equipmentItems.slice(0, 6)
+      const rightColumnItems = equipmentItems.slice(6)
+      const columnGap = 10
+      const leftX = margin
+      const rightX = pageWidth / 2 + columnGap
+      const columnHeight = Math.max(leftColumnItems.length, rightColumnItems.length)
+      const rowHeight = 8
+
+      for (let i = 0; i < columnHeight; i++) {
+        const currentY = y + i * rowHeight
+
+        const renderItem = (item, x) => {
+          if (!item) return
+          const isChecked = checkedItems[item.name]
+          const date = expiryDates[item.name]
+          let label = item.name
+
+          if (item.hasDate && date?.month && date?.year) {
+            const now = new Date()
+            const expiry = new Date(`${date.year}-${date.month}-01`)
+            expiry.setMonth(expiry.getMonth() + 1)
+            expiry.setDate(0)
+            const expired = now > expiry
+            const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
+            label = `${item.name} - `
+            drawCheckbox(x, currentY - 3, isChecked && !expired)
+            addSafeText(label, x + 6, currentY)
+            addSafeText(dateStr, x + 6 + pdf.getTextWidth(label), currentY, {}, expired ? "#FF0000" : "#006400")
+            return
+          }
+
+          drawCheckbox(x, currentY - 3, isChecked)
+          addSafeText(label, x + 6, currentY)
+        }
+
+        renderItem(leftColumnItems[i], leftX)
+        renderItem(rightColumnItems[i], rightX)
+      }
+
+      y += columnHeight * rowHeight + 10
+      addSafeText("Before Loading", margin, y)
+      y += 6
+      beforeLoadingItems.forEach((item) => {
+        drawCheckbox(margin, y - 3, beforeLoadingChecked[item])
+        addSafeText(item, margin + 6, y)
+        y += 6
+      })
+
+      y += 4
+      addSafeText("After Loading", margin, y)
+      y += 6
+      afterLoadingItems.forEach((item) => {
+        drawCheckbox(margin, y - 3, afterLoadingChecked[item])
+        addSafeText(item, margin + 6, y)
+        y += 6
+      })
+
+      y += 10
+
+      if (signatureData) {
+        pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
+        addSafeText("Driver Signature", margin, y + 25)
+      } else {
+        pdf.setLineWidth(0.5)
+        pdf.line(margin, y + 20, margin + 70, y + 20)
+        addSafeText("Driver Signature (Not Signed)", margin, y + 25)
+      }
+
+      const inspectorX = pageWidth - margin - 70
+      if (inspectorSignatureData) {
+        pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
+      } else {
+        pdf.setLineWidth(0.5)
+        pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
+      }
+
+      const inspectorColor = inspectorColors[selectedInspector] || "#000000"
+      const inspectorLabel = "Inspector: "
+      pdf.setFont("helvetica", "bold")
+      pdf.setTextColor("#000000")
+      pdf.text(inspectorLabel, inspectorX, y + 25)
+      const labelWidth = pdf.getTextWidth(inspectorLabel)
+      pdf.setFont("helvetica", "bold")
+      pdf.setTextColor(inspectorColor)
+      pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
+
+      // Get PDF as base64
+      const pdfBase64 = pdf.output("datauristring").split(",")[1]
+
+      // Send email
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inspectorName: selectedInspector,
+          pdfBase64: pdfBase64,
+          driverName,
+          truckPlate,
+          trailerPlate,
+          inspectionDate: checkDate,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to send email")
+      }
+
+      setEmailStatus("Email sent successfully!")
+    } catch (err: any) {
+      console.error(err)
+      setEmailStatus("Failed to send email. Please try again.")
+    } finally {
+      setIsSendingEmail(false)
+    }
   }
 
-  // Cleanup event listeners on unmount
-  return () => {
-    if (cleanupDriver) cleanupDriver();
-    if (cleanupInspector) cleanupInspector();
-  };
-}, []);
-
-
   return (
-   
-  <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
+    <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
       <div className="text-center mb-6">
-        <h1 id="adr-title" className="text-2xl font-bold">ADR Checklist</h1>
-
+        <h1 id="adr-title" className="text-2xl font-bold">
+          ADR Checklist
+        </h1>
       </div>
 
       <div className="mb-6">
@@ -1674,81 +1663,65 @@ const validateTrailerDocDate = () => {
             {adrCertificateExpired && <span className="ml-2 text-red-500">Expired</span>}
           </div>
         </div>
-{/* Truck Document Date */}
-<div className="mb-4">
-  <Label>Truck document incl yearly check certificate:</Label>
-  <div className="flex items-center">
-    <div className="flex items-center">
-      <Input
-        value={truckDocDate.month}
-        onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
-        placeholder="MM"
-        maxLength={2}
-        className={`w-16 h-10 mr-1 ${
-          truckDocExpired
-            ? "border-red-500 border-2"
-            : dateValid.truckDoc
-              ? "border-green-500 border-2"
-              : ""
-        }`}
-      />
-      <span>/</span>
-      <Input
-        ref={truckDocYearRef}
-        value={truckDocDate.year}
-        onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
-        placeholder="YYYY"
-        maxLength={4}
-        className={`w-20 h-10 ml-1 ${
-          truckDocExpired
-            ? "border-red-500 border-2"
-            : dateValid.truckDoc
-              ? "border-green-500 border-2"
-              : ""
-        }`}
-      />
-    </div>
-    {truckDocExpired && <span className="ml-2 text-red-500">Expired</span>}
-    </div>
-</div>
-</div>
+        {/* Truck Document Date */}
+        <div className="mb-4">
+          <Label>Truck document incl yearly check certificate:</Label>
+          <div className="flex items-center">
+            <div className="flex items-center">
+              <Input
+                value={truckDocDate.month}
+                onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
+                placeholder="MM"
+                maxLength={2}
+                className={`w-16 h-10 mr-1 ${
+                  truckDocExpired ? "border-red-500 border-2" : dateValid.truckDoc ? "border-green-500 border-2" : ""
+                }`}
+              />
+              <span>/</span>
+              <Input
+                ref={truckDocYearRef}
+                value={truckDocDate.year}
+                onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
+                placeholder="YYYY"
+                maxLength={4}
+                className={`w-20 h-10 ml-1 ${
+                  truckDocExpired ? "border-red-500 border-2" : dateValid.truckDoc ? "border-green-500 border-2" : ""
+                }`}
+              />
+            </div>
+            {truckDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+          </div>
+        </div>
+      </div>
 
-{/* Trailer Document Date */}
-<div className="mb-4">
-  <Label>Trailer document incl yearly check certificate:</Label>
-  <div className="flex items-center">
-    <div className="flex items-center">
-      <Input
-        value={trailerDocDate.month}
-        onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
-        placeholder="MM"
-        maxLength={2}
-        className={`w-16 h-10 mr-1 ${
-          trailerDocExpired
-            ? "border-red-500 border-2"
-            : dateValid.trailerDoc
-              ? "border-green-500 border-2"
-              : ""
-        }`}
-      />
-      <span>/</span>
-      <Input
-        ref={trailerDocYearRef}
-        value={trailerDocDate.year}
-        onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
-        placeholder="YYYY"
-        maxLength={4}
-        className={`w-20 h-10 ml-1 ${
-          trailerDocExpired
-            ? "border-red-500 border-2"
-            : dateValid.trailerDoc
-              ? "border-green-500 border-2"
-              : ""
-        }`}
-      />
-    </div>
-    {trailerDocExpired && <span className="ml-2 text-red-500">Expired</span>}
-  </div>
+      {/* Trailer Document Date */}
+      <div className="mb-4">
+        <Label>Trailer document incl yearly check certificate:</Label>
+        <div className="flex items-center">
+          <div className="flex items-center">
+            <Input
+              value={trailerDocDate.month}
+              onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
+              placeholder="MM"
+              maxLength={2}
+              className={`w-16 h-10 mr-1 ${
+                trailerDocExpired ? "border-red-500 border-2" : dateValid.trailerDoc ? "border-green-500 border-2" : ""
+              }`}
+            />
+            <span>/</span>
+            <Input
+              ref={trailerDocYearRef}
+              value={trailerDocDate.year}
+              onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
+              placeholder="YYYY"
+              maxLength={4}
+              className={`w-20 h-10 ml-1 ${
+                trailerDocExpired ? "border-red-500 border-2" : dateValid.trailerDoc ? "border-green-500 border-2" : ""
+              }`}
+            />
+          </div>
+          {trailerDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+        </div>
 
         <div className="mb-4">
           <Label htmlFor="checkDate">Inspection Date:</Label>
@@ -1947,34 +1920,34 @@ const validateTrailerDocDate = () => {
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-         <Button
-  onClick={() => setShowFtpModal(true)}
-  disabled={isPdfGenerating}
-  style={{ backgroundColor: '#0099d0' }}
-  className="w-full hover:brightness-90"
->
-  Load the PDF to COGLAS
-</Button>
-<Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
+        <Button
+          onClick={() => setShowFtpModal(true)}
+          disabled={isPdfGenerating}
+          style={{ backgroundColor: "#0099d0" }}
+          className="w-full hover:brightness-90"
+        >
+          Load the PDF to COGLAS
+        </Button>
+        <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
           {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
         </Button>
-       <Button 
-  onClick={handleSendEmail} 
-  disabled={isSendingEmail || isPdfGenerating}
-  className="w-full bg-purple-600 hover:bg-purple-700"
->
-  {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
-</Button>
+        <Button
+          onClick={handleSendEmail}
+          disabled={isSendingEmail || isPdfGenerating || !selectedInspector}
+          className="w-full bg-purple-600 hover:bg-purple-700"
+        >
+          {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+        </Button>
 
-{emailStatus && (
-  <div className={`mt-2 p-2 rounded ${
-    emailStatus.includes("Error") 
-      ? "bg-red-100 text-red-700" 
-      : "bg-green-100 text-green-700"
-  }`}>
-    {emailStatus}
-  </div>
-)}
+        {emailStatus && (
+          <div
+            className={`mt-2 p-2 rounded ${
+              emailStatus.includes("Failed") ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
+            }`}
+          >
+            {emailStatus}
+          </div>
+        )}
       </div>
 
       {/* FTP Upload Modal */}
@@ -2020,19 +1993,10 @@ const validateTrailerDocDate = () => {
               >
                 {isUploading ? "Uploading..." : "Upload PDF"}
               </Button>
-              <Button 
-  onClick={handleSendEmail} // ✅ FIXED
-  disabled={isSendingEmail || isPdfGenerating}
-  className="w-full bg-purple-600 hover:bg-purple-700"
->
-  {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
-</Button>
-
             </div>
           </div>
         </div>
       )}
-    
     </div>
   )
 }
