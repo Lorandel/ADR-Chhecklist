@@ -1590,139 +1590,256 @@ export default function ADRChecklist() {
           />
         </div>
 
-        <div className="mb-4">
-          <Label>Driving License Expiry:</Label>
-          <div className="flex items-center">
-            <div className="flex items-center">
-              <Input
-                value={drivingLicenseDate.month}
-                onChange={(e) => handleLicenseDateChange("drivingLicense", "month", e.target.value)}
-                placeholder="MM"
-                maxLength={2}
-                className={`w-16 h-10 mr-1 ${
-                  drivingLicenseExpired
-                    ? "border-red-500 border-2"
-                    : dateValid.drivingLicense
-                      ? "border-green-500 border-2"
-                      : ""
-                }`}
-              />
-              <span>/</span>
-              <Input
-                ref={drivingLicenseYearRef}
-                value={drivingLicenseDate.year}
-                onChange={(e) => handleLicenseDateChange("drivingLicense", "year", e.target.value)}
-                placeholder="YYYY"
-                maxLength={4}
-                className={`w-20 h-10 ml-1 ${
-                  drivingLicenseExpired
-                    ? "border-red-500 border-2"
-                    : dateValid.drivingLicense
-                      ? "border-green-500 border-2"
-                      : ""
-                }`}
-              />
-            </div>
-            {drivingLicenseExpired && <span className="ml-2 text-red-500">Expired</span>}
-          </div>
-        </div>
+        {/* Document Boxes Section */}
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-4">Driver and Vehicle Documents:</h2>
 
-        <div className="mb-4">
-          <Label>ADR Certificate Expiry:</Label>
-          <div className="flex items-center">
-            <div className="flex items-center">
-              <Input
-                value={adrCertificateDate.month}
-                onChange={(e) => handleLicenseDateChange("adrCertificate", "month", e.target.value)}
-                placeholder="MM"
-                maxLength={2}
-                className={`w-16 h-10 mr-1 ${
-                  adrCertificateExpired
-                    ? "border-red-500 border-2"
-                    : dateValid.adrCertificate
-                      ? "border-green-500 border-2"
-                      : ""
-                }`}
-              />
-              <span>/</span>
-              <Input
-                ref={adrCertificateYearRef}
-                value={adrCertificateDate.year}
-                onChange={(e) => handleLicenseDateChange("adrCertificate", "year", e.target.value)}
-                placeholder="YYYY"
-                maxLength={4}
-                className={`w-20 h-10 ml-1 ${
-                  adrCertificateExpired
-                    ? "border-red-500 border-2"
-                    : dateValid.adrCertificate
-                      ? "border-green-500 border-2"
-                      : ""
-                }`}
-              />
-            </div>
-            {adrCertificateExpired && <span className="ml-2 text-red-500">Expired</span>}
-          </div>
-        </div>
-        {/* Truck Document Date */}
-        <div className="mb-4">
-          <Label>Truck document incl yearly check certificate:</Label>
-          <div className="flex items-center">
-            <div className="flex items-center">
-              <Input
-                value={truckDocDate.month}
-                onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
-                placeholder="MM"
-                maxLength={2}
-                className={`w-16 h-10 mr-1 ${
-                  truckDocExpired ? "border-red-500 border-2" : dateValid.truckDoc ? "border-green-500 border-2" : ""
-                }`}
-              />
-              <span>/</span>
-              <Input
-                ref={truckDocYearRef}
-                value={truckDocDate.year}
-                onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
-                placeholder="YYYY"
-                maxLength={4}
-                className={`w-20 h-10 ml-1 ${
-                  truckDocExpired ? "border-red-500 border-2" : dateValid.truckDoc ? "border-green-500 border-2" : ""
-                }`}
-              />
-            </div>
-            {truckDocExpired && <span className="ml-2 text-red-500">Expired</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Trailer Document Date */}
-      <div className="mb-4">
-        <Label>Trailer document incl yearly check certificate:</Label>
-        <div className="flex items-center">
-          <div className="flex items-center">
-            <Input
-              value={trailerDocDate.month}
-              onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
-              placeholder="MM"
-              maxLength={2}
-              className={`w-16 h-10 mr-1 ${
-                trailerDocExpired ? "border-red-500 border-2" : dateValid.trailerDoc ? "border-green-500 border-2" : ""
-              }`}
+          {/* Driving License Document Box */}
+          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+            <Image
+              src="/images/driving-license.jpg"
+              alt="Driving License"
+              fill
+              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
             />
-            <span>/</span>
-            <Input
-              ref={trailerDocYearRef}
-              value={trailerDocDate.year}
-              onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
-              placeholder="YYYY"
-              maxLength={4}
-              className={`w-20 h-10 ml-1 ${
-                trailerDocExpired ? "border-red-500 border-2" : dateValid.trailerDoc ? "border-green-500 border-2" : ""
-              }`}
-            />
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+              <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Label className="font-medium">Driving License</Label>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    <div>de - Führerschein</div>
+                    <div>nl - Rijbewijs</div>
+                    <div>pl - Prawo jazdy</div>
+                    <div>ru - Водительское удостоверение</div>
+                    <div>ro - Permis de conducere</div>
+                    <div>rs - Возачка дозвола</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2">
+                <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                <div className="flex items-center">
+                  <Input
+                    value={drivingLicenseDate.month}
+                    onChange={(e) => handleLicenseDateChange("drivingLicense", "month", e.target.value)}
+                    placeholder="MM"
+                    maxLength={2}
+                    className={`w-16 h-10 mr-1 ${
+                      drivingLicenseExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.drivingLicense
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  <span>/</span>
+                  <Input
+                    ref={drivingLicenseYearRef}
+                    value={drivingLicenseDate.year}
+                    onChange={(e) => handleLicenseDateChange("drivingLicense", "year", e.target.value)}
+                    placeholder="YYYY"
+                    maxLength={4}
+                    className={`w-20 h-10 ml-1 ${
+                      drivingLicenseExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.drivingLicense
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  {drivingLicenseExpired && <span className="ml-2 text-red-500">Expired</span>}
+                </div>
+              </div>
+            </div>
           </div>
-          {trailerDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+
+          {/* ADR Certificate Document Box */}
+          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+            <Image
+              src="/images/adr-certificate.jpg"
+              alt="ADR Certificate"
+              fill
+              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+            />
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+              <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Label className="font-medium">ADR Certificate</Label>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    <div>de - ADR-Bescheinigung</div>
+                    <div>nl - ADR-certificaat</div>
+                    <div>pl - Świadectwo ADR</div>
+                    <div>ru - Свидетельство ADR</div>
+                    <div>ro - Certificat ADR</div>
+                    <div>rs - АДР сертификат</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2">
+                <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                <div className="flex items-center">
+                  <Input
+                    value={adrCertificateDate.month}
+                    onChange={(e) => handleLicenseDateChange("adrCertificate", "month", e.target.value)}
+                    placeholder="MM"
+                    maxLength={2}
+                    className={`w-16 h-10 mr-1 ${
+                      adrCertificateExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.adrCertificate
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  <span>/</span>
+                  <Input
+                    ref={adrCertificateYearRef}
+                    value={adrCertificateDate.year}
+                    onChange={(e) => handleLicenseDateChange("adrCertificate", "year", e.target.value)}
+                    placeholder="YYYY"
+                    maxLength={4}
+                    className={`w-20 h-10 ml-1 ${
+                      adrCertificateExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.adrCertificate
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  {adrCertificateExpired && <span className="ml-2 text-red-500">Expired</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Truck Document Box */}
+          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+            <Image
+              src="/images/truck-document.jpg"
+              alt="Truck Document"
+              fill
+              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+            />
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+              <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Label className="font-medium">Truck Document</Label>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    <div>de - Fahrzeugschein</div>
+                    <div>nl - Kentekenbewijs</div>
+                    <div>pl - Dowód rejestracyjny</div>
+                    <div>ru - Свидетельство о регистрации</div>
+                    <div>ro - Certificat de înmatriculare</div>
+                    <div>rs - Саобраћајна дозвола</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2">
+                <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                <div className="flex items-center">
+                  <Input
+                    value={truckDocDate.month}
+                    onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
+                    placeholder="MM"
+                    maxLength={2}
+                    className={`w-16 h-10 mr-1 ${
+                      truckDocExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.truckDoc
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  <span>/</span>
+                  <Input
+                    ref={truckDocYearRef}
+                    value={truckDocDate.year}
+                    onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
+                    placeholder="YYYY"
+                    maxLength={4}
+                    className={`w-20 h-10 ml-1 ${
+                      truckDocExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.truckDoc
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  {truckDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Trailer Document Box */}
+          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+            <Image
+              src="/images/trailer-document.jpg"
+              alt="Trailer Document"
+              fill
+              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+            />
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+              <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Label className="font-medium">Trailer Document</Label>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    <div>de - Anhängerschein</div>
+                    <div>nl - Aanhangwagen registratie</div>
+                    <div>pl - Dowód rejestracyjny przyczepy</div>
+                    <div>ru - Свидетельство о регистрации прицепа</div>
+                    <div>ro - Certificat de înmatriculare pentru remorcă</div>
+                    <div>rs - Саобраћајна дозвола за приколицу</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2">
+                <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                <div className="flex items-center">
+                  <Input
+                    value={trailerDocDate.month}
+                    onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
+                    placeholder="MM"
+                    maxLength={2}
+                    className={`w-16 h-10 mr-1 ${
+                      trailerDocExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.trailerDoc
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  <span>/</span>
+                  <Input
+                    ref={trailerDocYearRef}
+                    value={trailerDocDate.year}
+                    onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
+                    placeholder="YYYY"
+                    maxLength={4}
+                    className={`w-20 h-10 ml-1 ${
+                      trailerDocExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.trailerDoc
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  {trailerDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
+        {/* Inspection Date */}
         <div className="mb-4">
           <Label htmlFor="checkDate">Inspection Date:</Label>
           <Input id="checkDate" value={checkDate} onChange={(e) => setCheckDate(e.target.value)} className="w-full" />
