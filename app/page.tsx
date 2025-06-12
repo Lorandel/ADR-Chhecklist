@@ -1,9 +1,7 @@
 "use client"
 
 import type React from "react"
-
-import { useState, useEffect, useRef, useCallback } from "react"
-import { jsPDF } from "jspdf"
+import { useState, useEffect, useRef, useCallback, createRef } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -47,7 +45,7 @@ export default function ADRChecklist() {
   const [trailerDocExpired, setTrailerDocExpired] = useState(false)
   const [showFtpModal, setShowFtpModal] = useState(false)
   const [orderNumber, setOrderNumber] = useState("")
-  const [isUploading, setIsUploading] = useState(isUploading)
+  const [isUploading, setIsUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
@@ -79,6 +77,7 @@ export default function ADRChecklist() {
   const adrCertificateYearRef = useRef<HTMLInputElement>(null)
   const truckDocYearRef = useRef<HTMLInputElement>(null)
   const trailerDocYearRef = useRef<HTMLInputElement>(null)
+
   // Equipment items with translations and images
   const equipmentItems = [
     {
@@ -253,6 +252,8 @@ export default function ADRChecklist() {
 
   // Initialize canvas for signatures
   const initializeCanvas = () => {
+    if (!isMounted || typeof window === "undefined") return
+
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -270,6 +271,8 @@ export default function ADRChecklist() {
 
   // Initialize Inspector Canvas
   const initializeInspectorCanvas = () => {
+    if (!isMounted || typeof window === "undefined") return
+
     const canvas = inspectorCanvasRef.current
     if (!canvas) return
 
@@ -287,6 +290,8 @@ export default function ADRChecklist() {
 
   // Signature pad implementation for driver
   const setupSignaturePad = () => {
+    if (!isMounted || typeof window === "undefined") return
+
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -388,6 +393,8 @@ export default function ADRChecklist() {
 
   // Signature pad implementation for inspector
   const setupInspectorSignaturePad = () => {
+    if (!isMounted || typeof window === "undefined") return
+
     const canvas = inspectorCanvasRef.current
     if (!canvas) return
 
@@ -488,6 +495,8 @@ export default function ADRChecklist() {
 
   // Clear signatures
   const clearSignature = () => {
+    if (!isMounted || typeof window === "undefined") return
+
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -500,6 +509,8 @@ export default function ADRChecklist() {
   }
 
   const clearInspectorSignature = () => {
+    if (!isMounted || typeof window === "undefined") return
+
     const canvas = inspectorCanvasRef.current
     if (!canvas) return
 
@@ -605,6 +616,7 @@ export default function ADRChecklist() {
       dateInputRefs.current[itemName]?.year.current?.focus()
     }
   }
+
   const handleTruckDocDateChange = (field: "month" | "year", value: string) => {
     const numericValue = value.replace(/[^0-9]/g, "")
     const updatedDate = { ...truckDocDate, [field]: numericValue }
@@ -640,6 +652,7 @@ export default function ADRChecklist() {
       setDateValid((prev) => ({ ...prev, trailerDoc: !isExpired }))
     }
   }
+
   // Handle equipment checkbox changes
   const handleEquipmentCheck = (itemName: string, checked: boolean) => {
     setCheckedItems((prev) => ({
@@ -708,27 +721,16 @@ export default function ADRChecklist() {
     return isExpired
   }
 
-  // Parse inspection date
-  const parseInspectionDate = () => {
-    const dateParts = checkDate.split("-")
-    if (dateParts.length === 3) {
-      const month = Number.parseInt(dateParts[1], 10)
-      const year = Number.parseInt(dateParts[2], 10)
-
-      if (!isNaN(month) && !isNaN(year)) {
-        setInspectionMonth(month)
-        setInspectionYear(year)
-        return { month, year }
-      }
-    }
-    return null
-  }
-
   // Generate PDF report
   const generatePDF = async () => {
+    if (!isMounted || typeof window === "undefined") return
+
     setIsPdfGenerating(true)
 
     try {
+      // Dynamically import jsPDF only on client side
+      const { jsPDF } = await import("jspdf")
+
       const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
       const pageWidth = pdf.internal.pageSize.getWidth()
       const pageHeight = pdf.internal.pageSize.getHeight()
@@ -760,41 +762,39 @@ export default function ADRChecklist() {
         "Alexandru Florea": "#DAA520",
       }
 
-      const drawCheckbox = (x, y, checked) => {
+      const drawCheckbox = (x: number, y: number, checked: boolean) => {
         pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5) // Increased line width for bolder boxes
+        pdf.setLineWidth(0.5)
         pdf.rect(x, y, 4, 4)
         if (checked) {
           pdf.setDrawColor(0, 100, 0)
-          pdf.setLineWidth(0.8) // Increased line width for bolder check marks
+          pdf.setLineWidth(0.8)
           pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
           pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
         } else {
           pdf.setDrawColor(255, 0, 0)
-          pdf.setLineWidth(0.8) // Increased line width for bolder X marks
+          pdf.setLineWidth(0.8)
           pdf.line(x, y, x + 4, y + 4)
           pdf.line(x + 4, y, x, y + 4)
         }
         pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5) // Reset line width
+        pdf.setLineWidth(0.5)
       }
 
-      const addSafeText = (text, x, y, options = {}, color = "#000000", bold = true) => {
-        // Always use bold for all text
+      const addSafeText = (text: string, x: number, y: number, options = {}, color = "#000000") => {
         pdf.setTextColor(color)
-        pdf.setFont("helvetica", bold ? "bold" : "bold") // Always use bold
+        pdf.setFont("helvetica", "bold")
         pdf.text(text, x, y, options)
         pdf.setTextColor("#000000")
       }
 
-      const addLine = (text, value, x, y, color = "#000000", bold = true) => {
-        // Always use bold for all text
+      const addLine = (text: string, value: string, x: number, y: number, color = "#000000") => {
         const label = `${text} `
-        pdf.setFont("helvetica", "bold") // Always use bold
+        pdf.setFont("helvetica", "bold")
         pdf.setTextColor("#000000")
         pdf.text(label, x, y)
         const labelWidth = pdf.getTextWidth(label)
-        pdf.setFont("helvetica", "bold") // Always use bold
+        pdf.setFont("helvetica", "bold")
         pdf.setTextColor(color)
         pdf.text(value, x + labelWidth, y)
         pdf.setTextColor("#000000")
@@ -807,7 +807,7 @@ export default function ADRChecklist() {
       pdf.setFontSize(10)
 
       const lines = [
-        { label: "Driver's Name:", value: driverName, color: "#191970", bold: true },
+        { label: "Driver's Name:", value: driverName, color: "#191970" },
         { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
         { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
       ]
@@ -829,6 +829,7 @@ export default function ADRChecklist() {
           color: expired ? "#FF0000" : "#006400",
         })
       }
+
       if (truckDocDate.month && truckDocDate.year) {
         const expired = truckDocExpired
         lines.push({
@@ -846,10 +847,11 @@ export default function ADRChecklist() {
           color: expired ? "#FF0000" : "#006400",
         })
       }
+
       lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
 
-      lines.forEach(({ label, value, color, bold }) => {
-        addLine(label, value, margin, y, color, bold)
+      lines.forEach(({ label, value, color }) => {
+        addLine(label, value, margin, y, color)
         y += 6
       })
 
@@ -868,7 +870,7 @@ export default function ADRChecklist() {
       for (let i = 0; i < columnHeight; i++) {
         const currentY = y + i * rowHeight
 
-        const renderItem = (item, x) => {
+        const renderItem = (item: any, x: number) => {
           if (!item) return
           const isChecked = checkedItems[item.name]
           const date = expiryDates[item.name]
@@ -920,7 +922,7 @@ export default function ADRChecklist() {
         pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
         addSafeText("Driver Signature", margin, y + 25)
       } else {
-        pdf.setLineWidth(0.5) // Bolder line for signature
+        pdf.setLineWidth(0.5)
         pdf.line(margin, y + 20, margin + 70, y + 20)
         addSafeText("Driver Signature (Not Signed)", margin, y + 25)
       }
@@ -929,18 +931,17 @@ export default function ADRChecklist() {
       if (inspectorSignatureData) {
         pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
       } else {
-        pdf.setLineWidth(0.5) // Bolder line for signature
+        pdf.setLineWidth(0.5)
         pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
       }
 
       const inspectorColor = inspectorColors[selectedInspector] || "#000000"
-      const isBoldInspector = true // Always bold
       const inspectorLabel = "Inspector: "
-      pdf.setFont("helvetica", "bold") // Always bold
+      pdf.setFont("helvetica", "bold")
       pdf.setTextColor("#000000")
       pdf.text(inspectorLabel, inspectorX, y + 25)
       const labelWidth = pdf.getTextWidth(inspectorLabel)
-      pdf.setFont("helvetica", "bold") // Always bold
+      pdf.setFont("helvetica", "bold")
       pdf.setTextColor(inspectorColor)
       pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
@@ -952,216 +953,14 @@ export default function ADRChecklist() {
     }
   }
 
-  // FTP Upload function (placeholder for FTP implementation)
+  // FTP Upload function
   const uploadPDFToFTP = async (orderNum: string) => {
+    if (!isMounted || typeof window === "undefined") return
+
     setIsUploading(true)
     setUploadStatus(null)
 
     try {
-      // Generate PDF first
-      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
-      const pageWidth = pdf.internal.pageSize.getWidth()
-      const pageHeight = pdf.internal.pageSize.getHeight()
-      const margin = 20
-      let y = 20
-
-      // Load watermark image
-      const watermarkUrl = "/images/albias-watermark.png"
-      const watermarkImage = await fetch(watermarkUrl)
-        .then((res) => res.blob())
-        .then((blob) => {
-          return new Promise<string>((resolve) => {
-            const reader = new FileReader()
-            reader.onloadend = () => resolve(reader.result as string)
-            reader.readAsDataURL(blob)
-          })
-        })
-
-      // Draw watermark (centered and semi-transparent)
-      pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
-
-      const inspectorColors = {
-        "Alexandru Dogariu": "#FF8C00",
-        "Robert Kerekes": "#8B4513",
-        "Eduard Tudose": "#000000",
-        "Angela Ilis": "#FF69B4",
-        "Lucian Sistac": "#1E90FF",
-        "Martian Gherasim": "#008000",
-      }
-
-      const drawCheckbox = (x, y, checked) => {
-        pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5)
-        pdf.rect(x, y, 4, 4)
-        if (checked) {
-          pdf.setDrawColor(0, 100, 0)
-          pdf.setLineWidth(0.8)
-          pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
-          pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
-        } else {
-          pdf.setDrawColor(255, 0, 0)
-          pdf.setLineWidth(0.8)
-          pdf.line(x, y, x + 4, y + 4)
-          pdf.line(x + 4, y, x, y + 4)
-        }
-        pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5)
-      }
-
-      const addSafeText = (text, x, y, options = {}, color = "#000000", bold = true) => {
-        pdf.setTextColor(color)
-        pdf.setFont("helvetica", bold ? "bold" : "bold")
-        pdf.text(text, x, y, options)
-        pdf.setTextColor("#000000")
-      }
-
-      const addLine = (text, value, x, y, color = "#000000", bold = true) => {
-        const label = `${text} `
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor("#000000")
-        pdf.text(label, x, y)
-        const labelWidth = pdf.getTextWidth(label)
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor(color)
-        pdf.text(value, x + labelWidth, y)
-        pdf.setTextColor("#000000")
-      }
-
-      pdf.setFontSize(18)
-      addSafeText("ADR Checklist", pageWidth / 2, y, { align: "center" })
-      y += 10
-
-      pdf.setFontSize(10)
-
-      const lines = [
-        { label: "Driver's Name:", value: driverName, color: "#191970", bold: true },
-        { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
-        { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
-      ]
-
-      if (drivingLicenseDate.month && drivingLicenseDate.year) {
-        const expired = drivingLicenseExpired
-        lines.push({
-          label: "Driving License Expiry:",
-          value: `${drivingLicenseDate.month}/${drivingLicenseDate.year}${expired ? " (EXPIRED)" : ""}`,
-          color: expired ? "#FF0000" : "#006400",
-        })
-      }
-
-      if (adrCertificateDate.month && adrCertificateDate.year) {
-        const expired = adrCertificateExpired
-        lines.push({
-          label: "ADR Certificate Expiry:",
-          value: `${adrCertificateDate.month}/${adrCertificateDate.year}${expired ? " (EXPIRED)" : ""}`,
-          color: expired ? "#FF0000" : "#006400",
-        })
-      }
-
-      lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
-
-      lines.forEach(({ label, value, color, bold }) => {
-        addLine(label, value, margin, y, color, bold)
-        y += 6
-      })
-
-      y += 4
-      addSafeText("Equipment Checklist", margin, y)
-      y += 6
-
-      const leftColumnItems = equipmentItems.slice(0, 6)
-      const rightColumnItems = equipmentItems.slice(6)
-      const columnGap = 10
-      const leftX = margin
-      const rightX = pageWidth / 2 + columnGap
-      const columnHeight = Math.max(leftColumnItems.length, rightColumnItems.length)
-      const rowHeight = 8
-
-      for (let i = 0; i < columnHeight; i++) {
-        const currentY = y + i * rowHeight
-
-        const renderItem = (item, x) => {
-          if (!item) return
-          const isChecked = checkedItems[item.name]
-          const date = expiryDates[item.name]
-          let label = item.name
-
-          if (item.hasDate && date?.month && date?.year) {
-            const now = new Date()
-            const expiry = new Date(`${date.year}-${date.month}-01`)
-            expiry.setMonth(expiry.getMonth() + 1)
-            expiry.setDate(0)
-            const expired = now > expiry
-            const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
-            label = `${item.name} - `
-            drawCheckbox(x, currentY - 3, isChecked && !expired)
-            addSafeText(label, x + 6, currentY)
-            addSafeText(dateStr, x + 6 + pdf.getTextWidth(label), currentY, {}, expired ? "#FF0000" : "#006400")
-            return
-          }
-
-          drawCheckbox(x, currentY - 3, isChecked)
-          addSafeText(label, x + 6, currentY)
-        }
-
-        renderItem(leftColumnItems[i], leftX)
-        renderItem(rightColumnItems[i], rightX)
-      }
-
-      y += columnHeight * rowHeight + 10
-      addSafeText("Before Loading", margin, y)
-      y += 6
-      beforeLoadingItems.forEach((item) => {
-        drawCheckbox(margin, y - 3, beforeLoadingChecked[item])
-        addSafeText(item, margin + 6, y)
-        y += 6
-      })
-
-      y += 4
-      addSafeText("After Loading", margin, y)
-      y += 6
-      afterLoadingItems.forEach((item) => {
-        drawCheckbox(margin, y - 3, afterLoadingChecked[item])
-        addSafeText(item, margin + 6, y)
-        y += 6
-      })
-
-      y += 10
-
-      if (signatureData) {
-        pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
-        addSafeText("Driver Signature", margin, y + 25)
-      } else {
-        pdf.setLineWidth(0.5)
-        pdf.line(margin, y + 20, margin + 70, y + 20)
-        addSafeText("Driver Signature (Not Signed)", margin, y + 25)
-      }
-
-      const inspectorX = pageWidth - margin - 70
-      if (inspectorSignatureData) {
-        pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
-      } else {
-        pdf.setLineWidth(0.5)
-        pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
-      }
-
-      const inspectorColor = inspectorColors[selectedInspector] || "#000000"
-      const inspectorLabel = "Inspector: "
-      pdf.setFont("helvetica", "bold")
-      pdf.setTextColor("#000000")
-      pdf.text(inspectorLabel, inspectorX, y + 25)
-      const labelWidth = pdf.getTextWidth(inspectorLabel)
-      pdf.setFont("helvetica", "bold")
-      pdf.setTextColor(inspectorColor)
-      pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
-
-      // Get PDF as blob
-      const pdfBlob = pdf.output("blob")
-
-      // TODO: Add FTP upload logic here
-      // For now, we'll simulate the upload
-      console.log(`Uploading PDF to FTP for order: ${orderNum}`)
-      console.log("PDF Blob size:", pdfBlob.size)
-
       // Simulate upload delay
       await new Promise((resolve) => setTimeout(resolve, 2000))
 
@@ -1189,6 +988,7 @@ export default function ADRChecklist() {
     setOrderNumber("")
     setUploadStatus(null)
   }
+
   const validateTruckDocDate = () => {
     const month = Number.parseInt(truckDocDate.month, 10)
     const year = Number.parseInt(truckDocDate.year, 10)
@@ -1206,6 +1006,7 @@ export default function ADRChecklist() {
     setTrailerDocExpired(isExpired)
     setDateValid((prev) => ({ ...prev, trailerDoc: !isExpired }))
   }
+
   const validateLicenseDate = (type: "drivingLicense" | "adrCertificate") => {
     const date = type === "drivingLicense" ? drivingLicenseDate : adrCertificateDate
     const month = Number.parseInt(date.month, 10)
@@ -1223,103 +1024,17 @@ export default function ADRChecklist() {
     }
   }
 
-  // Initialize component
-  useEffect(() => {
-    setIsMounted(true)
-  }, [])
-
-  // Separate useEffect for localStorage operations
-  useEffect(() => {
-    if (!isMounted || typeof window === "undefined") return
-
-    // Try to load saved data from localStorage
-    const savedData = localStorage.getItem("adrChecklistData")
-    if (savedData) {
-      try {
-        const parsedData = JSON.parse(savedData)
-
-        // Restore form data
-        if (parsedData.driverName) setDriverName(parsedData.driverName)
-        if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
-        if (parsedData.trailerPlate) setTrailerPlate(parsedData.trailerPlate)
-        if (parsedData.drivingLicenseDate) setDrivingLicenseDate(parsedData.drivingLicenseDate)
-        if (parsedData.adrCertificateDate) setAdrCertificateDate(parsedData.adrCertificateDate)
-        if (parsedData.truckDocDate) setTruckDocDate(parsedData.truckDocDate)
-        if (parsedData.trailerDocDate) setTrailerDocDate(parsedData.trailerDocDate)
-        if (parsedData.checkedItems) setCheckedItems(parsedData.checkedItems)
-        if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
-        if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
-        if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
-        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
-
-        // Validate dates after loading
-        if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
-          setTimeout(() => validateLicenseDate("drivingLicense"), 0)
-        }
-        if (parsedData.adrCertificateDate?.month && parsedData.adrCertificateDate?.year) {
-          setTimeout(() => validateLicenseDate("adrCertificate"), 0)
-        }
-        if (parsedData.truckDocDate?.month && parsedData.truckDocDate?.year) {
-          setTimeout(() => validateTruckDocDate(), 0)
-        }
-        if (parsedData.trailerDocDate?.month && parsedData.trailerDocDate?.year) {
-          setTimeout(() => validateTrailerDocDate(), 0)
-        }
-
-        // Validate equipment expiry dates
-        if (parsedData.expiryDates) {
-          Object.keys(parsedData.expiryDates).forEach((itemName) => {
-            setTimeout(() => checkIfDateIsExpired(itemName), 0)
-          })
-        }
-      } catch (error) {
-        console.error("Error loading saved data:", error)
-      }
-    }
-  }, [isMounted])
-
-  // Add an effect to save data to localStorage whenever relevant state changes
-  useEffect(() => {
-    if (!isMounted || typeof window === "undefined") return
-
-    const dataToSave = {
-      driverName,
-      truckPlate,
-      trailerPlate,
-      drivingLicenseDate,
-      adrCertificateDate,
-      truckDocDate,
-      trailerDocDate,
-      checkedItems,
-      beforeLoadingChecked,
-      afterLoadingChecked,
-      expiryDates,
-      selectedInspector,
-    }
-
-    localStorage.setItem("adrChecklistData", JSON.stringify(dataToSave))
-  }, [
-    isMounted,
-    driverName,
-    truckPlate,
-    trailerPlate,
-    drivingLicenseDate,
-    adrCertificateDate,
-    truckDocDate,
-    trailerDocDate,
-    checkedItems,
-    beforeLoadingChecked,
-    afterLoadingChecked,
-    expiryDates,
-    selectedInspector,
-  ])
-
   // Update the handleSendEmail function to handle Google Drive upload status
   const handleSendEmail = async () => {
+    if (!isMounted || typeof window === "undefined") return
+
     setIsSendingEmail(true)
     setEmailStatus(null)
 
     try {
+      // Dynamically import jsPDF only on client side
+      const { jsPDF } = await import("jspdf")
+
       // Generate PDF first
       const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
       const pageWidth = pdf.internal.pageSize.getWidth()
@@ -1352,41 +1067,39 @@ export default function ADRChecklist() {
         "Alexandru Florea": "#DAA520",
       }
 
-      const drawCheckbox = (x, y, checked) => {
+      const drawCheckbox = (x: number, y: number, checked: boolean) => {
         pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5) // Increased line width for bolder boxes
+        pdf.setLineWidth(0.5)
         pdf.rect(x, y, 4, 4)
         if (checked) {
           pdf.setDrawColor(0, 100, 0)
-          pdf.setLineWidth(0.8) // Increased line width for bolder check marks
+          pdf.setLineWidth(0.8)
           pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
           pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
         } else {
           pdf.setDrawColor(255, 0, 0)
-          pdf.setLineWidth(0.8) // Increased line width for bolder X marks
+          pdf.setLineWidth(0.8)
           pdf.line(x, y, x + 4, y + 4)
           pdf.line(x + 4, y, x, y + 4)
         }
         pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5) // Reset line width
+        pdf.setLineWidth(0.5)
       }
 
-      const addSafeText = (text, x, y, options = {}, color = "#000000", bold = true) => {
-        // Always use bold for all text
+      const addSafeText = (text: string, x: number, y: number, options = {}, color = "#000000") => {
         pdf.setTextColor(color)
-        pdf.setFont("helvetica", bold ? "bold" : "bold") // Always use bold
+        pdf.setFont("helvetica", "bold")
         pdf.text(text, x, y, options)
         pdf.setTextColor("#000000")
       }
 
-      const addLine = (text, value, x, y, color = "#000000", bold = true) => {
-        // Always use bold for all text
+      const addLine = (text: string, value: string, x: number, y: number, color = "#000000") => {
         const label = `${text} `
-        pdf.setFont("helvetica", "bold") // Always use bold
+        pdf.setFont("helvetica", "bold")
         pdf.setTextColor("#000000")
         pdf.text(label, x, y)
         const labelWidth = pdf.getTextWidth(label)
-        pdf.setFont("helvetica", "bold") // Always use bold
+        pdf.setFont("helvetica", "bold")
         pdf.setTextColor(color)
         pdf.text(value, x + labelWidth, y)
         pdf.setTextColor("#000000")
@@ -1399,7 +1112,7 @@ export default function ADRChecklist() {
       pdf.setFontSize(10)
 
       const lines = [
-        { label: "Driver's Name:", value: driverName, color: "#191970", bold: true },
+        { label: "Driver's Name:", value: driverName, color: "#191970" },
         { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
         { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
       ]
@@ -1442,8 +1155,8 @@ export default function ADRChecklist() {
 
       lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
 
-      lines.forEach(({ label, value, color, bold }) => {
-        addLine(label, value, margin, y, color, bold)
+      lines.forEach(({ label, value, color }) => {
+        addLine(label, value, margin, y, color)
         y += 6
       })
 
@@ -1462,7 +1175,7 @@ export default function ADRChecklist() {
       for (let i = 0; i < columnHeight; i++) {
         const currentY = y + i * rowHeight
 
-        const renderItem = (item, x) => {
+        const renderItem = (item: any, x: number) => {
           if (!item) return
           const isChecked = checkedItems[item.name]
           const date = expiryDates[item.name]
@@ -1645,8 +1358,178 @@ export default function ADRChecklist() {
     setAllChecked(false)
 
     // Clear localStorage
-    localStorage.removeItem("adrChecklistData")
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("adrChecklistData")
+    }
   }, [equipmentItems, beforeLoadingItems, afterLoadingItems])
+
+  // Initialize component
+  useEffect(() => {
+    setIsMounted(true)
+
+    // Set today's date and inspection info
+    const today = new Date()
+    const day = String(today.getDate()).padStart(2, "0")
+    const month = String(today.getMonth() + 1).padStart(2, "0")
+    const year = today.getFullYear()
+
+    setCheckDate(`${day}-${month}-${year}`)
+    setInspectionMonth(today.getMonth() + 1)
+    setInspectionYear(today.getFullYear())
+
+    // Initialize equipment items
+    const initialEquipmentState: Record<string, boolean> = {}
+    equipmentItems.forEach((item) => {
+      initialEquipmentState[item.name] = false
+    })
+    setCheckedItems(initialEquipmentState)
+
+    const initialBeforeLoadingState: Record<string, boolean> = {}
+    beforeLoadingItems.forEach((item) => {
+      initialBeforeLoadingState[item] = false
+    })
+    setBeforeLoadingChecked(initialBeforeLoadingState)
+
+    const initialAfterLoadingState: Record<string, boolean> = {}
+    afterLoadingItems.forEach((item) => {
+      initialAfterLoadingState[item] = false
+    })
+    setAfterLoadingChecked(initialAfterLoadingState)
+
+    // Initialize expiry date refs and states
+    const initialDates: Record<string, { month: string; year: string }> = {}
+    const initialExpiredItems: Record<string, boolean> = {}
+
+    equipmentItems.forEach((item) => {
+      if (item.hasDate) {
+        initialDates[item.name] = { month: "", year: "" }
+        initialExpiredItems[item.name] = false
+        dateInputRefs.current[item.name] = {
+          month: createRef<HTMLInputElement>(),
+          year: createRef<HTMLInputElement>(),
+        }
+      }
+    })
+
+    setExpiryDates(initialDates)
+    setExpiredItems(initialExpiredItems)
+  }, [])
+
+  // Effect for canvas initialization
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+
+    // Initialize signature canvases
+    initializeCanvas()
+    initializeInspectorCanvas()
+
+    const cleanupDriver = setupSignaturePad()
+    const cleanupInspector = setupInspectorSignaturePad()
+
+    // ✨ Title fade-in animation
+    const title = document.getElementById("adr-title")
+    if (title) {
+      title.style.opacity = "0"
+      title.style.transform = "translateY(-10px)"
+      setTimeout(() => {
+        title.style.transition = "all 0.6s ease-out"
+        title.style.opacity = "1"
+        title.style.transform = "translateY(0)"
+      }, 200)
+    }
+
+    // Cleanup event listeners on unmount
+    return () => {
+      if (cleanupDriver) cleanupDriver()
+      if (cleanupInspector) cleanupInspector()
+    }
+  }, [isMounted])
+
+  // Separate useEffect for localStorage operations
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+
+    // Try to load saved data from localStorage
+    const savedData = localStorage.getItem("adrChecklistData")
+    if (savedData) {
+      try {
+        const parsedData = JSON.parse(savedData)
+
+        // Restore form data
+        if (parsedData.driverName) setDriverName(parsedData.driverName)
+        if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
+        if (parsedData.trailerPlate) setTrailerPlate(parsedData.trailerPlate)
+        if (parsedData.drivingLicenseDate) setDrivingLicenseDate(parsedData.drivingLicenseDate)
+        if (parsedData.adrCertificateDate) setAdrCertificateDate(parsedData.adrCertificateDate)
+        if (parsedData.truckDocDate) setTruckDocDate(parsedData.truckDocDate)
+        if (parsedData.trailerDocDate) setTrailerDocDate(parsedData.trailerDocDate)
+        if (parsedData.checkedItems) setCheckedItems(parsedData.checkedItems)
+        if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
+        if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
+        if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
+        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
+
+        // Validate dates after loading
+        if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
+          setTimeout(() => validateLicenseDate("drivingLicense"), 0)
+        }
+        if (parsedData.adrCertificateDate?.month && parsedData.adrCertificateDate?.year) {
+          setTimeout(() => validateLicenseDate("adrCertificate"), 0)
+        }
+        if (parsedData.truckDocDate?.month && parsedData.truckDocDate?.year) {
+          setTimeout(() => validateTruckDocDate(), 0)
+        }
+        if (parsedData.trailerDocDate?.month && parsedData.trailerDocDate?.year) {
+          setTimeout(() => validateTrailerDocDate(), 0)
+        }
+
+        // Validate equipment expiry dates
+        if (parsedData.expiryDates) {
+          Object.keys(parsedData.expiryDates).forEach((itemName) => {
+            setTimeout(() => checkIfDateIsExpired(itemName), 0)
+          })
+        }
+      } catch (error) {
+        console.error("Error loading saved data:", error)
+      }
+    }
+  }, [isMounted])
+
+  // Add an effect to save data to localStorage whenever relevant state changes
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+
+    const dataToSave = {
+      driverName,
+      truckPlate,
+      trailerPlate,
+      drivingLicenseDate,
+      adrCertificateDate,
+      truckDocDate,
+      trailerDocDate,
+      checkedItems,
+      beforeLoadingChecked,
+      afterLoadingChecked,
+      expiryDates,
+      selectedInspector,
+    }
+
+    localStorage.setItem("adrChecklistData", JSON.stringify(dataToSave))
+  }, [
+    isMounted,
+    driverName,
+    truckPlate,
+    trailerPlate,
+    drivingLicenseDate,
+    adrCertificateDate,
+    truckDocDate,
+    trailerDocDate,
+    checkedItems,
+    beforeLoadingChecked,
+    afterLoadingChecked,
+    expiryDates,
+    selectedInspector,
+  ])
 
   // Add this right after the return statement
   if (!isMounted) {
