@@ -1552,6 +1552,20 @@ export default function ADRChecklist() {
       </div>
 
       <div className="mb-6">
+        {/* Centered Inspection Date */}
+        <div className="flex flex-col items-center mb-6">
+          <Label htmlFor="checkDate" className="text-lg font-semibold mb-2">
+            Inspection Date:
+          </Label>
+          <Input
+            id="checkDate"
+            value={checkDate}
+            onChange={(e) => setCheckDate(e.target.value)}
+            className="w-40 text-center"
+            placeholder="dd-mm-yyyy"
+          />
+        </div>
+
         <div className="mb-4">
           <Label htmlFor="driverName">Driver's Name:</Label>
           <Input
@@ -1813,10 +1827,6 @@ export default function ADRChecklist() {
         </div>
 
         {/* Inspection Date */}
-        <div className="mb-4">
-          <Label htmlFor="checkDate">Inspection Date:</Label>
-          <Input id="checkDate" value={checkDate} onChange={(e) => setCheckDate(e.target.value)} className="w-full" />
-        </div>
       </div>
 
       <div className="mb-6">
