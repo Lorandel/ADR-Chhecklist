@@ -1916,7 +1916,7 @@ export default function ADRChecklist() {
                     item.name === "Mask + filter (Date for ADR class 6.1/2.3)" ||
                     item.name === "Collection bucket") && (
                     <div className="text-sm font-medium mt-1" style={{ color: "#FF0000" }}>
-                      One piece for each driver in the crew!
+                      One piece for each driver!
                     </div>
                   )}
                   <div className="text-sm text-gray-600 mt-1">
