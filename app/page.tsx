@@ -946,7 +946,7 @@ export default function ADRChecklist() {
       pdf.setTextColor(inspectorColor)
       pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
-      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, " ")}_${checkDate.replace(/-/g, ".")}.pdf`)
+      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "-")}_${checkDate.replace(/-/g, ".")}.pdf`)
     } catch (error) {
       console.error("Error generating PDF:", error)
     } finally {
