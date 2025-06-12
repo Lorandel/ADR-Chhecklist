@@ -18,6 +18,27 @@ const inspectorEmails: Record<string, string[]> = {
   ],
 }
 
+// Function to properly format the private key
+const formatPrivateKey = (privateKey: string): string => {
+  // Remove any surrounding quotes
+  let key = privateKey.replace(/^["']|["']$/g, "")
+
+  // Replace escaped newlines with actual newlines
+  key = key.replace(/\\\\n/g, "\n")
+  key = key.replace(/\\n/g, "\n")
+
+  // Ensure proper formatting
+  if (!key.includes("-----BEGIN PRIVATE KEY-----")) {
+    throw new Error("Invalid private key format: missing BEGIN marker")
+  }
+
+  if (!key.includes("-----END PRIVATE KEY-----")) {
+    throw new Error("Invalid private key format: missing END marker")
+  }
+
+  return key
+}
+
 // Google Drive API setup with comprehensive error handling
 const setupGoogleDrive = async () => {
   try {
@@ -40,13 +61,18 @@ const setupGoogleDrive = async () => {
     console.log("✓ All environment variables present")
     console.log("Client email:", process.env.GOOGLE_CLIENT_EMAIL)
     console.log("Folder ID:", process.env.GOOGLE_DRIVE_FOLDER_ID)
+    console.log("Private key length:", process.env.GOOGLE_PRIVATE_KEY.length)
+
+    // Format the private key properly
+    const formattedPrivateKey = formatPrivateKey(process.env.GOOGLE_PRIVATE_KEY)
+    console.log("✓ Private key formatted successfully")
 
     const { google } = await import("googleapis")
 
     const auth = new google.auth.GoogleAuth({
       credentials: {
         client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+        private_key: formattedPrivateKey,
       },
       scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file"],
     })
