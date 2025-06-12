@@ -149,6 +149,21 @@ export async function POST(req: NextRequest) {
     console.log("Driver:", driverName)
     console.log("PDF size:", pdfBase64?.length || 0, "characters")
 
+    // Validate required email environment variables
+    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+      console.error("Missing email environment variables")
+      return NextResponse.json(
+        {
+          message: "Email configuration missing",
+          details: {
+            hasGmailUser: !!process.env.GMAIL_USER,
+            hasGmailPassword: !!process.env.GMAIL_APP_PASSWORD,
+          },
+        },
+        { status: 500 },
+      )
+    }
+
     if (!inspectorName || !pdfBase64) {
       return NextResponse.json({ message: "Missing inspector name or PDF data" }, { status: 400 })
     }
@@ -180,14 +195,20 @@ export async function POST(req: NextRequest) {
     // Dynamic import for nodemailer
     const nodemailer = await import("nodemailer")
 
-    // Create transporter
-    const transporter = nodemailer.createTransporter({
+    // Create transporter with proper method name
+    console.log("Creating email transporter...")
+    const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_APP_PASSWORD,
       },
     })
+
+    // Verify transporter configuration
+    console.log("Verifying email configuration...")
+    await transporter.verify()
+    console.log("✓ Email transporter verified")
 
     // Email options
     const mailOptions = {
@@ -251,14 +272,15 @@ This checklist was generated automatically by the ADR Checklist System.`,
 
     // Send email
     console.log("Sending email to:", recipients.join(", "))
-    await transporter.sendMail(mailOptions)
+    const emailResult = await transporter.sendMail(mailOptions)
     console.log("✓ Email sent successfully")
+    console.log("Message ID:", emailResult.messageId)
 
     // Prepare response message
     let message = `Email sent successfully to ${recipients.length} recipient(s)`
     if (driveResult.success) {
       message += " and saved to Google Drive"
-    } else if (driveResult.error) {
+    } else if (driveResult.error && driveResult.error !== "Not attempted") {
       message += ` (Google Drive upload failed: ${driveResult.error})`
     }
 
@@ -267,6 +289,7 @@ This checklist was generated automatically by the ADR Checklist System.`,
       message: message,
       driveLink: driveResult.link,
       driveUploadSuccess: driveResult.success,
+      emailMessageId: emailResult.messageId,
     })
   } catch (error: any) {
     console.error("❌ Email API error:", error)
@@ -274,6 +297,11 @@ This checklist was generated automatically by the ADR Checklist System.`,
       {
         message: "Failed to send email. Please try again.",
         error: error.message,
+        details: {
+          code: error.code,
+          command: error.command,
+          response: error.response,
+        },
       },
       { status: 500 },
     )
