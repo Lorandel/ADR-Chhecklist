@@ -1,6 +1,4 @@
 import { type NextRequest, NextResponse } from "next/server"
-import * as nodemailer from "nodemailer"
-import { google } from "googleapis"
 import { Readable } from "stream"
 
 const inspectorEmails: Record<string, string[]> = {
@@ -22,16 +20,23 @@ const inspectorEmails: Record<string, string[]> = {
 
 // Google Drive API setup
 const setupGoogleDrive = async () => {
-  const auth = new google.auth.GoogleAuth({
-    credentials: {
-      client_email: process.env.GOOGLE_CLIENT_EMAIL,
-      private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-    },
-    scopes: ["https://www.googleapis.com/auth/drive"],
-  })
+  try {
+    const { google } = await import("googleapis")
 
-  const drive = google.drive({ version: "v3", auth })
-  return drive
+    const auth = new google.auth.GoogleAuth({
+      credentials: {
+        client_email: process.env.GOOGLE_CLIENT_EMAIL,
+        private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+      },
+      scopes: ["https://www.googleapis.com/auth/drive"],
+    })
+
+    const drive = google.drive({ version: "v3", auth })
+    return drive
+  } catch (error) {
+    console.error("Error setting up Google Drive:", error)
+    return null
+  }
 }
 
 // Upload file to Google Drive
@@ -43,6 +48,7 @@ const uploadToDrive = async (
 ): Promise<string | null> => {
   try {
     const drive = await setupGoogleDrive()
+    if (!drive) return null
 
     const fileMetadata = {
       name: fileName,
@@ -80,6 +86,9 @@ export async function POST(req: NextRequest) {
     if (!recipients || recipients.length === 0) {
       return NextResponse.json({ message: "No email recipients found for this inspector" }, { status: 400 })
     }
+
+    // Dynamic import for nodemailer to avoid build issues
+    const nodemailer = await import("nodemailer")
 
     // Create transporter
     const transporter = nodemailer.createTransport({

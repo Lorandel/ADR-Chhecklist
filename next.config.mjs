@@ -9,6 +9,15 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  experimental: {
+    serverComponentsExternalPackages: ['googleapis', 'nodemailer']
+  },
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      config.externals.push('googleapis', 'nodemailer')
+    }
+    return config
+  }
 }
 
 export default nextConfig
