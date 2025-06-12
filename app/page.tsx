@@ -50,6 +50,7 @@ export default function ADRChecklist() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
+  const [isClient, setIsClient] = useState(false)
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -1224,6 +1225,12 @@ export default function ADRChecklist() {
 
   // Initialize component
   useEffect(() => {
+    // Ensure we're on the client side
+    setIsClient(true)
+
+    // Only proceed with client-side operations after confirming we're on client
+    if (typeof window === "undefined") return
+
     // Set today's date and inspection info
     const today = new Date()
     const day = String(today.getDate()).padStart(2, "0")
@@ -1342,8 +1349,59 @@ export default function ADRChecklist() {
     }
   }, [])
 
+  // Separate useEffect for localStorage operations
+  useEffect(() => {
+    if (!isClient || typeof window === "undefined") return
+
+    // Try to load saved data from localStorage
+    const savedData = localStorage.getItem("adrChecklistData")
+    if (savedData) {
+      try {
+        const parsedData = JSON.parse(savedData)
+        // Restore form data
+        if (parsedData.driverName) setDriverName(parsedData.driverName)
+        if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
+        if (parsedData.trailerPlate) setTrailerPlate(parsedData.trailerPlate)
+        if (parsedData.drivingLicenseDate) setDrivingLicenseDate(parsedData.drivingLicenseDate)
+        if (parsedData.adrCertificateDate) setAdrCertificateDate(parsedData.adrCertificateDate)
+        if (parsedData.truckDocDate) setTruckDocDate(parsedData.truckDocDate)
+        if (parsedData.trailerDocDate) setTrailerDocDate(parsedData.trailerDocDate)
+        if (parsedData.checkedItems) setCheckedItems(parsedData.checkedItems)
+        if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
+        if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
+        if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
+        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
+
+        // Validate dates after loading
+        if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
+          setTimeout(() => validateLicenseDate("drivingLicense"), 0)
+        }
+        if (parsedData.adrCertificateDate?.month && parsedData.adrCertificateDate?.year) {
+          setTimeout(() => validateLicenseDate("adrCertificate"), 0)
+        }
+        if (parsedData.truckDocDate?.month && parsedData.truckDocDate?.year) {
+          setTimeout(() => validateTruckDocDate(), 0)
+        }
+        if (parsedData.trailerDocDate?.month && parsedData.trailerDocDate?.year) {
+          setTimeout(() => validateTrailerDocDate(), 0)
+        }
+
+        // Validate equipment expiry dates
+        if (parsedData.expiryDates) {
+          Object.keys(parsedData.expiryDates).forEach((itemName) => {
+            setTimeout(() => checkIfDateIsExpired(itemName), 0)
+          })
+        }
+      } catch (error) {
+        console.error("Error loading saved data:", error)
+      }
+    }
+  }, [isClient])
+
   // Add an effect to save data to localStorage whenever relevant state changes
   useEffect(() => {
+    if (!isClient || typeof window === "undefined") return
+
     const dataToSave = {
       driverName,
       truckPlate,
@@ -1361,6 +1419,7 @@ export default function ADRChecklist() {
 
     localStorage.setItem("adrChecklistData", JSON.stringify(dataToSave))
   }, [
+    isClient,
     driverName,
     truckPlate,
     trailerPlate,
@@ -1708,6 +1767,17 @@ export default function ADRChecklist() {
     // Clear localStorage
     localStorage.removeItem("adrChecklistData")
   }, [equipmentItems, beforeLoadingItems, afterLoadingItems])
+
+  // Add this right after the return statement
+  if (!isClient) {
+    return (
+      <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-bold">Loading ADR Checklist...</h1>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
