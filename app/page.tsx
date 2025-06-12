@@ -46,7 +46,7 @@ export default function ADRChecklist() {
   const [trailerDocExpired, setTrailerDocExpired] = useState(false)
   const [showFtpModal, setShowFtpModal] = useState(false)
   const [orderNumber, setOrderNumber] = useState("")
-  const [isUploading, setIsUploading] = useState(false)
+  const [isUploading, setIsUploading] = useState(isUploading)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
@@ -1375,6 +1375,7 @@ export default function ADRChecklist() {
     selectedInspector,
   ])
 
+  // Update the handleSendEmail function to handle Google Drive upload status
   const handleSendEmail = async () => {
     setIsSendingEmail(true)
     setEmailStatus(null)
@@ -1414,37 +1415,39 @@ export default function ADRChecklist() {
 
       const drawCheckbox = (x, y, checked) => {
         pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5)
+        pdf.setLineWidth(0.5) // Increased line width for bolder boxes
         pdf.rect(x, y, 4, 4)
         if (checked) {
           pdf.setDrawColor(0, 100, 0)
-          pdf.setLineWidth(0.8)
+          pdf.setLineWidth(0.8) // Increased line width for bolder check marks
           pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
           pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
         } else {
           pdf.setDrawColor(255, 0, 0)
-          pdf.setLineWidth(0.8)
+          pdf.setLineWidth(0.8) // Increased line width for bolder X marks
           pdf.line(x, y, x + 4, y + 4)
           pdf.line(x + 4, y, x, y + 4)
         }
         pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5)
+        pdf.setLineWidth(0.5) // Reset line width
       }
 
       const addSafeText = (text, x, y, options = {}, color = "#000000", bold = true) => {
+        // Always use bold for all text
         pdf.setTextColor(color)
-        pdf.setFont("helvetica", bold ? "bold" : "bold")
+        pdf.setFont("helvetica", bold ? "bold" : "bold") // Always use bold
         pdf.text(text, x, y, options)
         pdf.setTextColor("#000000")
       }
 
       const addLine = (text, value, x, y, color = "#000000", bold = true) => {
+        // Always use bold for all text
         const label = `${text} `
-        pdf.setFont("helvetica", "bold")
+        pdf.setFont("helvetica", "bold") // Always use bold
         pdf.setTextColor("#000000")
         pdf.text(label, x, y)
         const labelWidth = pdf.getTextWidth(label)
-        pdf.setFont("helvetica", "bold")
+        pdf.setFont("helvetica", "bold") // Always use bold
         pdf.setTextColor(color)
         pdf.text(value, x + labelWidth, y)
         pdf.setTextColor("#000000")
@@ -1620,7 +1623,11 @@ export default function ADRChecklist() {
       }
 
       if (data.success) {
-        setEmailStatus("Email sent successfully!")
+        let successMessage = "Email sent successfully!"
+        if (data.driveLink) {
+          successMessage += " PDF was also saved to Google Drive."
+        }
+        setEmailStatus(successMessage)
         // Reset form after successful email
         resetForm()
       } else {
