@@ -204,7 +204,7 @@ export async function POST(req: NextRequest) {
     console.log("PDF buffer size:", pdfBuffer.length, "bytes")
 
     // File name for both email attachment and Google Drive
-    const fileName = `ADR_Check_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, "_")}.pdf`
+    const fileName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}.pdf`
     console.log("Generated filename:", fileName)
 
     // Upload to Google Drive

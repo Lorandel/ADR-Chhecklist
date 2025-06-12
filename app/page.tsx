@@ -946,7 +946,7 @@ export default function ADRChecklist() {
       pdf.setTextColor(inspectorColor)
       pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
-      pdf.save(`ADR Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
+      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
     } catch (error) {
       console.error("Error generating PDF:", error)
     } finally {
@@ -966,7 +966,7 @@ export default function ADRChecklist() {
       await new Promise((resolve) => setTimeout(resolve, 2000))
 
       setUploadStatus(
-        `PDF successfully uploaded to Coglas: ADR_Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, "_")}.pdf`,
+        `PDF successfully uploaded to Coglas: ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, "_")}.pdf`,
       )
     } catch (error) {
       console.error("Error uploading PDF:", error)
