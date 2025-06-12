@@ -18,41 +18,89 @@ const inspectorEmails: Record<string, string[]> = {
   ],
 }
 
-// Google Drive API setup
+// Google Drive API setup with comprehensive error handling
 const setupGoogleDrive = async () => {
   try {
+    console.log("=== Setting up Google Drive ===")
+
+    // Validate all required environment variables
+    const requiredVars = {
+      GOOGLE_CLIENT_EMAIL: process.env.GOOGLE_CLIENT_EMAIL,
+      GOOGLE_PRIVATE_KEY: process.env.GOOGLE_PRIVATE_KEY,
+      GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID,
+    }
+
+    for (const [key, value] of Object.entries(requiredVars)) {
+      if (!value) {
+        console.error(`Missing environment variable: ${key}`)
+        return null
+      }
+    }
+
+    console.log("✓ All environment variables present")
+    console.log("Client email:", process.env.GOOGLE_CLIENT_EMAIL)
+    console.log("Folder ID:", process.env.GOOGLE_DRIVE_FOLDER_ID)
+
     const { google } = await import("googleapis")
 
     const auth = new google.auth.GoogleAuth({
       credentials: {
         client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
       },
-      scopes: ["https://www.googleapis.com/auth/drive"],
+      scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file"],
     })
 
     const drive = google.drive({ version: "v3", auth })
+
+    // Test authentication
+    console.log("Testing authentication...")
+    const aboutResponse = await drive.about.get({ fields: "user" })
+    console.log("✓ Authenticated as:", aboutResponse.data.user?.emailAddress)
+
+    // Test folder access
+    console.log("Testing folder access...")
+    const folderResponse = await drive.files.get({
+      fileId: process.env.GOOGLE_DRIVE_FOLDER_ID,
+      fields: "id,name,parents",
+    })
+    console.log("✓ Folder accessible:", folderResponse.data.name)
+
     return drive
-  } catch (error) {
-    console.error("Error setting up Google Drive:", error)
+  } catch (error: any) {
+    console.error("❌ Google Drive setup failed:", error.message)
+    if (error.code) {
+      console.error("Error code:", error.code)
+    }
+    if (error.status) {
+      console.error("HTTP status:", error.status)
+    }
     return null
   }
 }
 
-// Upload file to Google Drive
+// Upload file to Google Drive with detailed logging
 const uploadToDrive = async (
   fileBuffer: Buffer,
   fileName: string,
   mimeType: string,
   folderId: string,
-): Promise<string | null> => {
+): Promise<{ success: boolean; link?: string; error?: string }> => {
   try {
+    console.log("=== Starting Google Drive Upload ===")
+    console.log("File name:", fileName)
+    console.log("File size:", fileBuffer.length, "bytes")
+    console.log("MIME type:", mimeType)
+    console.log("Target folder:", folderId)
+
     const drive = await setupGoogleDrive()
-    if (!drive) return null
+    if (!drive) {
+      return { success: false, error: "Failed to setup Google Drive connection" }
+    }
 
     const fileMetadata = {
       name: fileName,
-      parents: [folderId], // Specify the folder ID where the file should be uploaded
+      parents: [folderId],
     }
 
     const media = {
@@ -60,16 +108,34 @@ const uploadToDrive = async (
       body: Readable.from(fileBuffer),
     }
 
+    console.log("Uploading file...")
     const response = await drive.files.create({
       requestBody: fileMetadata,
       media: media,
-      fields: "id,webViewLink",
+      fields: "id,name,webViewLink,parents",
     })
 
-    return response.data.webViewLink || null
-  } catch (error) {
-    console.error("Error uploading to Google Drive:", error)
-    return null
+    console.log("✓ Upload successful!")
+    console.log("File ID:", response.data.id)
+    console.log("File name:", response.data.name)
+    console.log("Parents:", response.data.parents)
+    console.log("Web view link:", response.data.webViewLink)
+
+    return {
+      success: true,
+      link: response.data.webViewLink || undefined,
+    }
+  } catch (error: any) {
+    console.error("❌ Google Drive upload failed:", error.message)
+    console.error("Error details:", {
+      code: error.code,
+      status: error.status,
+      message: error.message,
+    })
+    return {
+      success: false,
+      error: `Upload failed: ${error.message}`,
+    }
   }
 }
 
@@ -77,6 +143,11 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { inspectorName, driverName, truckPlate, trailerPlate, inspectionDate, pdfBase64 } = body
+
+    console.log("=== Email API Called ===")
+    console.log("Inspector:", inspectorName)
+    console.log("Driver:", driverName)
+    console.log("PDF size:", pdfBase64?.length || 0, "characters")
 
     if (!inspectorName || !pdfBase64) {
       return NextResponse.json({ message: "Missing inspector name or PDF data" }, { status: 400 })
@@ -87,31 +158,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: "No email recipients found for this inspector" }, { status: 400 })
     }
 
-    // Dynamic import for nodemailer to avoid build issues
+    // Convert base64 to buffer
+    const pdfBuffer = Buffer.from(pdfBase64, "base64")
+    console.log("PDF buffer size:", pdfBuffer.length, "bytes")
+
+    // File name for both email attachment and Google Drive
+    const fileName = `ADR_Check_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, "_")}.pdf`
+    console.log("Generated filename:", fileName)
+
+    // Upload to Google Drive
+    let driveResult = { success: false, link: undefined, error: "Not attempted" }
+    const googleDriveFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID
+
+    if (googleDriveFolderId) {
+      console.log("Attempting Google Drive upload...")
+      driveResult = await uploadToDrive(pdfBuffer, fileName, "application/pdf", googleDriveFolderId)
+    } else {
+      console.log("Google Drive folder ID not configured, skipping upload")
+    }
+
+    // Dynamic import for nodemailer
     const nodemailer = await import("nodemailer")
 
     // Create transporter
-    const transporter = nodemailer.createTransport({
+    const transporter = nodemailer.createTransporter({
       service: "gmail",
       auth: {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_APP_PASSWORD,
       },
     })
-
-    // Convert base64 to buffer
-    const pdfBuffer = Buffer.from(pdfBase64, "base64")
-
-    // File name for both email attachment and Google Drive
-    const fileName = `ADR_Check_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, "_")}.pdf`
-
-    // Upload to Google Drive if folder ID is configured
-    let driveLink = null
-    const googleDriveFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID
-
-    if (googleDriveFolderId) {
-      driveLink = await uploadToDrive(pdfBuffer, fileName, "application/pdf", googleDriveFolderId)
-    }
 
     // Email options
     const mailOptions = {
@@ -126,7 +202,7 @@ Trailer: ${trailerPlate}
 Inspection Date: ${inspectionDate}
 Inspector: ${inspectorName}
 
-${driveLink ? `The document is also available on Google Drive: ${driveLink}` : ""}
+${driveResult.success && driveResult.link ? `The document is also available on Google Drive: ${driveResult.link}` : ""}
 
 This checklist was generated automatically by the ADR Checklist System.`,
       html: `
@@ -157,7 +233,7 @@ This checklist was generated automatically by the ADR Checklist System.`,
             </tr>
           </table>
           
-          ${driveLink ? `<p><strong>Google Drive:</strong> <a href="${driveLink}" target="_blank">View document in Google Drive</a></p>` : ""}
+          ${driveResult.success && driveResult.link ? `<p><strong>Google Drive:</strong> <a href="${driveResult.link}" target="_blank">View document in Google Drive</a></p>` : ""}
           
           <p style="color: #666; font-size: 12px; margin-top: 30px;">
             This email was generated automatically by the ADR Checklist System.
@@ -174,15 +250,32 @@ This checklist was generated automatically by the ADR Checklist System.`,
     }
 
     // Send email
+    console.log("Sending email to:", recipients.join(", "))
     await transporter.sendMail(mailOptions)
+    console.log("✓ Email sent successfully")
+
+    // Prepare response message
+    let message = `Email sent successfully to ${recipients.length} recipient(s)`
+    if (driveResult.success) {
+      message += " and saved to Google Drive"
+    } else if (driveResult.error) {
+      message += ` (Google Drive upload failed: ${driveResult.error})`
+    }
 
     return NextResponse.json({
       success: true,
-      message: `Email sent successfully to ${recipients.length} recipient(s)${driveLink ? " and saved to Google Drive" : ""}`,
-      driveLink: driveLink,
+      message: message,
+      driveLink: driveResult.link,
+      driveUploadSuccess: driveResult.success,
     })
-  } catch (error) {
-    console.error("Email sending error:", error)
-    return NextResponse.json({ message: "Failed to send email. Please try again." }, { status: 500 })
+  } catch (error: any) {
+    console.error("❌ Email API error:", error)
+    return NextResponse.json(
+      {
+        message: "Failed to send email. Please try again.",
+        error: error.message,
+      },
+      { status: 500 },
+    )
   }
 }
