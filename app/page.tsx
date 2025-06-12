@@ -966,7 +966,7 @@ export default function ADRChecklist() {
       await new Promise((resolve) => setTimeout(resolve, 2000))
 
       setUploadStatus(
-        `PDF successfully uploaded to Coglas: ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, "_")}.pdf`,
+        `PDF successfully uploaded to Coglas: ADR-Check_${driverName.replace(/\s+/g, "-")}_${checkDate.replace(/-/g, ".")}.pdf`,
       )
     } catch (error) {
       console.error("Error uploading PDF:", error)
