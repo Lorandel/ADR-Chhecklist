@@ -886,8 +886,6 @@ export default function ADRChecklist() {
             label = `${item.name} - `
             drawCheckbox(x, currentY - 3, isChecked && !expired)
 
-            label = `${item.name} - `
-            drawCheckbox(x, currentY - 3, isChecked && !expired)
             addSafeText(label, x + 6, currentY)
             addSafeText(dateStr, x + 6 + pdf.getTextWidth(label), currentY, {}, expired ? "#FF0000" : "#006400")
             return
@@ -2040,19 +2038,6 @@ export default function ADRChecklist() {
             {emailStatus}
           </div>
         )}
-
-        {/* Debug Section */}
-        <div className="mt-4 p-4 bg-gray-100 rounded">
-          <h3 className="font-bold mb-2">Debug Information</h3>
-          <div className="space-y-2">
-            <Button onClick={() => window.open("/api/debug", "_blank")} variant="outline" className="w-full">
-              Check System Status
-            </Button>
-            <Button onClick={() => window.open("/api/test-drive", "_blank")} variant="outline" className="w-full">
-              Test Google Drive Connection
-            </Button>
-          </div>
-        </div>
       </div>
 
       {/* FTP Upload Modal */}
