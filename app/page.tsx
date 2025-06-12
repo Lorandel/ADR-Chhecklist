@@ -1563,6 +1563,8 @@ export default function ADRChecklist() {
             onChange={(e) => setCheckDate(e.target.value)}
             className="w-40 text-center"
             placeholder="dd-mm-yyyy"
+            inputMode="numeric"
+            pattern="[0-9-]*"
           />
         </div>
 
@@ -1636,6 +1638,8 @@ export default function ADRChecklist() {
                     onChange={(e) => handleLicenseDateChange("drivingLicense", "month", e.target.value)}
                     placeholder="MM"
                     maxLength={2}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     className={`w-16 h-10 mr-1 ${
                       drivingLicenseExpired
                         ? "border-red-500 border-2"
@@ -1651,6 +1655,8 @@ export default function ADRChecklist() {
                     onChange={(e) => handleLicenseDateChange("drivingLicense", "year", e.target.value)}
                     placeholder="YYYY"
                     maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     className={`w-20 h-10 ml-1 ${
                       drivingLicenseExpired
                         ? "border-red-500 border-2"
@@ -1697,6 +1703,8 @@ export default function ADRChecklist() {
                     onChange={(e) => handleLicenseDateChange("adrCertificate", "month", e.target.value)}
                     placeholder="MM"
                     maxLength={2}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     className={`w-16 h-10 mr-1 ${
                       adrCertificateExpired
                         ? "border-red-500 border-2"
@@ -1712,6 +1720,8 @@ export default function ADRChecklist() {
                     onChange={(e) => handleLicenseDateChange("adrCertificate", "year", e.target.value)}
                     placeholder="YYYY"
                     maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     className={`w-20 h-10 ml-1 ${
                       adrCertificateExpired
                         ? "border-red-500 border-2"
@@ -1760,6 +1770,8 @@ export default function ADRChecklist() {
                     onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
                     placeholder="MM"
                     maxLength={2}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     className={`w-16 h-10 mr-1 ${
                       truckDocExpired
                         ? "border-red-500 border-2"
@@ -1775,6 +1787,8 @@ export default function ADRChecklist() {
                     onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
                     placeholder="YYYY"
                     maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     className={`w-20 h-10 ml-1 ${
                       truckDocExpired
                         ? "border-red-500 border-2"
@@ -1796,6 +1810,8 @@ export default function ADRChecklist() {
                     onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
                     placeholder="MM"
                     maxLength={2}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     className={`w-16 h-10 mr-1 ${
                       trailerDocExpired
                         ? "border-red-500 border-2"
@@ -1811,6 +1827,8 @@ export default function ADRChecklist() {
                     onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
                     placeholder="YYYY"
                     maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     className={`w-20 h-10 ml-1 ${
                       trailerDocExpired
                         ? "border-red-500 border-2"
@@ -1899,6 +1917,8 @@ export default function ADRChecklist() {
                       placeholder="MM"
                       className="w-16 h-10 mr-1"
                       maxLength={2}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                     />
                     <span>/</span>
                     <Input
@@ -1908,6 +1928,8 @@ export default function ADRChecklist() {
                       placeholder="YYYY"
                       className="w-20 h-10 ml-1"
                       maxLength={4}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                     />
                     {expiredItems[item.name] && <span className="ml-2 text-red-500">Expired</span>}
                   </div>
