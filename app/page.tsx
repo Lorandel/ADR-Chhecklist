@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect, useRef, createRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { jsPDF } from "jspdf"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,7 @@ const capitalizeWords = (str: string) =>
     .join(" ")
 
 export default function ADRChecklist() {
+  const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
   const [driverName, setDriverName] = useState("")
   const [truckPlate, setTruckPlate] = useState("")
@@ -50,7 +51,6 @@ export default function ADRChecklist() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
-  const [isClient, setIsClient] = useState(false)
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -1225,139 +1225,19 @@ export default function ADRChecklist() {
 
   // Initialize component
   useEffect(() => {
-    // Ensure we're on the client side
-    setIsClient(true)
-
-    // Only proceed with client-side operations after confirming we're on client
-    if (typeof window === "undefined") return
-
-    // Set today's date and inspection info
-    const today = new Date()
-    const day = String(today.getDate()).padStart(2, "0")
-    const month = String(today.getMonth() + 1).padStart(2, "0")
-    const year = today.getFullYear()
-
-    setCheckDate(`${day}-${month}-${year}`)
-    setInspectionMonth(today.getMonth() + 1)
-    setInspectionYear(today.getFullYear())
-
-    // Try to load saved data from localStorage
-    const savedData = localStorage.getItem("adrChecklistData")
-    if (savedData) {
-      try {
-        const parsedData = JSON.parse(savedData)
-
-        // Restore form data
-        if (parsedData.driverName) setDriverName(parsedData.driverName)
-        if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
-        if (parsedData.trailerPlate) setTrailerPlate(parsedData.trailerPlate)
-        if (parsedData.drivingLicenseDate) setDrivingLicenseDate(parsedData.drivingLicenseDate)
-        if (parsedData.adrCertificateDate) setAdrCertificateDate(parsedData.adrCertificateDate)
-        if (parsedData.truckDocDate) setTruckDocDate(parsedData.truckDocDate)
-        if (parsedData.trailerDocDate) setTrailerDocDate(parsedData.trailerDocDate)
-        if (parsedData.checkedItems) setCheckedItems(parsedData.checkedItems)
-        if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
-        if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
-        if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
-        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
-
-        // Validate dates after loading
-        if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
-          setTimeout(() => validateLicenseDate("drivingLicense"), 0)
-        }
-        if (parsedData.adrCertificateDate?.month && parsedData.adrCertificateDate?.year) {
-          setTimeout(() => validateLicenseDate("adrCertificate"), 0)
-        }
-        if (parsedData.truckDocDate?.month && parsedData.truckDocDate?.year) {
-          setTimeout(() => validateTruckDocDate(), 0)
-        }
-        if (parsedData.trailerDocDate?.month && parsedData.trailerDocDate?.year) {
-          setTimeout(() => validateTrailerDocDate(), 0)
-        }
-
-        // Validate equipment expiry dates
-        if (parsedData.expiryDates) {
-          Object.keys(parsedData.expiryDates).forEach((itemName) => {
-            setTimeout(() => checkIfDateIsExpired(itemName), 0)
-          })
-        }
-      } catch (error) {
-        console.error("Error loading saved data:", error)
-      }
-    } else {
-      // Initialize checkbox states if no saved data
-      const initialEquipmentState: Record<string, boolean> = {}
-      equipmentItems.forEach((item) => {
-        initialEquipmentState[item.name] = false
-      })
-      setCheckedItems(initialEquipmentState)
-
-      const initialBeforeLoadingState: Record<string, boolean> = {}
-      beforeLoadingItems.forEach((item) => {
-        initialBeforeLoadingState[item] = false
-      })
-      setBeforeLoadingChecked(initialBeforeLoadingState)
-
-      const initialAfterLoadingState: Record<string, boolean> = {}
-      afterLoadingItems.forEach((item) => {
-        initialAfterLoadingState[item] = false
-      })
-      setAfterLoadingChecked(initialAfterLoadingState)
-
-      // Initialize expiry date refs and states
-      const initialDates: Record<string, { month: string; year: string }> = {}
-      const initialExpiredItems: Record<string, boolean> = {}
-
-      equipmentItems.forEach((item) => {
-        if (item.hasDate) {
-          initialDates[item.name] = { month: "", year: "" }
-          initialExpiredItems[item.name] = false
-          dateInputRefs.current[item.name] = {
-            month: createRef<HTMLInputElement>(),
-            year: createRef<HTMLInputElement>(),
-          }
-        }
-      })
-
-      setExpiryDates(initialDates)
-      setExpiredItems(initialExpiredItems)
-    }
-
-    // Initialize signature canvases
-    initializeCanvas()
-    initializeInspectorCanvas()
-
-    const cleanupDriver = setupSignaturePad()
-    const cleanupInspector = setupInspectorSignaturePad()
-
-    // ✨ Title fade-in animation
-    const title = document.getElementById("adr-title")
-    if (title) {
-      title.style.opacity = "0"
-      title.style.transform = "translateY(-10px)"
-      setTimeout(() => {
-        title.style.transition = "all 0.6s ease-out"
-        title.style.opacity = "1"
-        title.style.transform = "translateY(0)"
-      }, 200)
-    }
-
-    // Cleanup event listeners on unmount
-    return () => {
-      if (cleanupDriver) cleanupDriver()
-      if (cleanupInspector) cleanupInspector()
-    }
+    setIsMounted(true)
   }, [])
 
   // Separate useEffect for localStorage operations
   useEffect(() => {
-    if (!isClient || typeof window === "undefined") return
+    if (!isMounted || typeof window === "undefined") return
 
     // Try to load saved data from localStorage
     const savedData = localStorage.getItem("adrChecklistData")
     if (savedData) {
       try {
         const parsedData = JSON.parse(savedData)
+
         // Restore form data
         if (parsedData.driverName) setDriverName(parsedData.driverName)
         if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
@@ -1396,11 +1276,11 @@ export default function ADRChecklist() {
         console.error("Error loading saved data:", error)
       }
     }
-  }, [isClient])
+  }, [isMounted])
 
   // Add an effect to save data to localStorage whenever relevant state changes
   useEffect(() => {
-    if (!isClient || typeof window === "undefined") return
+    if (!isMounted || typeof window === "undefined") return
 
     const dataToSave = {
       driverName,
@@ -1419,7 +1299,7 @@ export default function ADRChecklist() {
 
     localStorage.setItem("adrChecklistData", JSON.stringify(dataToSave))
   }, [
-    isClient,
+    isMounted,
     driverName,
     truckPlate,
     trailerPlate,
@@ -1769,7 +1649,7 @@ export default function ADRChecklist() {
   }, [equipmentItems, beforeLoadingItems, afterLoadingItems])
 
   // Add this right after the return statement
-  if (!isClient) {
+  if (!isMounted) {
     return (
       <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
         <div className="text-center mb-6">
