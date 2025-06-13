@@ -22,23 +22,12 @@ const testGoogleDrive = async () => {
       }
     }
 
-    // Format the private key properly
-    let privateKey = process.env.GOOGLE_PRIVATE_KEY
-
-    // Remove any quotes and extra escaping
-    privateKey = privateKey?.replace(/^["']|["']$/g, "") // Remove surrounding quotes
-    privateKey = privateKey?.replace(/\\\\n/g, "\n") // Replace \\n with \n
-    privateKey = privateKey?.replace(/\\n/g, "\n") // Replace \n with actual newlines
-
-    console.log("Private key formatted, starts with:", privateKey?.substring(0, 20))
-    console.log("Private key ends with:", privateKey?.substring(privateKey.length - 20))
-
     const { google } = await import("googleapis")
 
     const auth = new google.auth.GoogleAuth({
       credentials: {
         client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: privateKey,
+        private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
       },
       scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file"],
     })
