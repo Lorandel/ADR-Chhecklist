@@ -738,19 +738,24 @@ export default function ADRChecklist() {
       let y = 20
 
       // Load watermark image
-      const watermarkUrl = "/images/albias-watermark.png"
-      const watermarkImage = await fetch(watermarkUrl)
-        .then((res) => res.blob())
-        .then((blob) => {
-          return new Promise<string>((resolve) => {
-            const reader = new FileReader()
-            reader.onloadend = () => resolve(reader.result as string)
-            reader.readAsDataURL(blob)
+      try {
+        const watermarkUrl = "/images/albias-watermark.png"
+        const watermarkImage = await fetch(watermarkUrl)
+          .then((res) => res.blob())
+          .then((blob) => {
+            return new Promise<string>((resolve) => {
+              const reader = new FileReader()
+              reader.onloadend = () => resolve(reader.result as string)
+              reader.readAsDataURL(blob)
+            })
           })
-        })
 
-      // Draw watermark (centered and semi-transparent)
-      pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
+        // Draw watermark (centered and semi-transparent)
+        pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
+      } catch (watermarkError) {
+        console.error("Error adding watermark:", watermarkError)
+        // Continue without watermark
+      }
 
       const inspectorColors = {
         "Alexandru Dogariu": "#FF8C00",
@@ -893,6 +898,21 @@ export default function ADRChecklist() {
 
           drawCheckbox(x, currentY - 3, isChecked)
           addSafeText(label, x + 6, currentY)
+
+          // Add "One piece for each driver!" text in red for specific items
+          if (
+            item.name === "Flashlight" ||
+            item.name === "Rubber gloves" ||
+            item.name === "Safety glasses" ||
+            item.name === "Mask + filter (Date for ADR class 6.1/2.3)" ||
+            item.name === "Collection bucket"
+          ) {
+            pdf.setTextColor("#FF0000")
+            pdf.setFont("helvetica", "normal")
+            pdf.text("One piece for each driver!", x + 6, currentY + 4)
+            pdf.setTextColor("#000000")
+            pdf.setFont("helvetica", "bold")
+          }
         }
 
         renderItem(leftColumnItems[i], leftX)
@@ -946,46 +966,12 @@ export default function ADRChecklist() {
       pdf.setTextColor(inspectorColor)
       pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
-      // Get PDF as base64
-      const pdfBuffer = pdf.output("arraybuffer")
-      const pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
-
-      // Send email
-      const response = await fetch("/api/send-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          inspectorName: selectedInspector,
-          pdfBase64: pdfBase64,
-          driverName,
-          truckPlate,
-          trailerPlate,
-          inspectionDate: checkDate,
-        }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to send email")
-      }
-
-      if (data.success) {
-        let successMessage = "Email sent successfully!"
-        if (data.driveLink) {
-          successMessage += " PDF was also saved to Google Drive."
-        }
-        setEmailStatus(successMessage)
-        // Reset form after successful email
-        resetForm()
-      } else {
-        setEmailStatus(data.message || "Email sent successfully!")
-      }
-    } catch (err: any) {
-      console.error(err)
-      setEmailStatus("Failed to send email. Please try again.")
+      // Save the PDF for download only (no email or Google Drive)
+      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
+    } catch (error) {
+      console.error("Error generating PDF:", error)
     } finally {
-      setIsSendingEmail(false)
+      setIsPdfGenerating(false)
     }
   }
 
