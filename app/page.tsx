@@ -1275,13 +1275,20 @@ export default function ADRChecklist() {
     }
   }
 
+  // Find the handleSendEmail function and replace it with this improved version:
+
   const handleSendEmail = async () => {
+    if (!isMounted || typeof window === "undefined") return
+
     setIsSendingEmail(true)
-    setEmailStatus(null)
+    setEmailStatus("Preparing email...")
 
     try {
+      console.log("Starting email process...")
+
       // Dynamically import jsPDF only on client side
       const { jsPDF } = await import("jspdf")
+      console.log("jsPDF imported successfully")
 
       const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
       const pageWidth = pdf.internal.pageSize.getWidth()
@@ -1289,20 +1296,32 @@ export default function ADRChecklist() {
       const margin = 20
       let y = 20
 
-      // Load watermark image
-      const watermarkUrl = "/images/albias-watermark.png"
-      const watermarkImage = await fetch(watermarkUrl)
-        .then((res) => res.blob())
-        .then((blob) => {
-          return new Promise<string>((resolve) => {
-            const reader = new FileReader()
-            reader.onloadend = () => resolve(reader.result as string)
-            reader.readAsDataURL(blob)
-          })
-        })
+      console.log("PDF object created")
 
-      // Draw watermark (centered and semi-transparent)
-      pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
+      // Load watermark image
+      try {
+        console.log("Loading watermark image...")
+        const watermarkUrl = "/images/albias-watermark.png"
+        const watermarkImage = await fetch(watermarkUrl)
+          .then((res) => {
+            if (!res.ok) throw new Error(`Failed to fetch watermark: ${res.status}`)
+            return res.blob()
+          })
+          .then((blob) => {
+            return new Promise<string>((resolve) => {
+              const reader = new FileReader()
+              reader.onloadend = () => resolve(reader.result as string)
+              reader.readAsDataURL(blob)
+            })
+          })
+
+        // Draw watermark (centered and semi-transparent)
+        pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
+        console.log("Watermark added to PDF")
+      } catch (watermarkError) {
+        console.error("Error adding watermark:", watermarkError)
+        // Continue without watermark
+      }
 
       const inspectorColors = {
         "Alexandru Dogariu": "#FF8C00",
@@ -1498,44 +1517,62 @@ export default function ADRChecklist() {
       pdf.setTextColor(inspectorColor)
       pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
+      console.log("PDF content generated successfully")
+      setEmailStatus("PDF generated, preparing to send email...")
+
       // Get PDF as base64
-      const pdfBuffer = pdf.output("arraybuffer")
-      const pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+      try {
+        const pdfBuffer = pdf.output("arraybuffer")
+        const pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+        console.log("PDF converted to base64 successfully, length:", pdfBase64.length)
 
-      // Send email
-      const response = await fetch("/api/send-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          inspectorName: selectedInspector,
-          pdfBase64: pdfBase64,
-          driverName,
-          truckPlate,
-          trailerPlate,
-          inspectionDate: checkDate,
-        }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to send email")
-      }
-
-      if (data.success) {
-        let successMessage = "Email sent successfully!"
-        if (data.driveLink) {
-          successMessage += " PDF was also saved to Google Drive."
+        // Check if base64 string is valid
+        if (!pdfBase64 || pdfBase64.length === 0) {
+          throw new Error("Generated PDF is empty")
         }
-        setEmailStatus(successMessage)
-        // Reset form after successful email
-        resetForm()
-      } else {
-        setEmailStatus(data.message || "Email sent successfully!")
+
+        setEmailStatus("Sending email...")
+
+        // Send email
+        const response = await fetch("/api/send-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            inspectorName: selectedInspector,
+            pdfBase64: pdfBase64,
+            driverName,
+            truckPlate,
+            trailerPlate,
+            inspectionDate: checkDate,
+          }),
+        })
+
+        console.log("API response status:", response.status)
+        const data = await response.json()
+        console.log("API response data:", data)
+
+        if (!response.ok) {
+          throw new Error(data.message || `Server responded with status ${response.status}`)
+        }
+
+        if (data.success) {
+          let successMessage = "Email sent successfully!"
+          if (data.driveLink) {
+            successMessage += " PDF was also saved to Google Drive."
+          }
+          setEmailStatus(successMessage)
+          // Reset form after successful email
+          resetForm()
+        } else {
+          setEmailStatus(data.message || "Email sent successfully!")
+        }
+      } catch (pdfError) {
+        console.error("Error processing PDF:", pdfError)
+        throw new Error(`PDF processing error: ${pdfError.message}`)
       }
-    } catch (err: any) {
-      console.error(err)
-      setEmailStatus("Failed to send email. Please try again.")
+    } catch (err) {
+      console.error("Email sending error:", err)
+      setEmailStatus(`Failed to send email: ${err.message}. Please try again.`)
     } finally {
       setIsSendingEmail(false)
     }
