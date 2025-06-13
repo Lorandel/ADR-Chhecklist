@@ -169,6 +169,21 @@ export async function POST(req: NextRequest) {
   try {
     console.log("=== Email API Called ===")
 
+    // Check email environment variables first
+    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+      console.error("Missing email credentials:", {
+        hasGmailUser: !!process.env.GMAIL_USER,
+        hasGmailAppPassword: !!process.env.GMAIL_APP_PASSWORD,
+      })
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Email configuration missing. Please check GMAIL_USER and GMAIL_APP_PASSWORD environment variables.",
+        },
+        { status: 500 },
+      )
+    }
+
     const body = await req.json()
     const { inspectorName, driverName, truckPlate, trailerPlate, inspectionDate, pdfBase64 } = body
 
@@ -177,21 +192,6 @@ export async function POST(req: NextRequest) {
     console.log("PDF size:", pdfBase64?.length || 0, "characters")
 
     // Validate required email environment variables
-    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-      console.error("Missing email environment variables")
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Email configuration missing",
-          details: {
-            hasGmailUser: !!process.env.GMAIL_USER,
-            hasGmailPassword: !!process.env.GMAIL_APP_PASSWORD,
-          },
-        },
-        { status: 500 },
-      )
-    }
-
     if (!inspectorName || !pdfBase64) {
       console.error("Missing required data:", {
         hasInspectorName: !!inspectorName,
@@ -246,14 +246,15 @@ export async function POST(req: NextRequest) {
       // Dynamic import for nodemailer
       const nodemailer = await import("nodemailer")
 
-      // Create transporter with proper method name
-      console.log("Creating email transporter...")
+      // Create transporter with detailed logging
+      console.log("Creating email transporter with:", process.env.GMAIL_USER)
       const transporter = nodemailer.createTransport({
         service: "gmail",
         auth: {
           user: process.env.GMAIL_USER,
           pass: process.env.GMAIL_APP_PASSWORD,
         },
+        logger: true, // Enable built-in logger
         debug: true, // Enable debug output
       })
 
@@ -261,14 +262,25 @@ export async function POST(req: NextRequest) {
       console.log("Verifying email configuration...")
       try {
         await transporter.verify()
-        console.log("✓ Email transporter verified")
-      } catch (verifyError) {
+        console.log("✓ Email transporter verified successfully")
+      } catch (verifyError: any) {
         console.error("Email verification failed:", verifyError)
+        console.error("Error details:", {
+          code: verifyError.code,
+          command: verifyError.command,
+          response: verifyError.response,
+          responseCode: verifyError.responseCode,
+        })
+
         return NextResponse.json(
           {
             success: false,
-            message: "Email configuration is invalid",
-            details: verifyError.message,
+            message: `Email configuration is invalid: ${verifyError.message}`,
+            details: {
+              code: verifyError.code,
+              command: verifyError.command,
+              response: verifyError.response,
+            },
           },
           { status: 500 },
         )
@@ -383,20 +395,33 @@ This checklist was generated automatically by the ADR Checklist System.`,
         { status: 500 },
       )
     }
-  } catch (error) {
-    console.error("❌ Email API error:", error)
+  } catch (err: any) {
+    console.error("❌ Email API error:", err)
+
+    // Provide more specific error messages based on error type
+    let errorMessage = "Failed to send email. Please try again."
+    const statusCode = 500
+
+    if (err.code === "EAUTH") {
+      errorMessage = "Authentication failed. Please check your email credentials."
+    } else if (err.code === "ESOCKET") {
+      errorMessage = "Network error when connecting to email server."
+    } else if (err.message.includes("configuration")) {
+      errorMessage = "Email configuration error: " + err.message
+    }
+
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to send email. Please try again.",
-        error: error.message,
+        message: errorMessage,
+        error: err.message,
         details: {
-          code: error.code,
-          command: error.command,
-          response: error.response,
+          code: err.code,
+          command: err.command,
+          response: err.response,
         },
       },
-      { status: 500 },
+      { status: statusCode },
     )
   }
 }

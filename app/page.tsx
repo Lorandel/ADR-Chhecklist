@@ -1556,9 +1556,21 @@ export default function ADRChecklist() {
         console.error("Error processing PDF:", pdfError)
         throw new Error(`PDF processing error: ${pdfError.message}`)
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Email sending error:", err)
-      setEmailStatus(`Failed to send email: ${err.message}. Please try again.`)
+
+      // Provide more user-friendly error messages
+      let errorMessage = "Failed to send email. Please try again."
+
+      if (err.message.includes("configuration is invalid")) {
+        errorMessage = "Email configuration error. Please check your Gmail settings and app password."
+      } else if (err.message.includes("network")) {
+        errorMessage = "Network error when trying to send email. Please check your internet connection."
+      } else if (err.message.includes("PDF")) {
+        errorMessage = "Error generating PDF: " + err.message
+      }
+
+      setEmailStatus(errorMessage)
     } finally {
       setIsSendingEmail(false)
     }
@@ -2128,6 +2140,25 @@ export default function ADRChecklist() {
           className="w-full bg-purple-600 hover:bg-purple-700"
         >
           {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+        </Button>
+        <Button
+          onClick={async () => {
+            setEmailStatus("Testing email configuration...")
+            try {
+              const response = await fetch("/api/test-email")
+              const data = await response.json()
+              if (data.success) {
+                setEmailStatus("Email configuration is working correctly!")
+              } else {
+                setEmailStatus(`Email test failed: ${data.error}`)
+              }
+            } catch (error) {
+              setEmailStatus(`Test failed: ${error.message}`)
+            }
+          }}
+          className="w-full bg-gray-600 hover:bg-gray-700"
+        >
+          Test Email Configuration
         </Button>
 
         {emailStatus && (

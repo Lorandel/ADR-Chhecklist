@@ -14,6 +14,7 @@ export async function GET(req: NextRequest) {
       hasUser: !!emailConfig.GMAIL_USER,
       hasPassword: !!emailConfig.GMAIL_APP_PASSWORD,
       userEmail: emailConfig.GMAIL_USER,
+      passwordLength: emailConfig.GMAIL_APP_PASSWORD?.length || 0,
     })
 
     if (!emailConfig.GMAIL_USER || !emailConfig.GMAIL_APP_PASSWORD) {
@@ -34,39 +35,46 @@ export async function GET(req: NextRequest) {
     try {
       const nodemailer = await import("nodemailer")
 
-      // Create test account if needed
-      let testAccount
-      let transporter
-
-      if (process.env.NODE_ENV === "development") {
-        console.log("Creating test account for development...")
-        testAccount = await nodemailer.createTestAccount()
-
-        transporter = nodemailer.createTransport({
-          host: "smtp.ethereal.email",
-          port: 587,
-          secure: false,
-          auth: {
-            user: testAccount.user,
-            pass: testAccount.pass,
-          },
-        })
-      } else {
-        // Use real Gmail account
-        transporter = nodemailer.createTransport({
-          service: "gmail",
-          auth: {
-            user: emailConfig.GMAIL_USER,
-            pass: emailConfig.GMAIL_APP_PASSWORD,
-          },
-          debug: true,
-        })
-      }
+      console.log("Creating test transporter...")
+      // Use real Gmail account
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: emailConfig.GMAIL_USER,
+          pass: emailConfig.GMAIL_APP_PASSWORD,
+        },
+        logger: true,
+        debug: true,
+      })
 
       // Verify connection
       console.log("Verifying email connection...")
-      await transporter.verify()
-      console.log("Email connection verified successfully")
+      try {
+        await transporter.verify()
+        console.log("Email connection verified successfully")
+      } catch (verifyError: any) {
+        console.error("Email verification failed:", verifyError)
+        console.error("Error details:", {
+          code: verifyError.code,
+          command: verifyError.command,
+          response: verifyError.response,
+        })
+
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Email verification failed: ${verifyError.message}`,
+            details: {
+              code: verifyError.code,
+              command: verifyError.command,
+              response: verifyError.response,
+              suggestion:
+                "Check if your Gmail account has 'Less secure app access' enabled or if you need to use an App Password.",
+            },
+          },
+          { status: 500 },
+        )
+      }
 
       // Send test email
       console.log("Sending test email...")
