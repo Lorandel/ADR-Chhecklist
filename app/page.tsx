@@ -2,6 +2,12 @@
 
 import type React from "react"
 import { useState, useEffect, useRef, useCallback, createRef } from "react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import Image from "next/image"
 
 const capitalizeWords = (str: string) =>
   str
@@ -189,7 +195,7 @@ export default function ADRChecklist() {
       image: "/images/safety-glasses.png",
     },
     {
-      name: "Mask + filter (ADR class 6.1/2.3)",
+      name: "Mask + filter (Date for ADR class 6.1/2.3)",
       translations: [
         "de - Maske + Filter",
         "nl - Masker + filter",
@@ -732,24 +738,19 @@ export default function ADRChecklist() {
       let y = 20
 
       // Load watermark image
-      try {
-        const watermarkUrl = "/images/albias-watermark.png"
-        const watermarkImage = await fetch(watermarkUrl)
-          .then((res) => res.blob())
-          .then((blob) => {
-            return new Promise<string>((resolve) => {
-              const reader = new FileReader()
-              reader.onloadend = () => resolve(reader.result as string)
-              reader.readAsDataURL(blob)
-            })
+      const watermarkUrl = "/images/albias-watermark.png"
+      const watermarkImage = await fetch(watermarkUrl)
+        .then((res) => res.blob())
+        .then((blob) => {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(reader.result as string)
+            reader.readAsDataURL(blob)
           })
+        })
 
-        // Draw watermark (centered and semi-transparent)
-        pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
-      } catch (watermarkError) {
-        console.error("Error adding watermark:", watermarkError)
-        // Continue without watermark
-      }
+      // Draw watermark (centered and semi-transparent)
+      pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
 
       const inspectorColors = {
         "Alexandru Dogariu": "#FF8C00",
@@ -945,12 +946,46 @@ export default function ADRChecklist() {
       pdf.setTextColor(inspectorColor)
       pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
-      // Save the PDF for download only (no email or Google Drive)
-      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
-    } catch (error) {
-      console.error("Error generating PDF:", error)
+      // Get PDF as base64
+      const pdfBuffer = pdf.output("arraybuffer")
+      const pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+
+      // Send email
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inspectorName: selectedInspector,
+          pdfBase64: pdfBase64,
+          driverName,
+          truckPlate,
+          trailerPlate,
+          inspectionDate: checkDate,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to send email")
+      }
+
+      if (data.success) {
+        let successMessage = "Email sent successfully!"
+        if (data.driveLink) {
+          successMessage += " PDF was also saved to Google Drive."
+        }
+        setEmailStatus(successMessage)
+        // Reset form after successful email
+        resetForm()
+      } else {
+        setEmailStatus(data.message || "Email sent successfully!")
+      }
+    } catch (err: any) {
+      console.error(err)
+      setEmailStatus("Failed to send email. Please try again.")
     } finally {
-      setIsPdfGenerating(false)
+      setIsSendingEmail(false)
     }
   }
 
@@ -1505,4 +1540,631 @@ export default function ADRChecklist() {
       setIsSendingEmail(false)
     }
   }
+
+  const closeFtpModal = () => {
+    setShowFtpModal(false)
+    setOrderNumber("")
+    setUploadStatus(null)
+  }
+
+  const handleFtpUpload = async () => {
+    setIsUploading(true)
+    setUploadStatus("Uploading PDF...")
+
+    try {
+      const response = await fetch("/api/upload-ftp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderNumber: orderNumber.trim(),
+          driverName,
+          truckPlate,
+          trailerPlate,
+          inspectionDate: checkDate,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to upload PDF")
+      }
+
+      setUploadStatus(data.message || "PDF uploaded successfully!")
+    } catch (error: any) {
+      console.error("FTP Upload Error:", error)
+      setUploadStatus(`Error uploading PDF: ${error.message}`)
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  return (
+    <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
+      <div className="text-center mb-6">
+        <h1 id="adr-title" className="text-2xl font-bold">
+          ADR Checklist
+        </h1>
+      </div>
+
+      <div className="mb-6">
+        {/* Centered Inspection Date */}
+        <div className="flex flex-col items-center mb-6">
+          <Label htmlFor="checkDate" className="text-lg font-semibold mb-2">
+            Inspection Date:
+          </Label>
+          <Input
+            id="checkDate"
+            value={checkDate}
+            onChange={(e) => setCheckDate(e.target.value)}
+            className="w-40 text-center"
+            placeholder="dd-mm-yyyy"
+            inputMode="numeric"
+            pattern="[0-9-]*"
+          />
+        </div>
+
+        <div className="mb-4">
+          <Label htmlFor="driverName">Driver's Name:</Label>
+          <Input
+            id="driverName"
+            value={driverName}
+            onChange={(e) => {
+              const value = e.target.value
+              const formatted = capitalizeWords(value)
+              setDriverName(formatted)
+            }}
+            className="w-full"
+          />
+        </div>
+
+        <div className="mb-4">
+          <Label htmlFor="truckPlate">Truck License Plate:</Label>
+          <Input
+            id="truckPlate"
+            value={truckPlate}
+            onChange={(e) => setTruckPlate(e.target.value.toUpperCase())}
+            className="w-full uppercase"
+          />
+        </div>
+
+        <div className="mb-4">
+          <Label htmlFor="trailerPlate">Trailer License Plate:</Label>
+          <Input
+            id="trailerPlate"
+            value={trailerPlate}
+            onChange={(e) => setTrailerPlate(e.target.value.toUpperCase())}
+            className="w-full uppercase"
+          />
+        </div>
+
+        {/* Document Boxes Section */}
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-4">Driver and Vehicle Documents:</h2>
+
+          {/* Driving License Document Box */}
+          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+            <Image
+              src="/images/driving-license.jpg"
+              alt="Driving License"
+              fill
+              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+            />
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+              <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Label className="font-medium">Driving License</Label>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    <div>de - Führerschein</div>
+                    <div>nl - Rijbewijs</div>
+                    <div>pl - Prawo jazdy</div>
+                    <div>ru - Водительское удостоверение</div>
+                    <div>ro - Permis de conducere</div>
+                    <div>rs - Возачка дозвола</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2">
+                <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                <div className="flex items-center">
+                  <Input
+                    value={drivingLicenseDate.month}
+                    onChange={(e) => handleLicenseDateChange("drivingLicense", "month", e.target.value)}
+                    placeholder="MM"
+                    maxLength={2}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className={`w-16 h-10 mr-1 ${
+                      drivingLicenseExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.drivingLicense
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  <span>/</span>
+                  <Input
+                    ref={drivingLicenseYearRef}
+                    value={drivingLicenseDate.year}
+                    onChange={(e) => handleLicenseDateChange("drivingLicense", "year", e.target.value)}
+                    placeholder="YYYY"
+                    maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className={`w-20 h-10 ml-1 ${
+                      drivingLicenseExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.drivingLicense
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  {drivingLicenseExpired && <span className="ml-2 text-red-500">Expired</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ADR Certificate Document Box */}
+          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+            <Image
+              src="/images/adr-certificate.jpg"
+              alt="ADR Certificate"
+              fill
+              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+            />
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+              <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Label className="font-medium">ADR Certificate</Label>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    <div>de - ADR-Bescheinigung</div>
+                    <div>nl - ADR-certificaat</div>
+                    <div>pl - Świadectwo ADR</div>
+                    <div>ru - Свидетельство ADR</div>
+                    <div>ro - Certificat ADR</div>
+                    <div>rs - АДР сертификат</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2">
+                <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                <div className="flex items-center">
+                  <Input
+                    value={adrCertificateDate.month}
+                    onChange={(e) => handleLicenseDateChange("adrCertificate", "month", e.target.value)}
+                    placeholder="MM"
+                    maxLength={2}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className={`w-16 h-10 mr-1 ${
+                      adrCertificateExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.adrCertificate
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  <span>/</span>
+                  <Input
+                    ref={adrCertificateYearRef}
+                    value={adrCertificateDate.year}
+                    onChange={(e) => handleLicenseDateChange("adrCertificate", "year", e.target.value)}
+                    placeholder="YYYY"
+                    maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className={`w-20 h-10 ml-1 ${
+                      adrCertificateExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.adrCertificate
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  {adrCertificateExpired && <span className="ml-2 text-red-500">Expired</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Combined Vehicle Documents Box */}
+          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+            <Image
+              src="/images/truck-document.jpg"
+              alt="Vehicle Documents"
+              fill
+              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+            />
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[160px]">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Label className="font-medium">Vehicle Documents</Label>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    <div>de - Fahrzeugschein</div>
+                    <div>nl - Kentekenbewijs</div>
+                    <div>pl - Dowód rejestracyjny</div>
+                    <div>ru - Свидетельство о регистрации</div>
+                    <div>ro - Certificat de înmatriculare</div>
+                    <div>rs - Саобраћајна дозвола</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Truck Document Expiry */}
+              <div className="mt-2">
+                <Label className="text-sm font-medium">Truck Document Expiry (MM/YYYY):</Label>
+                <div className="flex items-center">
+                  <Input
+                    value={truckDocDate.month}
+                    onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
+                    placeholder="MM"
+                    maxLength={2}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className={`w-16 h-10 mr-1 ${
+                      truckDocExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.truckDoc
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  <span>/</span>
+                  <Input
+                    ref={truckDocYearRef}
+                    value={truckDocDate.year}
+                    onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
+                    placeholder="YYYY"
+                    maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className={`w-20 h-10 ml-1 ${
+                      truckDocExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.truckDoc
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  {truckDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+                </div>
+              </div>
+
+              {/* Trailer Document Expiry */}
+              <div className="mt-3">
+                <Label className="text-sm font-medium">Trailer Document Expiry (MM/YYYY):</Label>
+                <div className="flex items-center">
+                  <Input
+                    value={trailerDocDate.month}
+                    onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
+                    placeholder="MM"
+                    maxLength={2}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className={`w-16 h-10 mr-1 ${
+                      trailerDocExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.trailerDoc
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  <span>/</span>
+                  <Input
+                    ref={trailerDocYearRef}
+                    value={trailerDocDate.year}
+                    onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
+                    placeholder="YYYY"
+                    maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className={`w-20 h-10 ml-1 ${
+                      trailerDocExpired
+                        ? "border-red-500 border-2"
+                        : dateValid.trailerDoc
+                          ? "border-green-500 border-2"
+                          : ""
+                    }`}
+                  />
+                  {trailerDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Inspection Date */}
+      </div>
+
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold mb-4">Select the equipment the driver has:</h2>
+        {equipmentItems.map((item, index) => (
+          <div key={index} className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+            {/* Faded background image */}
+            {item.image && (
+              <Image
+                src={item.image || "/placeholder.svg"}
+                alt={item.name}
+                fill
+                className={`absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none ${
+                  item.name === "Safety glasses" || item.name === "Flashlight" || item.name === "Drain seal"
+                    ? "scale-50"
+                    : ""
+                }`}
+              />
+            )}
+
+            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+              <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Label htmlFor={`equipment-${index}`} className="font-medium">
+                      {item.name}
+                    </Label>
+                  </div>
+                  {/* Add red text for items from Flashlight to Collection bucket */}
+                  {(item.name === "Flashlight" ||
+                    item.name === "Rubber gloves" ||
+                    item.name === "Safety glasses" ||
+                    item.name === "Mask + filter (Date for ADR class 6.1/2.3)" ||
+                    item.name === "Collection bucket") && (
+                    <div className="text-sm font-medium mt-1" style={{ color: "#FF0000" }}>
+                      One piece for each driver!
+                    </div>
+                  )}
+                  <div className="text-sm text-gray-600 mt-1">
+                    {item.translations.map((translation, i) => (
+                      <div key={i}>{translation}</div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-center mx-4 gap-2 h-full">
+                  {item.additionalImage && (
+                    <div className="equipment-image-container ml-2">
+                      <Image
+                        src={item.additionalImage || "/placeholder.svg"}
+                        alt={`${item.name} additional`}
+                        width={50}
+                        height={50}
+                        style={{
+                          width: "auto",
+                          height: "auto",
+                          maxWidth: "100%",
+                          maxHeight: "100%",
+                        }}
+                      />
+                    </div>
+                  )}
+                  <Checkbox
+                    id={`equipment-${index}`}
+                    checked={checkedItems[item.name] || false}
+                    onCheckedChange={(checked) => handleEquipmentCheck(item.name, checked === true)}
+                    className="h-10 w-10 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+                  />
+                </div>
+              </div>
+
+              {item.hasDate && (
+                <div className="mt-2">
+                  <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                  <div className="flex items-center">
+                    <Input
+                      ref={dateInputRefs.current[item.name]?.month}
+                      value={expiryDates[item.name]?.month || ""}
+                      onChange={(e) => handleExpiryDateChange(item.name, "month", e.target.value)}
+                      placeholder="MM"
+                      className="w-16 h-10 mr-1"
+                      maxLength={2}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                    />
+                    <span>/</span>
+                    <Input
+                      ref={dateInputRefs.current[item.name]?.year}
+                      value={expiryDates[item.name]?.year || ""}
+                      onChange={(e) => handleExpiryDateChange(item.name, "year", e.target.value)}
+                      placeholder="YYYY"
+                      className="w-20 h-10 ml-1"
+                      maxLength={4}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                    />
+                    {expiredItems[item.name] && <span className="ml-2 text-red-500">Expired</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold mb-4">Before Loading:</h2>
+        <div className="space-y-2">
+          {beforeLoadingItems.map((item, index) => (
+            <div key={index} className="flex items-center">
+              <Checkbox
+                id={`before-loading-${index}`}
+                checked={beforeLoadingChecked[item] || false}
+                onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked === true)}
+                className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+              />
+              <Label htmlFor={`before-loading-${index}`}>{item}</Label>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold mb-4">After Loading:</h2>
+        <div className="space-y-2">
+          {afterLoadingItems.map((item, index) => (
+            <div key={index} className="flex items-center">
+              <Checkbox
+                id={`after-loading-${index}`}
+                checked={afterLoadingChecked[item] || false}
+                onCheckedChange={(checked) => handleAfterLoadingCheck(item, checked === true)}
+                className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+              />
+              <Label htmlFor={`after-loading-${index}`}>{item}</Label>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {showResult && (
+        <div className="mb-6 p-4 border rounded">
+          {allChecked ? (
+            <p className="text-green-600 font-medium">All items are checked.</p>
+          ) : (
+            <div>
+              <h3 className="font-bold mb-2">Missing Items:</h3>
+              <ul className="list-disc pl-5">
+                {missingItems.map((item, index) => (
+                  <li key={index}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold mb-4">Inspector:</h2>
+        <Select value={selectedInspector} onValueChange={setSelectedInspector}>
+          <SelectTrigger className="bg-black text-white border-gray-700">
+            <SelectValue placeholder="Select inspector" className="text-white" />
+          </SelectTrigger>
+          <SelectContent className="bg-black text-white border-gray-700">
+            {inspectors.map((name) => (
+              <SelectItem key={name} value={name} className="hover:bg-gray-700">
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* Container to hold both signature boxes side by side */}
+        <div className="flex gap-6 mt-6">
+          <div className="flex-1">
+            <Label className="block mb-2">Driver Signature:</Label>
+            <div className="border rounded-md p-2">
+              <canvas
+                ref={canvasRef}
+                className="w-full border border-gray-300 rounded"
+                style={{ height: "150px", touchAction: "none" }}
+              />
+              <Button variant="outline" className="mt-2" onClick={clearSignature}>
+                Clear Signature
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex-1">
+            <Label className="block mb-2">Inspector Signature:</Label>
+            <div className="border rounded-md p-2">
+              <canvas
+                ref={inspectorCanvasRef}
+                className="w-full border border-gray-300 rounded"
+                style={{ height: "150px", touchAction: "none" }}
+              />
+              <Button variant="outline" className="mt-2" onClick={clearInspectorSignature}>
+                Clear Signature
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col space-y-4 mb-6">
+        <Button onClick={checkMissingItems} className="w-full">
+          Check Missing Items
+        </Button>
+        <Button
+          onClick={() => setShowFtpModal(true)}
+          disabled={isPdfGenerating}
+          style={{ backgroundColor: "#0099d0" }}
+          className="w-full hover:brightness-90"
+        >
+          Load the PDF to COGLAS
+        </Button>
+        <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
+          {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
+        </Button>
+        <Button
+          onClick={handleSendEmail}
+          disabled={isSendingEmail || isPdfGenerating || !selectedInspector}
+          className="w-full bg-purple-600 hover:bg-purple-700"
+        >
+          {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+        </Button>
+
+        {emailStatus && (
+          <div
+            className={`mt-2 p-2 rounded ${
+              emailStatus.includes("Failed") ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
+            }`}
+          >
+            {emailStatus}
+          </div>
+        )}
+      </div>
+
+      {/* FTP Upload Modal */}
+      {showFtpModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-96 max-w-md mx-4">
+            <h2 className="text-xl font-bold mb-4">Upload to Coglas</h2>
+
+            <div className="mb-4">
+              <Label htmlFor="orderNumber">Order Number:</Label>
+              <Input
+                id="orderNumber"
+                value={orderNumber}
+                onChange={(e) => setOrderNumber(e.target.value)}
+                placeholder="Enter order number"
+                className="w-full mt-1"
+                disabled={isUploading}
+              />
+            </div>
+
+            {uploadStatus && (
+              <div
+                className={`mb-4 p-3 rounded ${
+                  uploadStatus.includes("Error")
+                    ? "bg-red-100 text-red-700 border border-red-300"
+                    : uploadStatus.includes("successfully")
+                      ? "bg-green-100 text-green-700 border border-green-300"
+                      : "bg-yellow-100 text-yellow-700 border border-yellow-300"
+                }`}
+              >
+                {uploadStatus}
+              </div>
+            )}
+
+            <div className="flex gap-3 justify-end">
+              <Button variant="outline" onClick={closeFtpModal} disabled={isUploading}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleFtpUpload}
+                disabled={isUploading || !orderNumber.trim()}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                {isUploading ? "Uploading..." : "Upload PDF"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
