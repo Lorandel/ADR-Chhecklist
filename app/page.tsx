@@ -2,13 +2,6 @@
 
 import type React from "react"
 import { useState, useEffect, useRef, useCallback, createRef } from "react"
-// First, make sure all imports are present at the top of the file
-import { Checkbox } from "@/components/ui/checkbox"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import Image from "next/image"
 
 const capitalizeWords = (str: string) =>
   str
@@ -299,11 +292,10 @@ export default function ADRChecklist() {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Set canvas style with blue pen-like stroke
-    ctx.lineWidth = 2.5
+    // Set canvas style
+    ctx.lineWidth = 2
     ctx.lineCap = "round"
-    ctx.lineJoin = "round"
-    ctx.strokeStyle = "#0047AB" // Blue pen color
+    ctx.strokeStyle = "#000"
     ctx.fillStyle = "#fff"
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
@@ -403,11 +395,10 @@ export default function ADRChecklist() {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Set canvas style with blue pen-like stroke
-    ctx.lineWidth = 2.5
+    // Set canvas style
+    ctx.lineWidth = 2
     ctx.lineCap = "round"
-    ctx.lineJoin = "round"
-    ctx.strokeStyle = "#0047AB" // Blue pen color
+    ctx.strokeStyle = "#000"
     ctx.fillStyle = "#fff"
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
@@ -931,8 +922,7 @@ export default function ADRChecklist() {
         pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
         addSafeText("Driver Signature", margin, y + 25)
       } else {
-        pdf.setDrawColor(0, 71, 171) // Blue color (RGB)
-        pdf.setLineWidth(0.8)
+        pdf.setLineWidth(0.5)
         pdf.line(margin, y + 20, margin + 70, y + 20)
         addSafeText("Driver Signature (Not Signed)", margin, y + 25)
       }
@@ -941,8 +931,7 @@ export default function ADRChecklist() {
       if (inspectorSignatureData) {
         pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
       } else {
-        pdf.setDrawColor(0, 71, 171) // Blue color (RGB)
-        pdf.setLineWidth(0.8)
+        pdf.setLineWidth(0.5)
         pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
       }
 
@@ -1451,8 +1440,7 @@ export default function ADRChecklist() {
         pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
         addSafeText("Driver Signature", margin, y + 25)
       } else {
-        pdf.setDrawColor(0, 71, 171) // Blue color (RGB)
-        pdf.setLineWidth(0.8)
+        pdf.setLineWidth(0.5)
         pdf.line(margin, y + 20, margin + 70, y + 20)
         addSafeText("Driver Signature (Not Signed)", margin, y + 25)
       }
@@ -1461,8 +1449,7 @@ export default function ADRChecklist() {
       if (inspectorSignatureData) {
         pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
       } else {
-        pdf.setDrawColor(0, 71, 171) // Blue color (RGB)
-        pdf.setLineWidth(0.8)
+        pdf.setLineWidth(0.5)
         pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
       }
 
@@ -1518,320 +1505,4 @@ export default function ADRChecklist() {
       setIsSendingEmail(false)
     }
   }
-
-  return (
-    <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
-      <div className="text-center mb-6">
-        <h1 id="adr-title" className="text-2xl font-bold">
-          ADR Checklist
-        </h1>
-        <p className="text-gray-600">Ensure all safety measures are in place.</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        {/* Driver and Vehicle Information */}
-        <div>
-          <Label htmlFor="driverName">Driver's Name</Label>
-          <Input
-            type="text"
-            id="driverName"
-            placeholder="Enter driver's name"
-            value={driverName}
-            onChange={(e) => setDriverName(capitalizeWords(e.target.value))}
-          />
-        </div>
-        <div>
-          <Label htmlFor="truckPlate">Truck License Plate</Label>
-          <Input
-            type="text"
-            id="truckPlate"
-            placeholder="Enter truck license plate"
-            value={truckPlate}
-            onChange={(e) => setTruckPlate(e.target.value)}
-          />
-        </div>
-        <div>
-          <Label htmlFor="trailerPlate">Trailer License Plate</Label>
-          <Input
-            type="text"
-            id="trailerPlate"
-            placeholder="Enter trailer license plate"
-            value={trailerPlate}
-            onChange={(e) => setTrailerPlate(e.target.value)}
-          />
-        </div>
-
-        {/* Driving License Expiry Date */}
-        <div>
-          <Label>Driving License Expiry Date</Label>
-          <div className="flex gap-2">
-            <Input
-              type="text"
-              placeholder="MM"
-              maxLength={2}
-              value={drivingLicenseDate.month}
-              onChange={(e) => handleLicenseDateChange("drivingLicense", "month", e.target.value)}
-              className="w-1/2"
-            />
-            <Input
-              type="text"
-              placeholder="YYYY"
-              maxLength={4}
-              value={drivingLicenseDate.year}
-              onChange={(e) => handleLicenseDateChange("drivingLicense", "year", e.target.value)}
-              className="w-1/2"
-              ref={drivingLicenseYearRef}
-              onBlur={() => validateLicenseDate("drivingLicense")}
-            />
-          </div>
-          {drivingLicenseExpired && <p className="text-red-500 text-sm mt-1">Driving license is expired!</p>}
-          {!dateValid.drivingLicense &&
-            drivingLicenseDate.month.length === 2 &&
-            drivingLicenseDate.year.length === 4 && (
-              <p className="text-red-500 text-sm mt-1">Invalid driving license date!</p>
-            )}
-        </div>
-
-        {/* ADR Certificate Expiry Date */}
-        <div>
-          <Label>ADR Certificate Expiry Date</Label>
-          <div className="flex gap-2">
-            <Input
-              type="text"
-              placeholder="MM"
-              maxLength={2}
-              value={adrCertificateDate.month}
-              onChange={(e) => handleLicenseDateChange("adrCertificate", "month", e.target.value)}
-              className="w-1/2"
-            />
-            <Input
-              type="text"
-              placeholder="YYYY"
-              maxLength={4}
-              value={adrCertificateDate.year}
-              onChange={(e) => handleLicenseDateChange("adrCertificate", "year", e.target.value)}
-              className="w-1/2"
-              ref={adrCertificateYearRef}
-              onBlur={() => validateLicenseDate("adrCertificate")}
-            />
-          </div>
-          {adrCertificateExpired && <p className="text-red-500 text-sm mt-1">ADR certificate is expired!</p>}
-          {!dateValid.adrCertificate &&
-            adrCertificateDate.month.length === 2 &&
-            adrCertificateDate.year.length === 4 && (
-              <p className="text-red-500 text-sm mt-1">Invalid ADR certificate date!</p>
-            )}
-        </div>
-
-        {/* Truck Document Expiry Date */}
-        <div>
-          <Label>Truck Document Expiry Date</Label>
-          <div className="flex gap-2">
-            <Input
-              type="text"
-              placeholder="MM"
-              maxLength={2}
-              value={truckDocDate.month}
-              onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
-              className="w-1/2"
-            />
-            <Input
-              type="text"
-              placeholder="YYYY"
-              maxLength={4}
-              value={truckDocDate.year}
-              onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
-              className="w-1/2"
-              ref={truckDocYearRef}
-              onBlur={() => validateTruckDocDate()}
-            />
-          </div>
-          {truckDocExpired && <p className="text-red-500 text-sm mt-1">Truck document is expired!</p>}
-          {!dateValid.truckDoc && truckDocDate.month.length === 2 && truckDocDate.year.length === 4 && (
-            <p className="text-red-500 text-sm mt-1">Invalid truck document date!</p>
-          )}
-        </div>
-
-        {/* Trailer Document Expiry Date */}
-        <div>
-          <Label>Trailer Document Expiry Date</Label>
-          <div className="flex gap-2">
-            <Input
-              type="text"
-              placeholder="MM"
-              maxLength={2}
-              value={trailerDocDate.month}
-              onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
-              className="w-1/2"
-            />
-            <Input
-              type="text"
-              placeholder="YYYY"
-              maxLength={4}
-              value={trailerDocDate.year}
-              onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
-              className="w-1/2"
-              ref={trailerDocYearRef}
-              onBlur={() => validateTrailerDocDate()}
-            />
-          </div>
-          {trailerDocExpired && <p className="text-red-500 text-sm mt-1">Trailer document is expired!</p>}
-          {!dateValid.trailerDoc && trailerDocDate.month.length === 2 && trailerDocDate.year.length === 4 && (
-            <p className="text-red-500 text-sm mt-1">Invalid trailer document date!</p>
-          )}
-        </div>
-      </div>
-
-      {/* Equipment Checklist */}
-      <h2 className="text-xl font-semibold mb-4">Equipment Checklist</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        {equipmentItems.map((item) => (
-          <div key={item.name} className="flex items-center space-x-2">
-            <div className="relative w-12 h-12">
-              <Image src={item.image || "/placeholder.svg"} alt={item.name} fill className="object-contain" />
-            </div>
-            <Label htmlFor={item.name} className="flex-grow">
-              {item.name}
-              {item.hasDate && (
-                <div className="flex gap-2 mt-1">
-                  <Input
-                    type="text"
-                    placeholder="MM"
-                    maxLength={2}
-                    value={expiryDates[item.name]?.month || ""}
-                    onChange={(e) => handleExpiryDateChange(item.name, "month", e.target.value)}
-                    className="w-1/2"
-                  />
-                  <Input
-                    type="text"
-                    placeholder="YYYY"
-                    maxLength={4}
-                    value={expiryDates[item.name]?.year || ""}
-                    onChange={(e) => handleExpiryDateChange(item.name, "year", e.target.value)}
-                    className="w-1/2"
-                    ref={dateInputRefs.current[item.name]?.year}
-                  />
-                </div>
-              )}
-            </Label>
-            <Checkbox
-              id={item.name}
-              checked={checkedItems[item.name] || false}
-              onCheckedChange={(checked) => handleEquipmentCheck(item.name, checked)}
-              disabled={!!expiredItems[item.name]}
-            />
-          </div>
-        ))}
-      </div>
-
-      {/* Before Loading Checklist */}
-      <h2 className="text-xl font-semibold mb-4">Before Loading Checklist</h2>
-      <div className="mb-6">
-        {beforeLoadingItems.map((item) => (
-          <div key={item} className="flex items-center space-x-2">
-            <Label htmlFor={item} className="flex-grow">
-              {item}
-            </Label>
-            <Checkbox
-              id={item}
-              checked={beforeLoadingChecked[item] || false}
-              onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked)}
-            />
-          </div>
-        ))}
-      </div>
-
-      {/* After Loading Checklist */}
-      <h2 className="text-xl font-semibold mb-4">After Loading Checklist</h2>
-      <div className="mb-6">
-        {afterLoadingItems.map((item) => (
-          <div key={item} className="flex items-center space-x-2">
-            <Label htmlFor={item} className="flex-grow">
-              {item}
-            </Label>
-            <Checkbox
-              id={item}
-              checked={afterLoadingChecked[item] || false}
-              onCheckedChange={(checked) => handleAfterLoadingCheck(item, checked)}
-            />
-          </div>
-        ))}
-      </div>
-
-      {/* Signature Section */}
-      <h2 className="text-xl font-semibold mb-4">Signatures</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <div>
-          <Label>Driver Signature</Label>
-          <canvas ref={canvasRef} className="border border-gray-300 rounded-md w-full h-32" />
-          <Button type="button" variant="outline" onClick={clearSignature} className="mt-2">
-            Clear Signature
-          </Button>
-        </div>
-        <div>
-          <Label>Inspector Signature</Label>
-          <canvas ref={inspectorCanvasRef} className="border border-gray-300 rounded-md w-full h-32" />
-          <Button type="button" variant="outline" onClick={clearInspectorSignature} className="mt-2">
-            Clear Signature
-          </Button>
-          <Select value={selectedInspector} onValueChange={setSelectedInspector}>
-            <SelectTrigger className="w-full mt-2">
-              <SelectValue placeholder="Select Inspector" />
-            </SelectTrigger>
-            <SelectContent>
-              {inspectors.map((inspector) => (
-                <SelectItem key={inspector} value={inspector}>
-                  {inspector}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {/* Action Buttons */}
-      <div className="flex justify-between">
-        <Button variant="destructive" onClick={resetForm}>
-          Reset Form
-        </Button>
-        <div>
-          <Button className="mr-2" onClick={checkMissingItems}>
-            Check Missing Items
-          </Button>
-          <Button disabled={isPdfGenerating} onClick={generatePDF}>
-            {isPdfGenerating ? "Generating PDF..." : "Generate PDF"}
-          </Button>
-          <Button disabled={isSendingEmail} onClick={handleSendEmail}>
-            {isSendingEmail ? "Sending Email..." : "Send Email"}
-          </Button>
-        </div>
-      </div>
-
-      {emailStatus && <div className="mt-4 p-3 rounded-md">{emailStatus}</div>}
-
-      {/* Result Modal */}
-      {showResult && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-          <div className="bg-white p-6 rounded-md">
-            <h2 className="text-xl font-semibold mb-4">Inspection Result</h2>
-            {allChecked ? (
-              <p className="text-green-500">All items are checked. The inspection is successful!</p>
-            ) : (
-              <div>
-                <p className="text-red-500 mb-2">The following items are missing:</p>
-                <ul>
-                  {missingItems.map((item, index) => (
-                    <li key={index} className="list-disc ml-6">
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            <Button onClick={() => setShowResult(false)}>Close</Button>
-          </div>
-        </div>
-      )}
-    </div>
-  )
 }
