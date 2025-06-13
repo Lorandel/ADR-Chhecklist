@@ -195,7 +195,7 @@ export default function ADRChecklist() {
       image: "/images/safety-glasses.png",
     },
     {
-      name: "Mask + filter (Date for ADR class 6.1/2.3)",
+      name: "Mask + filter (ADR class 6.1/2.3)",
       translations: [
         "de - Maske + Filter",
         "nl - Masker + filter",
