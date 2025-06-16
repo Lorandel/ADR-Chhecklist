@@ -904,7 +904,7 @@ export default function ADRChecklist() {
             item.name === "Flashlight" ||
             item.name === "Rubber gloves" ||
             item.name === "Safety glasses" ||
-            item.name === "Mask + filter (Date for ADR class 6.1/2.3)" ||
+            item.name === "Mask + filter (ADR class 6.1/2.3)" ||
             item.name === "Collection bucket"
           ) {
             pdf.setTextColor("#FF0000")
@@ -1940,7 +1940,7 @@ export default function ADRChecklist() {
                   {(item.name === "Flashlight" ||
                     item.name === "Rubber gloves" ||
                     item.name === "Safety glasses" ||
-                    item.name === "Mask + filter (Date for ADR class 6.1/2.3)" ||
+                    item.name === "Mask + filter (ADR class 6.1/2.3)" ||
                     item.name === "Collection bucket") && (
                     <div className="text-sm font-medium mt-1" style={{ color: "#FF0000" }}>
                       One piece for each driver!
