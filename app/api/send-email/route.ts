@@ -7,7 +7,7 @@ const inspectorEmails: Record<string, string[]> = {
   "Lucian Sistac": ["lucian.sistac@alblas.nl"],
   "Robert Kerekes": ["robert.kerekes@alblas.nl"],
   "Alexandru Dogariu": ["alexandru.dogariu@alblas.nl"],
-  "Martian Gherasim": ["martian.gherasim@alblas.nl"],
+  "Martian Gherasim": ["martian-george.gherasim@alblas.nl"],
   "Alexandru Florea": [
     "eduard.tudose@alblas.nl",
     "angela.ilis@alblas.nl",
