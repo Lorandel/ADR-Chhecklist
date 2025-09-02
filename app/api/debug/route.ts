@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 
 export async function GET(req: NextRequest) {
   try {
-    console.log("=== Debug Endpoint Called ===")
+    console.log("=== Enhanced Debug Endpoint Called ===")
 
     // Check all environment variables
     const envCheck = {
@@ -56,35 +56,124 @@ export async function GET(req: NextRequest) {
             client_email: process.env.GOOGLE_CLIENT_EMAIL,
             private_key: privateKey,
           },
-          scopes: ["https://www.googleapis.com/auth/drive"],
+          scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file"],
         })
 
         const drive = google.drive({ version: "v3", auth })
 
-        // Test authentication
-        const aboutResponse = await drive.about.get({ fields: "user" })
-        console.log("Google Drive auth successful:", aboutResponse.data.user?.emailAddress)
+        // Test 1: Authentication
+        console.log("Step 1: Testing authentication...")
+        const aboutResponse = await drive.about.get({ fields: "user,storageQuota" })
+        console.log("✓ Authenticated as:", aboutResponse.data.user?.emailAddress)
+        console.log("Storage quota:", aboutResponse.data.storageQuota)
 
-        // Test folder access
+        // Test 2: Folder access
+        console.log("Step 2: Testing folder access...")
         const folderResponse = await drive.files.get({
           fileId: process.env.GOOGLE_DRIVE_FOLDER_ID,
-          fields: "id,name,permissions",
+          fields: "id,name,parents,permissions,owners,capabilities",
         })
-        console.log("Folder access successful:", folderResponse.data.name)
+        console.log("✓ Folder found:", folderResponse.data.name)
+        console.log("Folder owners:", folderResponse.data.owners)
+        console.log("Folder capabilities:", folderResponse.data.capabilities)
 
-        googleDriveTest = {
-          success: true,
-          authenticatedAs: aboutResponse.data.user?.emailAddress,
-          folderName: folderResponse.data.name,
-          folderId: folderResponse.data.id,
+        // Test 3: List files in folder
+        console.log("Step 3: Listing files in folder...")
+        const filesResponse = await drive.files.list({
+          q: `'${process.env.GOOGLE_DRIVE_FOLDER_ID}' in parents`,
+          fields: "files(id,name,createdTime,size)",
+          pageSize: 10,
+        })
+        console.log("Files in folder:", filesResponse.data.files?.length || 0)
+        if (filesResponse.data.files && filesResponse.data.files.length > 0) {
+          console.log("Recent files:", filesResponse.data.files.slice(0, 3))
+        }
+
+        // Test 4: Check permissions on the folder
+        console.log("Step 4: Checking folder permissions...")
+        try {
+          const permissionsResponse = await drive.permissions.list({
+            fileId: process.env.GOOGLE_DRIVE_FOLDER_ID,
+            fields: "permissions(id,type,role,emailAddress)",
+          })
+          console.log("Folder permissions:", permissionsResponse.data.permissions)
+        } catch (permError) {
+          console.log("Could not check permissions:", permError.message)
+        }
+
+        // Test 5: Try to create a small test file
+        console.log("Step 5: Testing file creation...")
+        const testFileName = `test_${Date.now()}.txt`
+        const testContent = "This is a test file created by the ADR Checklist system"
+
+        try {
+          const createResponse = await drive.files.create({
+            requestBody: {
+              name: testFileName,
+              parents: [process.env.GOOGLE_DRIVE_FOLDER_ID],
+            },
+            media: {
+              mimeType: "text/plain",
+              body: testContent,
+            },
+            fields: "id,name,webViewLink,size",
+          })
+
+          console.log("✓ Test file created:", createResponse.data.name)
+          console.log("Test file ID:", createResponse.data.id)
+          console.log("Test file size:", createResponse.data.size)
+
+          // Test 6: Delete the test file
+          if (createResponse.data.id) {
+            await drive.files.delete({ fileId: createResponse.data.id })
+            console.log("✓ Test file deleted successfully")
+          }
+
+          googleDriveTest = {
+            success: true,
+            authenticatedAs: aboutResponse.data.user?.emailAddress,
+            folderName: folderResponse.data.name,
+            folderID: folderResponse.data.id,
+            filesInFolder: filesResponse.data.files?.length || 0,
+            testFileCreated: createResponse.data.name,
+            testFileLink: createResponse.data.webViewLink,
+            storageQuota: aboutResponse.data.storageQuota,
+            folderOwners: folderResponse.data.owners,
+            folderCapabilities: folderResponse.data.capabilities,
+          }
+        } catch (createError: any) {
+          console.error("❌ File creation failed:", createError.message)
+          console.error("Error details:", {
+            code: createError.code,
+            status: createError.status,
+            errors: createError.errors,
+          })
+
+          googleDriveTest = {
+            success: false,
+            error: `File creation failed: ${createError.message}`,
+            code: createError.code,
+            status: createError.status,
+            errors: createError.errors,
+            authenticatedAs: aboutResponse.data.user?.emailAddress,
+            folderName: folderResponse.data.name,
+            folderID: folderResponse.data.id,
+            filesInFolder: filesResponse.data.files?.length || 0,
+            storageQuota: aboutResponse.data.storageQuota,
+            folderOwners: folderResponse.data.owners,
+            folderCapabilities: folderResponse.data.capabilities,
+          }
         }
       } catch (error: any) {
-        console.error("Google Drive test failed:", error.message)
+        console.error("❌ Google Drive test failed:", error.message)
+        console.error("Full error:", error)
+
         googleDriveTest = {
           success: false,
           error: error.message,
           code: error.code,
           status: error.status,
+          errors: error.errors,
           privateKeyInfo: {
             length: process.env.GOOGLE_PRIVATE_KEY?.length,
             startsWithBegin: process.env.GOOGLE_PRIVATE_KEY?.includes("-----BEGIN PRIVATE KEY-----"),
