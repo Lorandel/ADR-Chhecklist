@@ -117,11 +117,30 @@ const uploadToDrive = async (
     console.log("File name:", fileName)
     console.log("File size:", fileBuffer.length, "bytes")
     console.log("MIME type:", mimeType)
-    console.log("Target folder:", folderId)
+    console.log("Target folder/drive:", folderId)
 
     const drive = await setupGoogleDrive()
     if (!drive) {
       return { success: false, error: "Failed to setup Google Drive connection" }
+    }
+
+    // First, let's check if this is a shared drive by trying to get its info
+    console.log("Checking if target is a shared drive...")
+    let isSharedDrive = false
+    try {
+      const driveInfo = await drive.drives.get({ driveId: folderId })
+      console.log("✓ Target is a Shared Drive:", driveInfo.data.name)
+      isSharedDrive = true
+    } catch (driveError) {
+      console.log("Target is not a shared drive, treating as regular folder")
+      // Try to get folder info instead
+      try {
+        const folderInfo = await drive.files.get({ fileId: folderId, fields: "id,name,parents" })
+        console.log("✓ Target is a regular folder:", folderInfo.data.name)
+      } catch (folderError) {
+        console.error("❌ Cannot access target folder/drive:", folderError.message)
+        return { success: false, error: `Cannot access target: ${folderError.message}` }
+      }
     }
 
     const fileMetadata = {
@@ -129,17 +148,23 @@ const uploadToDrive = async (
       parents: [folderId],
     }
 
-    const media = {
-      mimeType,
-      body: Readable.from(fileBuffer),
+    // If it's a shared drive, we need to add the driveId parameter
+    const uploadOptions: any = {
+      requestBody: fileMetadata,
+      media: {
+        mimeType,
+        body: Readable.from(fileBuffer),
+      },
+      fields: "id,name,webViewLink,parents",
+    }
+
+    if (isSharedDrive) {
+      uploadOptions.supportsAllDrives = true
+      console.log("✓ Using shared drive upload parameters")
     }
 
     console.log("Uploading file...")
-    const response = await drive.files.create({
-      requestBody: fileMetadata,
-      media: media,
-      fields: "id,name,webViewLink,parents",
-    })
+    const response = await drive.files.create(uploadOptions)
 
     console.log("✓ Upload successful!")
     console.log("File ID:", response.data.id)
@@ -157,6 +182,7 @@ const uploadToDrive = async (
       code: error.code,
       status: error.status,
       message: error.message,
+      errors: error.errors,
     })
     return {
       success: false,
@@ -237,10 +263,19 @@ export async function POST(req: NextRequest) {
       const googleDriveFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID
 
       if (googleDriveFolderId) {
-        console.log("Attempting Google Drive upload...")
+        console.log("=== Starting Google Drive Upload Process ===")
+        console.log("Target folder/drive ID:", googleDriveFolderId)
+        console.log("PDF buffer size:", pdfBuffer.length, "bytes")
+
         driveResult = await uploadToDrive(pdfBuffer, fileName, "application/pdf", googleDriveFolderId)
+
+        console.log("=== Google Drive Upload Result ===")
+        console.log("Success:", driveResult.success)
+        console.log("Link:", driveResult.link)
+        console.log("Error:", driveResult.error)
       } else {
-        console.log("Google Drive folder ID not configured, skipping upload")
+        console.log("❌ Google Drive folder ID not configured, skipping upload")
+        driveResult.error = "Google Drive folder ID not configured"
       }
 
       // Dynamic import for nodemailer
