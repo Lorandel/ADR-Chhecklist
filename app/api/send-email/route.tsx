@@ -86,11 +86,32 @@ const setupGoogleDrive = async () => {
 
     // Test folder access
     console.log("Testing folder access...")
-    const folderResponse = await drive.files.get({
-      fileId: process.env.GOOGLE_DRIVE_FOLDER_ID,
-      fields: "id,name,parents",
-    })
-    console.log("✓ Folder accessible:", folderResponse.data.name)
+    let isSharedDrive = false
+    try {
+      // First try as shared drive
+      const driveInfo = await drive.drives.get({ driveId: process.env.GOOGLE_DRIVE_FOLDER_ID })
+      console.log("✓ Target is a Shared Drive:", driveInfo.data.name)
+      isSharedDrive = true
+    } catch (driveError) {
+      console.log("Not a shared drive, trying as regular folder...")
+      try {
+        // Try as regular folder
+        const folderResponse = await drive.files.get({
+          fileId: process.env.GOOGLE_DRIVE_FOLDER_ID,
+          fields: "id,name,parents,capabilities",
+          supportsAllDrives: true, // This helps with both types
+        })
+        console.log("✓ Folder accessible:", folderResponse.data.name)
+
+        // Check if we can write to this folder
+        if (folderResponse.data.capabilities && !folderResponse.data.capabilities.canAddChildren) {
+          throw new Error("Service account does not have write permission to this folder")
+        }
+      } catch (folderError) {
+        console.error("❌ Cannot access folder:", folderError.message)
+        throw new Error(`Cannot access folder: ${folderError.message}`)
+      }
+    }
 
     return drive
   } catch (error: any) {
@@ -124,31 +145,11 @@ const uploadToDrive = async (
       return { success: false, error: "Failed to setup Google Drive connection" }
     }
 
-    // First, let's check if this is a shared drive by trying to get its info
-    console.log("Checking if target is a shared drive...")
-    let isSharedDrive = false
-    try {
-      const driveInfo = await drive.drives.get({ driveId: folderId })
-      console.log("✓ Target is a Shared Drive:", driveInfo.data.name)
-      isSharedDrive = true
-    } catch (driveError) {
-      console.log("Target is not a shared drive, treating as regular folder")
-      // Try to get folder info instead
-      try {
-        const folderInfo = await drive.files.get({ fileId: folderId, fields: "id,name,parents" })
-        console.log("✓ Target is a regular folder:", folderInfo.data.name)
-      } catch (folderError) {
-        console.error("❌ Cannot access target folder/drive:", folderError.message)
-        return { success: false, error: `Cannot access target: ${folderError.message}` }
-      }
-    }
-
     const fileMetadata = {
       name: fileName,
       parents: [folderId],
     }
 
-    // If it's a shared drive, we need to add the driveId parameter
     const uploadOptions: any = {
       requestBody: fileMetadata,
       media: {
@@ -156,14 +157,15 @@ const uploadToDrive = async (
         body: Readable.from(fileBuffer),
       },
       fields: "id,name,webViewLink,parents",
+      supportsAllDrives: true, // This works for both shared drives and regular folders
     }
 
-    if (isSharedDrive) {
-      uploadOptions.supportsAllDrives = true
-      console.log("✓ Using shared drive upload parameters")
-    }
+    console.log("Uploading file with options:", {
+      fileName: fileMetadata.name,
+      parents: fileMetadata.parents,
+      supportsAllDrives: true,
+    })
 
-    console.log("Uploading file...")
     const response = await drive.files.create(uploadOptions)
 
     console.log("✓ Upload successful!")
