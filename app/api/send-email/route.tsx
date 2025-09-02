@@ -14,7 +14,7 @@ const inspectorEmails: Record<string, string[]> = {
     "lucian.sistac@alblas.nl",
     "robert.kerekes@alblas.nl",
     "alexandru.dogariu@alblas.nl",
-    "martian.gherasim@alblas.nl",
+    "martian-george.gherasim@alblas.nl",
   ],
 }
 
