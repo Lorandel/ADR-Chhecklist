@@ -43,10 +43,6 @@ export default function ADRChecklist() {
   const [trailerDocDate, setTrailerDocDate] = useState({ month: "", year: "" })
   const [truckDocExpired, setTruckDocExpired] = useState(false)
   const [trailerDocExpired, setTrailerDocExpired] = useState(false)
-  const [showFtpModal, setShowFtpModal] = useState(false)
-  const [orderNumber, setOrderNumber] = useState("")
-  const [isUploading, setIsUploading] = useState(false)
-  const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
 
@@ -1568,44 +1564,6 @@ export default function ADRChecklist() {
     }
   }
 
-  const closeFtpModal = () => {
-    setShowFtpModal(false)
-    setOrderNumber("")
-    setUploadStatus(null)
-  }
-
-  const handleFtpUpload = async () => {
-    setIsUploading(true)
-    setUploadStatus("Uploading PDF...")
-
-    try {
-      const response = await fetch("/api/upload-ftp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderNumber: orderNumber.trim(),
-          driverName,
-          truckPlate,
-          trailerPlate,
-          inspectionDate: checkDate,
-        }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to upload PDF")
-      }
-
-      setUploadStatus(data.message || "PDF uploaded successfully!")
-    } catch (error: any) {
-      console.error("FTP Upload Error:", error)
-      setUploadStatus(`Error uploading PDF: ${error.message}`)
-    } finally {
-      setIsUploading(false)
-    }
-  }
-
   return (
     <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
       <div className="text-center mb-6">
@@ -2089,7 +2047,7 @@ export default function ADRChecklist() {
                 className="w-full border border-gray-300 rounded"
                 style={{ height: "150px", touchAction: "none" }}
               />
-              <Button variant="outline" className="mt-2" onClick={clearSignature}>
+              <Button variant="outline" className="mt-2 bg-transparent" onClick={clearSignature}>
                 Clear Signature
               </Button>
             </div>
@@ -2103,7 +2061,7 @@ export default function ADRChecklist() {
                 className="w-full border border-gray-300 rounded"
                 style={{ height: "150px", touchAction: "none" }}
               />
-              <Button variant="outline" className="mt-2" onClick={clearInspectorSignature}>
+              <Button variant="outline" className="mt-2 bg-transparent" onClick={clearInspectorSignature}>
                 Clear Signature
               </Button>
             </div>
@@ -2115,21 +2073,14 @@ export default function ADRChecklist() {
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button
-          onClick={() => setShowFtpModal(true)}
-          disabled={isPdfGenerating}
-          style={{ backgroundColor: "#0099d0" }}
-          className="w-full hover:brightness-90"
-        >
-          Load the PDF to COGLAS
-        </Button>
         <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
           {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
         </Button>
         <Button
           onClick={handleSendEmail}
           disabled={isSendingEmail || isPdfGenerating || !selectedInspector}
-          className="w-full bg-purple-600 hover:bg-purple-700"
+          style={{ backgroundColor: "#0099d0" }}
+          className="w-full hover:brightness-90"
         >
           {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
         </Button>
@@ -2144,54 +2095,6 @@ export default function ADRChecklist() {
           </div>
         )}
       </div>
-
-      {/* FTP Upload Modal */}
-      {showFtpModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-96 max-w-md mx-4">
-            <h2 className="text-xl font-bold mb-4">Upload to Coglas</h2>
-
-            <div className="mb-4">
-              <Label htmlFor="orderNumber">Order Number:</Label>
-              <Input
-                id="orderNumber"
-                value={orderNumber}
-                onChange={(e) => setOrderNumber(e.target.value)}
-                placeholder="Enter order number"
-                className="w-full mt-1"
-                disabled={isUploading}
-              />
-            </div>
-
-            {uploadStatus && (
-              <div
-                className={`mb-4 p-3 rounded ${
-                  uploadStatus.includes("Error")
-                    ? "bg-red-100 text-red-700 border border-red-300"
-                    : uploadStatus.includes("successfully")
-                      ? "bg-green-100 text-green-700 border border-green-300"
-                      : "bg-yellow-100 text-yellow-700 border border-yellow-300"
-                }`}
-              >
-                {uploadStatus}
-              </div>
-            )}
-
-            <div className="flex gap-3 justify-end">
-              <Button variant="outline" onClick={closeFtpModal} disabled={isUploading}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleFtpUpload}
-                disabled={isUploading || !orderNumber.trim()}
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                {isUploading ? "Uploading..." : "Upload PDF"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

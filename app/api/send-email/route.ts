@@ -86,32 +86,11 @@ const setupGoogleDrive = async () => {
 
     // Test folder access
     console.log("Testing folder access...")
-    let isSharedDrive = false
-    try {
-      // First try as shared drive
-      const driveInfo = await drive.drives.get({ driveId: process.env.GOOGLE_DRIVE_FOLDER_ID })
-      console.log("✓ Target is a Shared Drive:", driveInfo.data.name)
-      isSharedDrive = true
-    } catch (driveError) {
-      console.log("Not a shared drive, trying as regular folder...")
-      try {
-        // Try as regular folder
-        const folderResponse = await drive.files.get({
-          fileId: process.env.GOOGLE_DRIVE_FOLDER_ID,
-          fields: "id,name,parents,capabilities",
-          supportsAllDrives: true, // This helps with both types
-        })
-        console.log("✓ Folder accessible:", folderResponse.data.name)
-
-        // Check if we can write to this folder
-        if (folderResponse.data.capabilities && !folderResponse.data.capabilities.canAddChildren) {
-          throw new Error("Service account does not have write permission to this folder")
-        }
-      } catch (folderError) {
-        console.error("❌ Cannot access folder:", folderError.message)
-        throw new Error(`Cannot access folder: ${folderError.message}`)
-      }
-    }
+    const folderResponse = await drive.files.get({
+      fileId: process.env.GOOGLE_DRIVE_FOLDER_ID,
+      fields: "id,name,parents",
+    })
+    console.log("✓ Folder accessible:", folderResponse.data.name)
 
     return drive
   } catch (error: any) {
@@ -138,7 +117,7 @@ const uploadToDrive = async (
     console.log("File name:", fileName)
     console.log("File size:", fileBuffer.length, "bytes")
     console.log("MIME type:", mimeType)
-    console.log("Target folder/drive:", folderId)
+    console.log("Target folder:", folderId)
 
     const drive = await setupGoogleDrive()
     if (!drive) {
@@ -150,23 +129,17 @@ const uploadToDrive = async (
       parents: [folderId],
     }
 
-    const uploadOptions: any = {
-      requestBody: fileMetadata,
-      media: {
-        mimeType,
-        body: Readable.from(fileBuffer),
-      },
-      fields: "id,name,webViewLink,parents",
-      supportsAllDrives: true, // This works for both shared drives and regular folders
+    const media = {
+      mimeType,
+      body: Readable.from(fileBuffer),
     }
 
-    console.log("Uploading file with options:", {
-      fileName: fileMetadata.name,
-      parents: fileMetadata.parents,
-      supportsAllDrives: true,
+    console.log("Uploading file...")
+    const response = await drive.files.create({
+      requestBody: fileMetadata,
+      media: media,
+      fields: "id,name,webViewLink,parents",
     })
-
-    const response = await drive.files.create(uploadOptions)
 
     console.log("✓ Upload successful!")
     console.log("File ID:", response.data.id)
@@ -184,7 +157,6 @@ const uploadToDrive = async (
       code: error.code,
       status: error.status,
       message: error.message,
-      errors: error.errors,
     })
     return {
       success: false,
@@ -265,19 +237,10 @@ export async function POST(req: NextRequest) {
       const googleDriveFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID
 
       if (googleDriveFolderId) {
-        console.log("=== Starting Google Drive Upload Process ===")
-        console.log("Target folder/drive ID:", googleDriveFolderId)
-        console.log("PDF buffer size:", pdfBuffer.length, "bytes")
-
+        console.log("Attempting Google Drive upload...")
         driveResult = await uploadToDrive(pdfBuffer, fileName, "application/pdf", googleDriveFolderId)
-
-        console.log("=== Google Drive Upload Result ===")
-        console.log("Success:", driveResult.success)
-        console.log("Link:", driveResult.link)
-        console.log("Error:", driveResult.error)
       } else {
-        console.log("❌ Google Drive folder ID not configured, skipping upload")
-        driveResult.error = "Google Drive folder ID not configured"
+        console.log("Google Drive folder ID not configured, skipping upload")
       }
 
       // Dynamic import for nodemailer
