@@ -147,8 +147,7 @@ export async function POST(req: NextRequest) {
       console.error("❌ Vercel Blob upload failed:", blobResult.error)
     }
 
-    // Dynamic import for nodemailer
-   // Dynamic import for nodemailer (interop safe)
+    // Dynamic import for nodemailer (interop safe)
 const nodemailerMod: any = await import("nodemailer")
 const nodemailer = nodemailerMod?.default ?? nodemailerMod
 
