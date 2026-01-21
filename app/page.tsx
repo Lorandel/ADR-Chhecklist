@@ -45,7 +45,7 @@ export default function HomePage() {
             onClick={() => {
               const n = points
               if (!Number.isFinite(n)) return
-              setVariant(n > 1000 ? "full" : "under1000")
+              setVariant(n >= 1000 ? "full" : "under1000")
             }}
           >
             Continuă
