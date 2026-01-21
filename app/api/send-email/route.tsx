@@ -148,17 +148,19 @@ export async function POST(req: NextRequest) {
     }
 
     // Dynamic import for nodemailer
-    const nodemailer = await import("nodemailer")
+   // Dynamic import for nodemailer (interop safe)
+const nodemailerMod: any = await import("nodemailer")
+const nodemailer = nodemailerMod?.default ?? nodemailerMod
 
-    // Create transporter
-    console.log("Creating email transporter...")
-    const transporter = nodemailer.createTransporter({
-      service: "gmail",
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
-      },
-    })
+console.log("Creating email transporter...")
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+})
+
 
     // Verify transporter configuration
     console.log("Verifying email configuration...")
