@@ -1,6 +1,6 @@
 "use client"
 
-import type { RefObject } from "react"
+import type { RefObject, ChangeEvent } from "react"
 import { useState, useEffect, useRef, useCallback, createRef, useMemo } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
@@ -16,6 +16,19 @@ const capitalizeWords = (str: string) =>
     .join(" ")
 
 export type ChecklistVariant = "full" | "under1000"
+
+type PhotoUploadStatus = "queued" | "uploading" | "done" | "error"
+
+type UploadedPhoto = {
+  id: string
+  name: string
+  previewUrl: string
+  status: PhotoUploadStatus
+  progress: number // 0-100
+  url?: string // public blob url when uploaded
+  contentType?: string
+  error?: string
+}
 
 type ADRChecklistProps = {
   variant: ChecklistVariant
@@ -55,110 +68,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [trailerDocExpired, setTrailerDocExpired] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
+
+  // Remarks + photo uploads
   const [remarks, setRemarks] = useState("")
-
-  type PhotoItem = {
-    id: string
-    name: string
-    mime: string
-    dataUrl?: string
-    base64?: string
-    progress: number
-    status: "processing" | "ready" | "error"
-    error?: string
-  }
-
-  const [photos, setPhotos] = useState<PhotoItem[]>([])
-
-  const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-    let binary = ""
-    const bytes = new Uint8Array(buffer)
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
-    return btoa(binary)
-  }
-
-  const compressToJpegBase64 = async (file: File, onProgress: (p: number) => void) => {
-    const dataUrl: string = await new Promise((resolve, reject) => {
-      const r = new FileReader()
-      r.onprogress = (e) => {
-        if ((e as any).lengthComputable)
-          onProgress(Math.min(40, Math.round(((e as any).loaded / (e as any).total) * 40)))
-      }
-      r.onerror = () => reject(new Error("Failed to read image"))
-      r.onload = () => resolve(String(r.result))
-      r.readAsDataURL(file)
-    })
-
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const i = new window.Image()
-      i.onload = () => resolve(i)
-      i.onerror = () => reject(new Error("Failed to decode image"))
-      i.src = dataUrl
-    })
-
-    onProgress(60)
-
-    const maxW = 1200
-    const scale = img.width > maxW ? maxW / img.width : 1
-    const w = Math.round(img.width * scale)
-    const h = Math.round(img.height * scale)
-
-    const canvas = document.createElement("canvas")
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext("2d")
-    if (!ctx) throw new Error("Canvas not supported")
-
-    ctx.drawImage(img, 0, 0, w, h)
-    onProgress(80)
-
-    const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.78)
-    onProgress(100)
-
-    const base64 = jpegDataUrl.includes(",") ? jpegDataUrl.split(",")[1] : jpegDataUrl
-    return { previewUrl: jpegDataUrl, base64, mime: "image/jpeg" as const }
-  }
-
-  const handlePhotoSelect = async (files: FileList | null) => {
-    if (!files || files.length === 0) return
-    const list = Array.from(files).slice(0, 10)
-
-    const placeholders: PhotoItem[] = list.map((f) => ({
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      name: f.name.replace(/\s+/g, "_"),
-      mime: "image/jpeg",
-      dataUrl: undefined,
-      base64: undefined,
-      progress: 0,
-      status: "processing",
-    }))
-
-    setPhotos((prev) => [...prev, ...placeholders])
-
-    for (let i = 0; i < list.length; i++) {
-      const file = list[i]
-      const id = placeholders[i].id
-
-      try {
-        const { previewUrl, base64, mime } = await compressToJpegBase64(file, (p) => {
-          setPhotos((prev) => prev.map((x) => (x.id === id ? { ...x, progress: p } : x)))
-        })
-
-        setPhotos((prev) =>
-          prev.map((x) =>
-            x.id === id ? { ...x, dataUrl: previewUrl, base64, mime, progress: 100, status: "ready" } : x,
-          ),
-        )
-      } catch (e: any) {
-        setPhotos((prev) =>
-          prev.map((x) => (x.id === id ? { ...x, status: "error", error: e?.message ?? "Error" } : x)),
-        )
-      }
-    }
-  }
-
-  const removePhoto = (id: string) => setPhotos((prev) => prev.filter((p) => p.id !== id))
-
+  const [photos, setPhotos] = useState<UploadedPhoto[]>([])
+  const photoInputRef = useRef<HTMLInputElement>(null)
+  const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -859,6 +774,113 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     return isExpired
   }
 
+  const uploadPhoto = useCallback(
+    (file: File, photoId: string) => {
+      return new Promise<{ url: string; contentType: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        uploadXhrRefs.current[photoId] = xhr
+
+        xhr.open("POST", "/api/upload-photo")
+        xhr.responseType = "json"
+
+        xhr.upload.onprogress = (evt) => {
+          if (!evt.lengthComputable) return
+          const progress = Math.round((evt.loaded / evt.total) * 100)
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
+        }
+
+        xhr.onload = () => {
+          const res = xhr.response
+          if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
+            setPhotos((prev) =>
+              prev.map((p) =>
+                p.id === photoId
+                  ? { ...p, progress: 100, status: "done", url: res.url, contentType: res.contentType || file.type }
+                  : p,
+              ),
+            )
+            resolve({ url: res.url, contentType: res.contentType || file.type })
+            return
+          }
+          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          reject(new Error(message))
+        }
+
+        xhr.onerror = () => {
+          const message = "Upload failed (network error)"
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          reject(new Error(message))
+        }
+
+        const formData = new FormData()
+        formData.append("file", file)
+        xhr.send(formData)
+
+        // Mark as uploading immediately
+        setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0 } : p)))
+      })
+    },
+    [setPhotos],
+  )
+
+  const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+
+    const newPhotos: UploadedPhoto[] = files.map((file) => {
+      const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      return {
+        id,
+        name: file.name || `photo_${Date.now()}.jpg`,
+        previewUrl: URL.createObjectURL(file),
+        status: "queued",
+        progress: 0,
+        contentType: file.type,
+      }
+    })
+
+    setPhotos((prev) => [...prev, ...newPhotos])
+
+    // Start uploads
+    await Promise.all(
+      newPhotos.map(async (p, idx) => {
+        const file = files[idx]
+        try {
+          await uploadPhoto(file, p.id)
+        } catch {
+          // State already updated in uploadPhoto
+        }
+      }),
+    )
+
+    // Allow selecting the same file again
+    e.target.value = ""
+  }
+
+  const removePhoto = (photoId: string) => {
+    const xhr = uploadXhrRefs.current[photoId]
+    if (xhr && xhr.readyState !== XMLHttpRequest.DONE) {
+      try {
+        xhr.abort()
+      } catch {
+        // ignore
+      }
+    }
+
+    setPhotos((prev) => {
+      const toRemove = prev.find((p) => p.id === photoId)
+      if (toRemove?.previewUrl) {
+        try {
+          URL.revokeObjectURL(toRemove.previewUrl)
+        } catch {
+          // ignore
+        }
+      }
+      return prev.filter((p) => p.id !== photoId)
+    })
+  }
+
   // Generate PDF report
   const generatePDF = async () => {
     if (!isMounted || typeof window === "undefined") return
@@ -953,7 +975,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         { label: "Driver's Name:", value: driverName, color: "#191970" },
         { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
         { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
-        { label: "Remarks:", value: remarks || "-", color: "#191970" },
       ]
 
       if (drivingLicenseDate.month && drivingLicenseDate.year) {
@@ -998,6 +1019,20 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         addLine(label, value, margin, y, color)
         y += 6
       })
+
+      // Remarks
+      const trimmedRemarks = remarks.trim()
+      if (trimmedRemarks) {
+        y += 2
+        addSafeText("Remarks:", margin, y)
+        y += 6
+        pdf.setFont("helvetica", "normal")
+        pdf.setTextColor("#000000")
+        const wrapped = pdf.splitTextToSize(trimmedRemarks, pageWidth - margin * 2)
+        pdf.text(wrapped, margin, y)
+        y += wrapped.length * 5 + 4
+        pdf.setFont("helvetica", "bold")
+      }
 
       y += 4
       addSafeText("Equipment Checklist", margin, y)
@@ -1174,8 +1209,21 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     // Reset inspector
     setSelectedInspector("")
+
+    // Reset remarks + photos
     setRemarks("")
-    setPhotos([])
+    setPhotos((prev) => {
+      prev.forEach((p) => {
+        if (p.previewUrl) {
+          try {
+            URL.revokeObjectURL(p.previewUrl)
+          } catch {
+            // ignore
+          }
+        }
+      })
+      return []
+    })
 
     // Reset other states
     setShowResult(false)
@@ -1356,6 +1404,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     afterLoadingChecked,
     expiryDates,
     selectedInspector,
+    remarks,
   ])
 
   // Add this right after the return statement
@@ -1512,7 +1561,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         { label: "Driver's Name:", value: driverName, color: "#191970" },
         { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
         { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
-        { label: "Remarks:", value: remarks || "-", color: "#191970" },
       ]
 
       if (drivingLicenseDate.month && drivingLicenseDate.year) {
@@ -1557,6 +1605,20 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         addLine(label, value, margin, y, color)
         y += 6
       })
+
+      // Remarks
+      const trimmedRemarks = remarks.trim()
+      if (trimmedRemarks) {
+        y += 2
+        addSafeText("Remarks:", margin, y)
+        y += 6
+        pdf.setFont("helvetica", "normal")
+        pdf.setTextColor("#000000")
+        const wrapped = pdf.splitTextToSize(trimmedRemarks, pageWidth - margin * 2)
+        pdf.text(wrapped, margin, y)
+        y += wrapped.length * 5 + 4
+        pdf.setFont("helvetica", "bold")
+      }
 
       y += 4
       addSafeText("Equipment Checklist", margin, y)
@@ -1654,63 +1716,53 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       console.log("PDF content generated successfully")
       setEmailStatus("PDF generated, preparing to send email...")
 
-      // Get PDF as base64
+      // Convert PDF to base64
+      let pdfBase64 = ""
       try {
         const pdfBuffer = pdf.output("arraybuffer")
-        const pdfBase64 = arrayBufferToBase64(pdfBuffer)
-        console.log("PDF converted to base64 successfully, length:", pdfBase64.length)
+        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
+        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
+      } catch (convError: any) {
+        console.error("Error processing PDF:", convError)
+        throw new Error(`PDF processing error: ${convError.message}`)
+      }
 
-        // Check if base64 string is valid
-        if (!pdfBase64 || pdfBase64.length === 0) {
-          throw new Error("Generated PDF is empty")
-        }
+      setEmailStatus("Sending email...")
 
-        setEmailStatus("Sending email...")
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
-        // Send email
-        const response = await fetch("/api/send-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            inspectorName: selectedInspector,
-            pdfBase64: pdfBase64,
-            driverName,
-            truckPlate,
-            trailerPlate,
-            inspectionDate: checkDate,
-            remarks,
-            photos: photos
-              .filter((p) => p.status === "ready" && p.base64)
-              .map((p, i) => ({
-                filename: `photo_${String(i + 1).padStart(2, "0")}.jpg`,
-                mime: p.mime,
-                base64: p.base64,
-              })),
-          }),
-        })
+      // Send email
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inspectorName: selectedInspector,
+          pdfBase64,
+          driverName,
+          truckPlate,
+          trailerPlate,
+          inspectionDate: checkDate,
+          remarks,
+          photos: uploadedPhotos,
+        }),
+      })
 
-        console.log("API response status:", response.status)
-        const data = await response.json()
-        console.log("API response data:", data)
+      const data = await response.json().catch(() => ({}))
+      console.log("API response status:", response.status)
+      console.log("API response data:", data)
 
-        if (!response.ok) {
-          throw new Error(data.message || `Server responded with status ${response.status}`)
-        }
+      if (!response.ok) {
+        throw new Error(data.message || `Server responded with status ${response.status}`)
+      }
 
-        if (data.success) {
-          let successMessage = "Email sent successfully!"
-          if (data.driveLink) {
-            successMessage += " PDF was also saved to Google Drive."
-          }
-          setEmailStatus(successMessage)
-          // Reset form after successful email
-          resetForm()
-        } else {
-          setEmailStatus(data.message || "Email sent successfully!")
-        }
-      } catch (pdfError) {
-        console.error("Error processing PDF:", pdfError)
-        throw new Error(`PDF processing error: ${pdfError.message}`)
+      if (data.success) {
+        setEmailStatus("Email sent successfully!")
+        resetForm()
+      } else {
+        setEmailStatus(data.message || "Email sent successfully!")
       }
     } catch (err) {
       console.error("Email sending error:", err)
@@ -2223,80 +2275,86 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           </SelectContent>
         </Select>
 
-        <div className="mt-4 space-y-3">
-          <div>
-            <Label className="text-sm font-medium">Remarks:</Label>
-            <Input
-              value={remarks}
-              onChange={(e) => setRemarks(e.target.value)}
-              placeholder="Type remarks here..."
-              className="mt-1"
-            />
-          </div>
+        {/* Remarks + Photos (below inspector select, above signatures) */}
+        <div className="mt-4">
+          <Label htmlFor="remarks" className="block mb-2">
+            Remarks:
+          </Label>
+          <textarea
+            id="remarks"
+            value={remarks}
+            onChange={(e) => setRemarks(e.target.value)}
+            placeholder="Add any remarks here..."
+            className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
+          />
 
-          <div className="flex items-start gap-4">
-            <div>
-              <Button
-                type="button"
-                variant="outline"
-                className="bg-transparent"
-                onClick={() => (document.getElementById("photoUploadInput") as HTMLInputElement | null)?.click()}
-              >
-                Upload Photos
-              </Button>
+          <div className="mt-4 flex flex-col gap-3">
+            <div className="flex items-start gap-4">
+              <div className="shrink-0">
+                <Button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  className="bg-black text-white hover:brightness-95"
+                >
+                  Upload photos
+                </Button>
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  className="hidden"
+                  onChange={handlePhotoInputChange}
+                />
+                <p className="mt-1 text-xs text-gray-600">Camera will open on mobile.</p>
+              </div>
 
-              <input
-                id="photoUploadInput"
-                type="file"
-                accept="image/*"
-                capture="environment"
-                multiple
-                className="hidden"
-                onChange={(e) => handlePhotoSelect(e.target.files)}
-              />
-
-              <p className="text-xs text-gray-500 mt-1">Camera or gallery. Max 10 photos.</p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {photos.map((p) => (
-                <div key={p.id} className="relative w-16 h-16 rounded-md overflow-hidden border bg-white">
-                  {p.dataUrl ? (
-                    <img
-                      src={p.dataUrl}
-                      alt={p.name}
-                      className={`w-full h-full object-cover transition ${
-                        p.status === "processing" ? "opacity-60" : "opacity-100"
-                      }`}
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-[10px] text-gray-500">
-                      {p.status === "error" ? "Error" : "Loading..."}
-                    </div>
-                  )}
-
-                  {p.status === "processing" && (
-                    <div className="absolute inset-x-0 bottom-0 h-1 bg-gray-200">
-                      <div className="h-1 bg-black" style={{ width: `${p.progress}%` }} />
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => removePhoto(p.id)}
-                    className="absolute top-0 right-0 m-1 rounded bg-black/70 text-white text-[10px] px-1"
-                    aria-label="Remove photo"
+              {/* Thumbnails */}
+              <div className="flex flex-wrap gap-2">
+                {photos.map((p) => (
+                  <div
+                    key={p.id}
+                    className="group relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 bg-gray-50"
+                    title={p.name}
                   >
-                    ×
-                  </button>
-                </div>
-              ))}
+                    <img
+                      src={p.previewUrl}
+                      alt={p.name}
+                      className={`h-full w-full object-cover transition-opacity ${p.status === "uploading" || p.status === "queued" ? "opacity-60" : "opacity-100"}`}
+                    />
+
+                    {/* Progress bar overlay */}
+                    {(p.status === "uploading" || p.status === "queued") && (
+                      <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
+                        <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
+                      </div>
+                    )}
+
+                    {/* Remove button */}
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(p.id)}
+                      aria-label="Remove photo"
+                      className="absolute right-1 top-1 rounded bg-black/70 px-1 text-xs text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
+                    >
+                      ×
+                    </button>
+
+                    {/* Error badge */}
+                    {p.status === "error" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-red-600/70 text-[10px] font-semibold text-white">
+                        Error
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
 
         {/* Container to hold both signature boxes side by side */}
-
         <div className="flex gap-6 mt-6">
           <div className="flex-1">
             <Label className="block mb-2">Driver Signature:</Label>
@@ -2337,11 +2395,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         </Button>
         <Button
           onClick={handleSendEmail}
-          disabled={isSendingEmail || isPdfGenerating || !selectedInspector}
+          disabled={
+            isSendingEmail ||
+            isPdfGenerating ||
+            !selectedInspector ||
+            photos.some((p) => p.status === "uploading" || p.status === "queued")
+          }
           style={{ backgroundColor: "#0099d0" }}
           className="w-full hover:brightness-90"
         >
-          {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+          {isSendingEmail ? "Sending Email..." : "Send ZIP via Email"}
         </Button>
 
         {emailStatus && (
