@@ -2149,5 +2149,4 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       </div>
     </div>
   )
-
 }
