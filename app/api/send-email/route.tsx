@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-export const runtime = "nodejs"
+
 const inspectorEmails: Record<string, string[]> = {
   "Eduard Tudose": ["eduard.tudose@alblas.nl"],
   "Angela Ilis": ["angela.ilis@alblas.nl"],
