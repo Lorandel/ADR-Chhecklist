@@ -22,11 +22,7 @@ export default function HomePage() {
             className="rounded-xl border bg-white p-6 shadow-sm hover:shadow-md transition text-left focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
             onClick={() => setVariant("under1000")}
           >
-            <div className="text-xl font-semibold mb-2">Sub 1000 puncte ADR</div>
-            <div className="text-sm text-gray-600">
-              Checklist redus (fără: ADR Certificate, drain seal, rubber gloves, collection bucket, mask+filter, safety
-              glasses, shovel, eye wash, ADR plate front+back, ADR plate open).
-            </div>
+            <div className="text-xl font-semibold mb-2">Reduced Checklist (<1000)</div>
           </button>
 
           {/* Full */}
@@ -35,8 +31,8 @@ export default function HomePage() {
             className="rounded-xl border bg-white p-6 shadow-sm hover:shadow-md transition text-left focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
             onClick={() => setVariant("full")}
           >
-            <div className="text-xl font-semibold mb-2">1000 puncte ADR sau peste</div>
-            <div className="text-sm text-gray-600">Checklist complet (varianta standard).</div>
+            <div className="text-xl font-semibold mb-2">Full Checklist (≥1000)</div>
+      
           </button>
         </div>
 
