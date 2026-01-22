@@ -9,7 +9,6 @@ export default function HomePage() {
   if (variant) {
     return <ADRChecklist variant={variant} onBack={() => setVariant(null)} />
   }
-
   return (
     <div className="min-h-[100vh] flex items-center justify-center p-6 bg-gray-50">
       <div className="w-full max-w-3xl">
