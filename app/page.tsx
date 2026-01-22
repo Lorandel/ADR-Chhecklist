@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import ADRChecklist, { type ChecklistVariant } from "./components/AdrChecklist"
+import ADRChecklist, { type ChecklistVariant } from "@/components/AdrChecklist"
 
 export default function HomePage() {
   const [variant, setVariant] = useState<ChecklistVariant | null>(null)
