@@ -31,7 +31,7 @@ export default function HomePage() {
             className="rounded-xl border bg-white p-6 shadow-sm hover:shadow-md transition text-left focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
             onClick={() => setVariant("full")}
           >
-            <div className="text-xl font-semibold mb-2">Full Checklist (≥1000)</div>
+            <div className="text-xl font-semibold mb-2">Full Checklist (>=1000)</div>
       
           </button>
         </div>
