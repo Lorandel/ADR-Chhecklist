@@ -55,18 +55,116 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [trailerDocExpired, setTrailerDocExpired] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
+  const [remarks, setRemarks] = useState("")
+
+  type PhotoItem = {
+    id: string
+    name: string
+    mime: string
+    dataUrl?: string
+    base64?: string
+    progress: number
+    status: "processing" | "ready" | "error"
+    error?: string
+  }
+
+  const [photos, setPhotos] = useState<PhotoItem[]>([])
+
+  const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+    let binary = ""
+    const bytes = new Uint8Array(buffer)
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
+    return btoa(binary)
+  }
+
+  const compressToJpegBase64 = async (file: File, onProgress: (p: number) => void) => {
+    const dataUrl: string = await new Promise((resolve, reject) => {
+      const r = new FileReader()
+      r.onprogress = (e) => {
+        if ((e as any).lengthComputable)
+          onProgress(Math.min(40, Math.round(((e as any).loaded / (e as any).total) * 40)))
+      }
+      r.onerror = () => reject(new Error("Failed to read image"))
+      r.onload = () => resolve(String(r.result))
+      r.readAsDataURL(file)
+    })
+
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new window.Image()
+      i.onload = () => resolve(i)
+      i.onerror = () => reject(new Error("Failed to decode image"))
+      i.src = dataUrl
+    })
+
+    onProgress(60)
+
+    const maxW = 1200
+    const scale = img.width > maxW ? maxW / img.width : 1
+    const w = Math.round(img.width * scale)
+    const h = Math.round(img.height * scale)
+
+    const canvas = document.createElement("canvas")
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext("2d")
+    if (!ctx) throw new Error("Canvas not supported")
+
+    ctx.drawImage(img, 0, 0, w, h)
+    onProgress(80)
+
+    const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.78)
+    onProgress(100)
+
+    const base64 = jpegDataUrl.includes(",") ? jpegDataUrl.split(",")[1] : jpegDataUrl
+    return { previewUrl: jpegDataUrl, base64, mime: "image/jpeg" as const }
+  }
+
+  const handlePhotoSelect = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const list = Array.from(files).slice(0, 10)
+
+    const placeholders: PhotoItem[] = list.map((f) => ({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: f.name.replace(/\s+/g, "_"),
+      mime: "image/jpeg",
+      dataUrl: undefined,
+      base64: undefined,
+      progress: 0,
+      status: "processing",
+    }))
+
+    setPhotos((prev) => [...prev, ...placeholders])
+
+    for (let i = 0; i < list.length; i++) {
+      const file = list[i]
+      const id = placeholders[i].id
+
+      try {
+        const { previewUrl, base64, mime } = await compressToJpegBase64(file, (p) => {
+          setPhotos((prev) => prev.map((x) => (x.id === id ? { ...x, progress: p } : x)))
+        })
+
+        setPhotos((prev) =>
+          prev.map((x) =>
+            x.id === id ? { ...x, dataUrl: previewUrl, base64, mime, progress: 100, status: "ready" } : x,
+          ),
+        )
+      } catch (e: any) {
+        setPhotos((prev) =>
+          prev.map((x) => (x.id === id ? { ...x, status: "error", error: e?.message ?? "Error" } : x)),
+        )
+      }
+    }
+  }
+
+  const removePhoto = (id: string) => setPhotos((prev) => prev.filter((p) => p.id !== id))
+
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [signatureData, setSignatureData] = useState<string | null>(null)
   const inspectorCanvasRef = useRef<HTMLCanvasElement>(null)
   const [inspectorSignatureData, setInspectorSignatureData] = useState<string | null>(null)
-
-  // Remarks & photos
-  const [remarks, setRemarks] = useState<string>("")
-  type PhotoAttachment = { name: string; type: string; dataUrl: string }
-  const [photoAttachments, setPhotoAttachments] = useState<PhotoAttachment[]>([])
-  const photosInputRef = useRef<HTMLInputElement>(null)
 
   // State for checklist items
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({})
@@ -535,7 +633,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
   // Clear signatures
   const clearSignature = () => {
-    if (typeof window === "undefined") return
+    if (!isMounted || typeof window === "undefined") return
 
     const canvas = canvasRef.current
     if (!canvas) return
@@ -549,7 +647,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   }
 
   const clearInspectorSignature = () => {
-    if (typeof window === "undefined") return
+    if (!isMounted || typeof window === "undefined") return
 
     const canvas = inspectorCanvasRef.current
     if (!canvas) return
@@ -561,81 +659,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     setInspectorSignatureData(null)
   }
-
-
-
-const handlePhotosSelected = async (files: FileList | null) => {
-  if (!files || files.length === 0) return
-  const fileArr = Array.from(files)
-
-  const fileToCompressedDataUrl = (file: File) =>
-    new Promise<PhotoAttachment>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = async () => {
-        try {
-          const originalDataUrl = String(reader.result || "")
-          const img = new Image()
-          img.onload = () => {
-            try {
-              const maxDim = 1280
-              const w = img.width
-              const h = img.height
-              const scale = Math.min(1, maxDim / Math.max(w, h))
-              const outW = Math.max(1, Math.round(w * scale))
-              const outH = Math.max(1, Math.round(h * scale))
-
-              const canvas = document.createElement("canvas")
-              canvas.width = outW
-              canvas.height = outH
-              const ctx = canvas.getContext("2d")
-              if (!ctx) throw new Error("Canvas context not available")
-
-              // white background (helps if original is transparent)
-              ctx.fillStyle = "#ffffff"
-              ctx.fillRect(0, 0, outW, outH)
-              ctx.drawImage(img, 0, 0, outW, outH)
-
-              const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.75)
-              const baseName = (file.name || `photo_${Date.now()}`).replace(/\.[^/.]+$/, "")
-              resolve({
-                name: `${baseName}.jpg`,
-                type: "image/jpeg",
-                dataUrl: compressedDataUrl,
-              })
-            } catch (e) {
-              reject(e)
-            }
-          }
-          img.onerror = () => reject(new Error("Failed to load image"))
-          img.src = originalDataUrl
-        } catch (e) {
-          reject(e)
-        }
-      }
-      reader.onerror = () => reject(new Error("Failed to read image"))
-      reader.readAsDataURL(file)
-    })
-
-  try {
-    const photos = await Promise.all(fileArr.map(fileToCompressedDataUrl))
-    setPhotoAttachments((prev) => [...prev, ...photos])
-
-    // reset input value so the same photo can be selected again if needed
-    if (photosInputRef.current) photosInputRef.current.value = ""
-  } catch (e) {
-    console.error("Photo processing error:", e)
-  }
-}
-
-const handleUploadPhotosClick = () => {
-  if (typeof window === "undefined") return
-  photosInputRef.current?.click()
-}
-
-const clearUploadedPhotos = () => {
-  setPhotoAttachments([])
-  if (photosInputRef.current) photosInputRef.current.value = ""
-}
 
   // Handle date changes for licenses/certificates
   const handleLicenseDateChange = (
@@ -930,6 +953,7 @@ const clearUploadedPhotos = () => {
         { label: "Driver's Name:", value: driverName, color: "#191970" },
         { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
         { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
+        { label: "Remarks:", value: remarks || "-", color: "#191970" },
       ]
 
       if (drivingLicenseDate.month && drivingLicenseDate.year) {
@@ -969,10 +993,6 @@ const clearUploadedPhotos = () => {
       }
 
       lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
-
-      if (remarks && remarks.trim().length > 0) {
-        lines.push({ label: "Remarks:", value: remarks.trim(), color: "#191970" })
-      }
 
       lines.forEach(({ label, value, color }) => {
         addLine(label, value, margin, y, color)
@@ -1154,11 +1174,8 @@ const clearUploadedPhotos = () => {
 
     // Reset inspector
     setSelectedInspector("")
-
-    // Reset remarks & photos
     setRemarks("")
-    setPhotoAttachments([])
-    if (photosInputRef.current) photosInputRef.current.value = ""
+    setPhotos([])
 
     // Reset other states
     setShowResult(false)
@@ -1276,6 +1293,7 @@ const clearUploadedPhotos = () => {
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
         if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
+        if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
         // Validate dates after loading
         if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
@@ -1320,6 +1338,7 @@ const clearUploadedPhotos = () => {
       afterLoadingChecked,
       expiryDates,
       selectedInspector,
+      remarks,
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
@@ -1493,6 +1512,7 @@ const clearUploadedPhotos = () => {
         { label: "Driver's Name:", value: driverName, color: "#191970" },
         { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
         { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
+        { label: "Remarks:", value: remarks || "-", color: "#191970" },
       ]
 
       if (drivingLicenseDate.month && drivingLicenseDate.year) {
@@ -1532,10 +1552,6 @@ const clearUploadedPhotos = () => {
       }
 
       lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
-
-      if (remarks && remarks.trim().length > 0) {
-        lines.push({ label: "Remarks:", value: remarks.trim(), color: "#191970" })
-      }
 
       lines.forEach(({ label, value, color }) => {
         addLine(label, value, margin, y, color)
@@ -1641,7 +1657,7 @@ const clearUploadedPhotos = () => {
       // Get PDF as base64
       try {
         const pdfBuffer = pdf.output("arraybuffer")
-        const pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+        const pdfBase64 = arrayBufferToBase64(pdfBuffer)
         console.log("PDF converted to base64 successfully, length:", pdfBase64.length)
 
         // Check if base64 string is valid
@@ -1663,7 +1679,13 @@ const clearUploadedPhotos = () => {
             trailerPlate,
             inspectionDate: checkDate,
             remarks,
-            photos: photoAttachments,
+            photos: photos
+              .filter((p) => p.status === "ready" && p.base64)
+              .map((p, i) => ({
+                filename: `photo_${String(i + 1).padStart(2, "0")}.jpg`,
+                mime: p.mime,
+                base64: p.base64,
+              })),
           }),
         })
 
@@ -2201,47 +2223,80 @@ const clearUploadedPhotos = () => {
           </SelectContent>
         </Select>
 
+        <div className="mt-4 space-y-3">
+          <div>
+            <Label className="text-sm font-medium">Remarks:</Label>
+            <Input
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              placeholder="Type remarks here..."
+              className="mt-1"
+            />
+          </div>
 
+          <div className="flex items-start gap-4">
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                className="bg-transparent"
+                onClick={() => (document.getElementById("photoUploadInput") as HTMLInputElement | null)?.click()}
+              >
+                Upload Photos
+              </Button>
 
-<div className="mt-5">
-  <Label htmlFor="remarks" className="block mb-2">
-    Remarks:
-  </Label>
-  <textarea
-    id="remarks"
-    value={remarks}
-    onChange={(e) => setRemarks(e.target.value)}
-    placeholder="Add remarks (optional)"
-    rows={3}
-    className="w-full rounded-md border border-gray-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-black"
-  />
-</div>
+              <input
+                id="photoUploadInput"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                className="hidden"
+                onChange={(e) => handlePhotoSelect(e.target.files)}
+              />
 
-<div className="mt-4 flex flex-wrap items-center gap-3">
-  <Button type="button" variant="outline" onClick={handleUploadPhotosClick}>
-    Upload Photos
-  </Button>
-  {photoAttachments.length > 0 && (
-    <>
-      <span className="text-sm text-gray-600">{photoAttachments.length} photo(s) attached</span>
-      <Button type="button" variant="ghost" onClick={clearUploadedPhotos}>
-        Clear
-      </Button>
-    </>
-  )}
+              <p className="text-xs text-gray-500 mt-1">Camera or gallery. Max 10 photos.</p>
+            </div>
 
-  <input
-    ref={photosInputRef}
-    type="file"
-    accept="image/*"
-    capture="environment"
-    multiple
-    className="hidden"
-    onChange={(e) => handlePhotosSelected(e.target.files)}
-  />
-</div>
+            <div className="flex flex-wrap gap-2">
+              {photos.map((p) => (
+                <div key={p.id} className="relative w-16 h-16 rounded-md overflow-hidden border bg-white">
+                  {p.dataUrl ? (
+                    <img
+                      src={p.dataUrl}
+                      alt={p.name}
+                      className={`w-full h-full object-cover transition ${
+                        p.status === "processing" ? "opacity-60" : "opacity-100"
+                      }`}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-[10px] text-gray-500">
+                      {p.status === "error" ? "Error" : "Loading..."}
+                    </div>
+                  )}
+
+                  {p.status === "processing" && (
+                    <div className="absolute inset-x-0 bottom-0 h-1 bg-gray-200">
+                      <div className="h-1 bg-black" style={{ width: `${p.progress}%` }} />
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => removePhoto(p.id)}
+                    className="absolute top-0 right-0 m-1 rounded bg-black/70 text-white text-[10px] px-1"
+                    aria-label="Remove photo"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
         {/* Container to hold both signature boxes side by side */}
+
         <div className="flex gap-6 mt-6">
           <div className="flex-1">
             <Label className="block mb-2">Driver Signature:</Label>
