@@ -1063,7 +1063,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setExpiryDates(resetDates)
     setExpiredItems(resetExpiredItems)
 
-    // Reset signatures
+    // Reset signatures (important: these must run with the latest canvas refs)
     clearSignature()
     clearInspectorSignature()
 
@@ -1079,7 +1079,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (typeof window !== "undefined") {
       localStorage.removeItem(storageKey)
     }
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems])
+  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, storageKey])
 
   // Initialize component
   useEffect(() => {
@@ -1993,28 +1993,44 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
                 <div className="mt-2">
                   <Label className="text-sm">Expiry (MM/YYYY):</Label>
                   <div className="flex items-center">
-                    <Input
-                      ref={dateInputRefs.current[item.name]?.month}
-                      value={expiryDates[item.name]?.month || ""}
-                      onChange={(e) => handleExpiryDateChange(item.name, "month", e.target.value)}
-                      placeholder="MM"
-                      className="w-16 h-10 mr-1"
-                      maxLength={2}
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                    />
-                    <span>/</span>
-                    <Input
-                      ref={dateInputRefs.current[item.name]?.year}
-                      value={expiryDates[item.name]?.year || ""}
-                      onChange={(e) => handleExpiryDateChange(item.name, "year", e.target.value)}
-                      placeholder="YYYY"
-                      className="w-20 h-10 ml-1"
-                      maxLength={4}
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                    />
-                    {expiredItems[item.name] && <span className="ml-2 text-red-500">Expired</span>}
+                    {(() => {
+                      const m = expiryDates[item.name]?.month || ""
+                      const y = expiryDates[item.name]?.year || ""
+                      const complete = m.length === 2 && y.length === 4
+                      const expired = !!expiredItems[item.name]
+                      const borderClass = expired
+                        ? "border-red-500 border-2"
+                        : complete
+                          ? "border-green-500 border-2"
+                          : ""
+
+                      return (
+                        <>
+                          <Input
+                            ref={dateInputRefs.current[item.name]?.month}
+                            value={m}
+                            onChange={(e) => handleExpiryDateChange(item.name, "month", e.target.value)}
+                            placeholder="MM"
+                            className={`w-16 h-10 mr-1 ${borderClass}`}
+                            maxLength={2}
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                          />
+                          <span>/</span>
+                          <Input
+                            ref={dateInputRefs.current[item.name]?.year}
+                            value={y}
+                            onChange={(e) => handleExpiryDateChange(item.name, "year", e.target.value)}
+                            placeholder="YYYY"
+                            className={`w-20 h-10 ml-1 ${borderClass}`}
+                            maxLength={4}
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                          />
+                          {expired && <span className="ml-2 text-red-500">Expired</span>}
+                        </>
+                      )
+                    })()}
                   </div>
                 </div>
               )}
