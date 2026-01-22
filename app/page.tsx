@@ -4,7 +4,7 @@ import { useMemo, useState } from "react"
 import { Button } from "./components/ui/button"
 import { Input } from "./components/ui/input"
 import { Label } from "./components/ui/label"
-import ADRChecklist, { type ChecklistVariant } from "@/components/AdrChecklist"
+import ADRChecklist, { type ChecklistVariant } from "./components/AdrChecklist"
 
 export default function HomePage() {
   const [pointsInput, setPointsInput] = useState("")
