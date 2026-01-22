@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
+import { compressImageFile } from "@/lib/imageCompress"
 
 const capitalizeWords = (str: string) =>
   str
@@ -845,9 +846,25 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     // Start uploads
     await Promise.all(
       newPhotos.map(async (p, idx) => {
-        const file = files[idx]
+        const originalFile = files[idx]
+
+        // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
+        let fileToUpload: File = originalFile
         try {
-          await uploadPhoto(file, p.id)
+          fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
+        } catch {
+          fileToUpload = originalFile
+        }
+
+        // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
+        if (fileToUpload !== originalFile) {
+          setPhotos((prev) =>
+            prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
+          )
+        }
+
+        try {
+          await uploadPhoto(fileToUpload, p.id)
         } catch {
           // State already updated in uploadPhoto
         }
