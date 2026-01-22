@@ -37,7 +37,7 @@ export default function HomePage() {
         </div>
 
         <p className="text-sm text-gray-600 text-center mt-6">
-          Alege varianta corectă în funcție de punctele ADR planificate pentru încărcare.
+           Choose the correct option based on the ADR points planned for loading.
         </p>
       </div>
     </div>
