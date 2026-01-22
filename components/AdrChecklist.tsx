@@ -62,6 +62,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const inspectorCanvasRef = useRef<HTMLCanvasElement>(null)
   const [inspectorSignatureData, setInspectorSignatureData] = useState<string | null>(null)
 
+  // Remarks & photos
+  const [remarks, setRemarks] = useState<string>("")
+  type PhotoAttachment = { name: string; type: string; dataUrl: string }
+  const [photoAttachments, setPhotoAttachments] = useState<PhotoAttachment[]>([])
+  const photosInputRef = useRef<HTMLInputElement>(null)
+
   // State for checklist items
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({})
   const [beforeLoadingChecked, setBeforeLoadingChecked] = useState<Record<string, boolean>>({})
@@ -529,7 +535,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
   // Clear signatures
   const clearSignature = () => {
-    if (!isMounted || typeof window === "undefined") return
+    if (typeof window === "undefined") return
 
     const canvas = canvasRef.current
     if (!canvas) return
@@ -543,7 +549,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   }
 
   const clearInspectorSignature = () => {
-    if (!isMounted || typeof window === "undefined") return
+    if (typeof window === "undefined") return
 
     const canvas = inspectorCanvasRef.current
     if (!canvas) return
@@ -555,6 +561,81 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     setInspectorSignatureData(null)
   }
+
+
+
+const handlePhotosSelected = async (files: FileList | null) => {
+  if (!files || files.length === 0) return
+  const fileArr = Array.from(files)
+
+  const fileToCompressedDataUrl = (file: File) =>
+    new Promise<PhotoAttachment>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = async () => {
+        try {
+          const originalDataUrl = String(reader.result || "")
+          const img = new Image()
+          img.onload = () => {
+            try {
+              const maxDim = 1280
+              const w = img.width
+              const h = img.height
+              const scale = Math.min(1, maxDim / Math.max(w, h))
+              const outW = Math.max(1, Math.round(w * scale))
+              const outH = Math.max(1, Math.round(h * scale))
+
+              const canvas = document.createElement("canvas")
+              canvas.width = outW
+              canvas.height = outH
+              const ctx = canvas.getContext("2d")
+              if (!ctx) throw new Error("Canvas context not available")
+
+              // white background (helps if original is transparent)
+              ctx.fillStyle = "#ffffff"
+              ctx.fillRect(0, 0, outW, outH)
+              ctx.drawImage(img, 0, 0, outW, outH)
+
+              const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.75)
+              const baseName = (file.name || `photo_${Date.now()}`).replace(/\.[^/.]+$/, "")
+              resolve({
+                name: `${baseName}.jpg`,
+                type: "image/jpeg",
+                dataUrl: compressedDataUrl,
+              })
+            } catch (e) {
+              reject(e)
+            }
+          }
+          img.onerror = () => reject(new Error("Failed to load image"))
+          img.src = originalDataUrl
+        } catch (e) {
+          reject(e)
+        }
+      }
+      reader.onerror = () => reject(new Error("Failed to read image"))
+      reader.readAsDataURL(file)
+    })
+
+  try {
+    const photos = await Promise.all(fileArr.map(fileToCompressedDataUrl))
+    setPhotoAttachments((prev) => [...prev, ...photos])
+
+    // reset input value so the same photo can be selected again if needed
+    if (photosInputRef.current) photosInputRef.current.value = ""
+  } catch (e) {
+    console.error("Photo processing error:", e)
+  }
+}
+
+const handleUploadPhotosClick = () => {
+  if (typeof window === "undefined") return
+  photosInputRef.current?.click()
+}
+
+const clearUploadedPhotos = () => {
+  setPhotoAttachments([])
+  if (photosInputRef.current) photosInputRef.current.value = ""
+}
 
   // Handle date changes for licenses/certificates
   const handleLicenseDateChange = (
@@ -889,6 +970,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
 
+      if (remarks && remarks.trim().length > 0) {
+        lines.push({ label: "Remarks:", value: remarks.trim(), color: "#191970" })
+      }
+
       lines.forEach(({ label, value, color }) => {
         addLine(label, value, margin, y, color)
         y += 6
@@ -1069,6 +1154,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     // Reset inspector
     setSelectedInspector("")
+
+    // Reset remarks & photos
+    setRemarks("")
+    setPhotoAttachments([])
+    if (photosInputRef.current) photosInputRef.current.value = ""
 
     // Reset other states
     setShowResult(false)
@@ -1443,6 +1533,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
 
+      if (remarks && remarks.trim().length > 0) {
+        lines.push({ label: "Remarks:", value: remarks.trim(), color: "#191970" })
+      }
+
       lines.forEach(({ label, value, color }) => {
         addLine(label, value, margin, y, color)
         y += 6
@@ -1568,6 +1662,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             truckPlate,
             trailerPlate,
             inspectionDate: checkDate,
+            remarks,
+            photos: photoAttachments,
           }),
         })
 
@@ -2104,6 +2200,46 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             ))}
           </SelectContent>
         </Select>
+
+
+
+<div className="mt-5">
+  <Label htmlFor="remarks" className="block mb-2">
+    Remarks:
+  </Label>
+  <textarea
+    id="remarks"
+    value={remarks}
+    onChange={(e) => setRemarks(e.target.value)}
+    placeholder="Add remarks (optional)"
+    rows={3}
+    className="w-full rounded-md border border-gray-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+  />
+</div>
+
+<div className="mt-4 flex flex-wrap items-center gap-3">
+  <Button type="button" variant="outline" onClick={handleUploadPhotosClick}>
+    Upload Photos
+  </Button>
+  {photoAttachments.length > 0 && (
+    <>
+      <span className="text-sm text-gray-600">{photoAttachments.length} photo(s) attached</span>
+      <Button type="button" variant="ghost" onClick={clearUploadedPhotos}>
+        Clear
+      </Button>
+    </>
+  )}
+
+  <input
+    ref={photosInputRef}
+    type="file"
+    accept="image/*"
+    capture="environment"
+    multiple
+    className="hidden"
+    onChange={(e) => handlePhotosSelected(e.target.files)}
+  />
+</div>
 
         {/* Container to hold both signature boxes side by side */}
         <div className="flex gap-6 mt-6">

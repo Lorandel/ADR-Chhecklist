@@ -57,11 +57,13 @@ export async function POST(req: NextRequest) {
     console.log("=== Email API Called ===")
 
     const body = await req.json()
-    const { inspectorName, driverName, truckPlate, trailerPlate, inspectionDate, pdfBase64 } = body
+    const { inspectorName, driverName, truckPlate, trailerPlate, inspectionDate, pdfBase64, remarks, photos } = body
 
     console.log("Inspector:", inspectorName)
     console.log("Driver:", driverName)
     console.log("PDF size:", pdfBase64?.length || 0, "characters")
+    console.log("Remarks length:", (remarks || "").length)
+    console.log("Photos count:", Array.isArray(photos) ? photos.length : 0)
 
     // Validate required email environment variables
     if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
@@ -130,6 +132,46 @@ export async function POST(req: NextRequest) {
         },
         { status: 500 },
       )
+
+
+// Process photo attachments (optional)
+type IncomingPhoto = { name?: string; type?: string; dataUrl?: string }
+const photoBuffers: { filename: string; content: Buffer; contentType: string }[] = []
+try {
+  if (Array.isArray(photos) && photos.length > 0) {
+    for (let i = 0; i < photos.length; i++) {
+      const p: IncomingPhoto = photos[i] || {}
+      const dataUrl = String(p.dataUrl || "")
+      if (!dataUrl) continue
+
+      let mime = String(p.type || "image/jpeg")
+      let base64Data = dataUrl
+
+      // If it's a data URL, split header/body
+      if (dataUrl.startsWith("data:")) {
+        const parts = dataUrl.split(",")
+        if (parts.length >= 2) {
+          const header = parts[0]
+          base64Data = parts.slice(1).join(",")
+          const m = header.match(/data:([^;]+);base64/i)
+          if (m && m[1]) mime = m[1]
+        }
+      }
+
+      const buf = Buffer.from(base64Data, "base64")
+      if (!buf || buf.length === 0) continue
+
+      const safeName = (p.name || `photo_${i + 1}.jpg`).replace(/[^a-zA-Z0-9._-]/g, "_")
+      photoBuffers.push({
+        filename: safeName,
+        content: buf,
+        contentType: mime,
+      })
+    }
+  }
+} catch (photoErr: any) {
+  console.error("Photo processing error:", photoErr?.message || photoErr)
+}
     }
 
     // File name for both email attachment and Vercel Blob
@@ -190,6 +232,7 @@ Truck: ${truckPlate}
 Trailer: ${trailerPlate}
 Inspection Date: ${inspectionDate}
 Inspector: ${inspectorName}
+Remarks: ${remarks || ""}
 
 ${blobResult.success && blobResult.url ? `The document is also available online: ${blobResult.url}` : ""}
 
@@ -235,6 +278,7 @@ This checklist was generated automatically by the ADR Checklist System.`,
           content: pdfBuffer,
           contentType: "application/pdf",
         },
+        ...photoBuffers,
       ],
     }
 
