@@ -756,260 +756,392 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   }
 
   // Generate PDF report
-  const generatePDF = async () => {
-    if (!isMounted || typeof window === "undefined") return
+  
+const generatePDF = async () => {
+  if (!isMounted || typeof window === "undefined") return
 
-    setIsPdfGenerating(true)
+  setIsPdfGenerating(true)
 
-    try {
-      // Dynamically import jsPDF only on client side
-      const { jsPDF } = await import("jspdf")
+  try {
+    // Dynamically import jsPDF only on client side
+    const { jsPDF } = await import("jspdf")
 
-      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
-      const pageWidth = pdf.internal.pageSize.getWidth()
-      const pageHeight = pdf.internal.pageSize.getHeight()
-      const margin = 20
-      let y = 20
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+    const pageWidth = pdf.internal.pageSize.getWidth()
+    const pageHeight = pdf.internal.pageSize.getHeight()
 
-      // Load watermark image
-      try {
-        const watermarkUrl = "/images/albias-watermark.png"
-        const watermarkImage = await fetch(watermarkUrl)
-          .then((res) => res.blob())
-          .then((blob) => {
-            return new Promise<string>((resolve) => {
-              const reader = new FileReader()
-              reader.onloadend = () => resolve(reader.result as string)
-              reader.readAsDataURL(blob)
-            })
-          })
+    const margin = 12
+    const contentWidth = pageWidth - margin * 2
+    let y = margin
 
-        // Draw watermark (centered and semi-transparent)
-        pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
-      } catch (watermarkError) {
-        console.error("Error adding watermark:", watermarkError)
-        // Continue without watermark
-      }
+    // --- helpers ---
+    const safe = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : "-")
 
-      const inspectorColors = {
-        "Alexandru Dogariu": "#FF8C00",
-        "Robert Kerekes": "#8B4513",
-        "Eduard Tudose": "#000000",
-        "Angela Ilis": "#FF69B4",
-        "Lucian Sistac": "#1E90FF",
-        "Martian Gherasim": "#008000",
-        "Alexandru Florea": "#DAA520",
-      }
+    const getExpiryColor = (expired: boolean) => (expired ? "#B91C1C" : "#166534") // red / green
 
-      const drawCheckbox = (x: number, y: number, checked: boolean) => {
-        pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5)
-        pdf.rect(x, y, 4, 4)
-        if (checked) {
-          pdf.setDrawColor(0, 100, 0)
-          pdf.setLineWidth(0.8)
-          pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
-          pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
-        } else {
-          pdf.setDrawColor(255, 0, 0)
-          pdf.setLineWidth(0.8)
-          pdf.line(x, y, x + 4, y + 4)
-          pdf.line(x + 4, y, x, y + 4)
-        }
-        pdf.setDrawColor(0)
-        pdf.setLineWidth(0.5)
-      }
-
-      const addSafeText = (text: string, x: number, y: number, options = {}, color = "#000000") => {
-        pdf.setTextColor(color)
-        pdf.setFont("helvetica", "bold")
-        pdf.text(text, x, y, options)
-        pdf.setTextColor("#000000")
-      }
-
-      const addLine = (text: string, value: string, x: number, y: number, color = "#000000") => {
-        const label = `${text} `
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor("#000000")
-        pdf.text(label, x, y)
-        const labelWidth = pdf.getTextWidth(label)
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor(color)
-        pdf.text(value, x + labelWidth, y)
-        pdf.setTextColor("#000000")
-      }
-
-      pdf.setFontSize(18)
-      addSafeText("ADR Checklist", pageWidth / 2, y, { align: "center" })
-      y += 10
-
-      pdf.setFontSize(10)
-
-      const lines = [
-        { label: "Driver's Name:", value: driverName, color: "#191970" },
-        { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
-        { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
-      ]
-
-      if (drivingLicenseDate.month && drivingLicenseDate.year) {
-        const expired = drivingLicenseExpired
-        lines.push({
-          label: "Driving License Expiry:",
-          value: `${drivingLicenseDate.month}/${drivingLicenseDate.year}${expired ? " (EXPIRED)" : ""}`,
-          color: expired ? "#FF0000" : "#006400",
-        })
-      }
-
-      if (includeAdrCertificate && adrCertificateDate.month && adrCertificateDate.year) {
-        const expired = adrCertificateExpired
-        lines.push({
-          label: "ADR Certificate Expiry:",
-          value: `${adrCertificateDate.month}/${adrCertificateDate.year}${expired ? " (EXPIRED)" : ""}`,
-          color: expired ? "#FF0000" : "#006400",
-        })
-      }
-
-      if (truckDocDate.month && truckDocDate.year) {
-        const expired = truckDocExpired
-        lines.push({
-          label: "Truck Document Expiry:",
-          value: `${truckDocDate.month}/${truckDocDate.year}${expired ? " (EXPIRED)" : ""}`,
-          color: expired ? "#FF0000" : "#006400",
-        })
-      }
-
-      if (trailerDocDate.month && trailerDocDate.year) {
-        const expired = trailerDocExpired
-        lines.push({
-          label: "Trailer Document Expiry:",
-          value: `${trailerDocDate.month}/${trailerDocDate.year}${expired ? " (EXPIRED)" : ""}`,
-          color: expired ? "#FF0000" : "#006400",
-        })
-      }
-
-      lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
-
-      lines.forEach(({ label, value, color }) => {
-        addLine(label, value, margin, y, color)
-        y += 6
-      })
-
-      y += 4
-      addSafeText("Equipment Checklist", margin, y)
-      y += 6
-
-      const leftColumnItems = equipmentItems.slice(0, 6)
-      const rightColumnItems = equipmentItems.slice(6)
-      const columnGap = 10
-      const leftX = margin
-      const rightX = pageWidth / 2 + columnGap
-      const columnHeight = Math.max(leftColumnItems.length, rightColumnItems.length)
-      const rowHeight = 8
-
-      for (let i = 0; i < columnHeight; i++) {
-        const currentY = y + i * rowHeight
-
-        const renderItem = (item: any, x: number) => {
-          if (!item) return
-          const isChecked = checkedItems[item.name]
-          const date = expiryDates[item.name]
-          let label = item.name
-
-          if (item.hasDate && date?.month && date?.year) {
-            const now = new Date()
-            const expiry = new Date(`${date.year}-${date.month}-01`)
-            expiry.setMonth(expiry.getMonth() + 1)
-            expiry.setDate(0)
-            const expired = now > expiry
-            const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
-            label = `${item.name} - `
-            drawCheckbox(x, currentY - 3, isChecked && !expired)
-
-            addSafeText(label, x + 6, currentY)
-            addSafeText(dateStr, x + 6 + pdf.getTextWidth(label), currentY, {}, expired ? "#FF0000" : "#006400")
-            return
-          }
-
-          drawCheckbox(x, currentY - 3, isChecked)
-          addSafeText(label, x + 6, currentY)
-
-          // Add "One piece for each driver!" text in red for specific items
-          if (
-            item.name === "Flashlight" ||
-            item.name === "Rubber gloves" ||
-            item.name === "Safety glasses" ||
-            item.name === "Mask + filter (ADR class 6.1/2.3)" ||
-            item.name === "Collection bucket"
-          ) {
-            pdf.setTextColor("#FF0000")
-            pdf.setFont("helvetica", "normal")
-            pdf.text("One piece for each driver!", x + 6, currentY + 4)
-            pdf.setTextColor("#000000")
-            pdf.setFont("helvetica", "bold")
-          }
-        }
-
-        renderItem(leftColumnItems[i], leftX)
-        renderItem(rightColumnItems[i], rightX)
-      }
-
-      y += columnHeight * rowHeight + 10
-      addSafeText("Before Loading", margin, y)
-      y += 6
-      beforeLoadingItems.forEach((item) => {
-        drawCheckbox(margin, y - 3, beforeLoadingChecked[item])
-        addSafeText(item, margin + 6, y)
-        y += 6
-      })
-
-      y += 4
-      addSafeText("After Loading", margin, y)
-      y += 6
-      afterLoadingItems.forEach((item) => {
-        drawCheckbox(margin, y - 3, afterLoadingChecked[item])
-        addSafeText(item, margin + 6, y)
-        y += 6
-      })
-
-      y += 10
-
-      if (signatureData) {
-        pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
-        addSafeText("Driver Signature", margin, y + 25)
+    const drawCheckbox = (x: number, y: number, checked: boolean) => {
+      pdf.setDrawColor(17, 24, 39)
+      pdf.setLineWidth(0.4)
+      pdf.rect(x, y, 3.5, 3.5)
+      if (checked) {
+        pdf.setDrawColor(22, 101, 52)
+        pdf.setLineWidth(0.8)
+        pdf.line(x + 0.4, y + 1.8, x + 1.3, y + 2.7)
+        pdf.line(x + 1.3, y + 2.7, x + 3.1, y + 0.7)
       } else {
-        pdf.setDrawColor(0, 71, 171) // Blue color (RGB)
-        pdf.setLineWidth(0.5)
-        pdf.line(margin, y + 20, margin + 70, y + 20)
-        addSafeText("Driver Signature (Not Signed)", margin, y + 25)
+        pdf.setDrawColor(185, 28, 28)
+        pdf.setLineWidth(0.8)
+        pdf.line(x + 0.2, y + 0.2, x + 3.3, y + 3.3)
+        pdf.line(x + 3.3, y + 0.2, x + 0.2, y + 3.3)
       }
-
-      const inspectorX = pageWidth - margin - 70
-      if (inspectorSignatureData) {
-        pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
-      } else {
-        pdf.setDrawColor(0, 71, 171) // Blue color (RGB)
-        pdf.setLineWidth(0.5)
-        pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
-      }
-
-      const inspectorColor = inspectorColors[selectedInspector] || "#000000"
-      const inspectorLabel = "Inspector: "
-      pdf.setFont("helvetica", "bold")
-      pdf.setTextColor("#000000")
-      pdf.text(inspectorLabel, inspectorX, y + 25)
-      const labelWidth = pdf.getTextWidth(inspectorLabel)
-      pdf.setFont("helvetica", "bold")
-      pdf.setTextColor(inspectorColor)
-      pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
-
-      // Save the PDF for download only (no email or Google Drive)
-      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
-    } catch (error) {
-      console.error("Error generating PDF:", error)
-    } finally {
-      setIsPdfGenerating(false)
+      pdf.setDrawColor(17, 24, 39)
+      pdf.setLineWidth(0.4)
     }
+
+    const sectionHeader = (title: string) => {
+      pdf.setFillColor(245, 246, 248)
+      pdf.roundedRect(margin, y, contentWidth, 7, 2, 2, "F")
+      pdf.setFont("helvetica", "bold")
+      pdf.setFontSize(10)
+      pdf.setTextColor(17, 24, 39)
+      pdf.text(title, margin + 3, y + 5)
+      y += 10
+    }
+
+    const kv = (label: string, value: string, x: number, yy: number, valueColor = "#111827") => {
+      pdf.setFont("helvetica", "bold")
+      pdf.setFontSize(9)
+      pdf.setTextColor(31, 41, 55)
+      pdf.text(label, x, yy)
+      const lw = pdf.getTextWidth(label) + 1
+      pdf.setFont("helvetica", "normal")
+      pdf.setTextColor(valueColor)
+      pdf.text(value, x + lw, yy)
+      pdf.setTextColor(17, 24, 39)
+    }
+
+    const loadImageAsDataUrl = async (url: string) => {
+      const blob = await fetch(url).then((res) => res.blob())
+      return await new Promise<string>((resolve) => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(reader.result as string)
+        reader.readAsDataURL(blob)
+      })
+    }
+
+    // --- header ---
+    let logoData: string | null = null
+    try {
+      logoData = await loadImageAsDataUrl("/images/albias-watermark.png")
+    } catch (e) {
+      // no-op
+    }
+
+    pdf.setFillColor(255, 255, 255)
+    pdf.roundedRect(margin, y, contentWidth, 22, 3, 3, "F")
+    pdf.setDrawColor(229, 231, 235)
+    pdf.setLineWidth(0.4)
+    pdf.roundedRect(margin, y, contentWidth, 22, 3, 3)
+
+    if (logoData) {
+      pdf.addImage(logoData, "PNG", margin + 3, y + 2, 18, 18)
+    }
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(16)
+    pdf.setTextColor(17, 24, 39)
+    pdf.text("ADR Checklist", pageWidth / 2, y + 8, { align: "center" })
+
+    pdf.setFont("helvetica", "normal")
+    pdf.setFontSize(9)
+    pdf.setTextColor(75, 85, 99)
+    pdf.text(`Inspection: ${safe(checkDate)}`, pageWidth - margin - 3, y + 8, { align: "right" })
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(9)
+    pdf.setTextColor(31, 41, 55)
+    pdf.text(variant === "under1000" ? "Reduced (Under 1000 pts)" : "Full (1000+ pts)", pageWidth / 2, y + 16, {
+      align: "center",
+    })
+
+    y += 28
+
+    // --- info box ---
+    pdf.setDrawColor(229, 231, 235)
+    pdf.setLineWidth(0.4)
+    pdf.roundedRect(margin, y, contentWidth, 28, 3, 3)
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(10)
+    pdf.setTextColor(17, 24, 39)
+    pdf.text("Load details", margin + 3, y + 6)
+
+    const leftX = margin + 3
+    const rightX = margin + contentWidth / 2 + 2
+
+    kv("Driver:", safe(driverName), leftX, y + 12, "#111827")
+    kv("Truck:", safe(truckPlate), leftX, y + 17, "#111827")
+    kv("Trailer:", safe(trailerPlate), leftX, y + 22, "#111827")
+
+    // Vehicle documents expiry (colored)
+    const docY1 = y + 12
+    const docY2 = y + 17
+    const docY3 = y + 22
+
+    if (drivingLicenseDate.month && drivingLicenseDate.year) {
+      kv(
+        "Driving licence:",
+        `${drivingLicenseDate.month}/${drivingLicenseDate.year}${drivingLicenseExpired ? " (EXPIRED)" : ""}`,
+        rightX,
+        docY1,
+        getExpiryColor(drivingLicenseExpired),
+      )
+    } else {
+      kv("Driving licence:", "-", rightX, docY1, "#111827")
+    }
+
+    if (truckDocDate.month && truckDocDate.year) {
+      kv(
+        "Truck doc:",
+        `${truckDocDate.month}/${truckDocDate.year}${truckDocExpired ? " (EXPIRED)" : ""}`,
+        rightX,
+        docY2,
+        getExpiryColor(truckDocExpired),
+      )
+    } else {
+      kv("Truck doc:", "-", rightX, docY2, "#111827")
+    }
+
+    if (trailerDocDate.month && trailerDocDate.year) {
+      kv(
+        "Trailer doc:",
+        `${trailerDocDate.month}/${trailerDocDate.year}${trailerDocExpired ? " (EXPIRED)" : ""}`,
+        rightX,
+        docY3,
+        getExpiryColor(trailerDocExpired),
+      )
+    } else {
+      kv("Trailer doc:", "-", rightX, docY3, "#111827")
+    }
+
+    y += 36
+
+    // Reserve space for signatures at bottom
+    const sigBoxH = 32
+    const sigTop = pageHeight - margin - sigBoxH
+
+    // --- equipment ---
+    sectionHeader("Equipment")
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(8.5)
+    pdf.setTextColor(17, 24, 39)
+
+    const leftColumnItems = equipmentItems.slice(0, Math.ceil(equipmentItems.length / 2))
+    const rightColumnItems = equipmentItems.slice(Math.ceil(equipmentItems.length / 2))
+
+    const colGap = 8
+    const colW = (contentWidth - colGap) / 2
+    const col1X = margin
+    const col2X = margin + colW + colGap
+
+    const rowH = 5.6
+
+    const renderEquipmentItem = (item: any, x: number, yy: number) => {
+      if (!item) return
+
+      const isChecked = checkedItems[item.name]
+      const date = expiryDates[item.name]
+
+      // default label
+      let label = item.name
+      let dateStr = ""
+
+      // expiry logic
+      let expired = false
+      if (item.hasDate && date?.month && date?.year) {
+        const now = new Date()
+        const expiry = new Date(`${date.year}-${date.month}-01`)
+        expiry.setMonth(expiry.getMonth() + 1)
+        expiry.setDate(0)
+        expired = now > expiry
+        dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
+      }
+
+      // Checkbox: green tick only when checked AND NOT expired
+      drawCheckbox(x + 2, yy - 3.1, item.hasDate && dateStr ? isChecked && !expired : isChecked)
+
+      pdf.setFont("helvetica", "bold")
+      pdf.setFontSize(8.5)
+      pdf.setTextColor(17, 24, 39)
+
+      // Wrap label if needed
+      const maxLabelW = colW - 12
+      const parts = pdf.splitTextToSize(label, maxLabelW)
+
+      pdf.text(parts[0] as string, x + 8, yy)
+      if (parts.length > 1) {
+        pdf.setFont("helvetica", "normal")
+        pdf.setTextColor(107, 114, 128)
+        pdf.text(parts.slice(1).join(" "), x + 8, yy + 3.2)
+      }
+
+      // Date in color
+      if (item.hasDate && dateStr) {
+        const baseX = x + 8 + pdf.getTextWidth((parts[0] as string) + " ")
+        pdf.setFont("helvetica", "bold")
+        pdf.setTextColor(expired ? 185 : 22, expired ? 28 : 101, expired ? 28 : 52)
+        pdf.text(dateStr, baseX, yy)
+        pdf.setTextColor(17, 24, 39)
+      }
+
+      // Note for specific items
+      if (
+        item.name === "Flashlight" ||
+        item.name === "Rubber gloves" ||
+        item.name === "Safety glasses" ||
+        item.name === "Mask + filter (ADR class 6.1/2.3)" ||
+        item.name === "Collection bucket"
+      ) {
+        pdf.setFont("helvetica", "normal")
+        pdf.setFontSize(7.5)
+        pdf.setTextColor(185, 28, 28)
+        pdf.text("One piece for each driver!", x + 8, yy + 3.2)
+        pdf.setTextColor(17, 24, 39)
+      }
+    }
+
+    const maxRows = Math.max(leftColumnItems.length, rightColumnItems.length)
+    for (let i = 0; i < maxRows; i++) {
+      const yy = y + i * rowH
+      if (yy + 10 > sigTop) break // keep single page; avoid overlapping signatures
+      renderEquipmentItem(leftColumnItems[i], col1X, yy)
+      renderEquipmentItem(rightColumnItems[i], col2X, yy)
+    }
+
+    y += maxRows * rowH + 4
+
+    // --- before loading (two columns) ---
+    if (y < sigTop - 18) {
+      sectionHeader("Before Loading")
+
+      const half = Math.ceil(beforeLoadingItems.length / 2)
+      const left = beforeLoadingItems.slice(0, half)
+      const right = beforeLoadingItems.slice(half)
+
+      const rows = Math.max(left.length, right.length)
+      for (let i = 0; i < rows; i++) {
+        const yy = y + i * rowH
+        if (yy + 8 > sigTop) break
+
+        const render = (label: string | undefined, x: number) => {
+          if (!label) return
+          drawCheckbox(x + 2, yy - 3.1, beforeLoadingChecked[label])
+          pdf.setFont("helvetica", "bold")
+          pdf.setFontSize(8.5)
+          pdf.setTextColor(17, 24, 39)
+          const wrapped = pdf.splitTextToSize(label, colW - 12)
+          pdf.text(wrapped, x + 8, yy)
+        }
+
+        render(left[i], col1X)
+        render(right[i], col2X)
+      }
+
+      y += rows * rowH + 4
+    }
+
+    // --- after loading (two columns) ---
+    if (y < sigTop - 18) {
+      sectionHeader("After Loading")
+
+      const half = Math.ceil(afterLoadingItems.length / 2)
+      const left = afterLoadingItems.slice(0, half)
+      const right = afterLoadingItems.slice(half)
+
+      const rows = Math.max(left.length, right.length)
+      for (let i = 0; i < rows; i++) {
+        const yy = y + i * rowH
+        if (yy + 8 > sigTop) break
+
+        const render = (label: string | undefined, x: number) => {
+          if (!label) return
+          drawCheckbox(x + 2, yy - 3.1, afterLoadingChecked[label])
+          pdf.setFont("helvetica", "bold")
+          pdf.setFontSize(8.5)
+          pdf.setTextColor(17, 24, 39)
+          const wrapped = pdf.splitTextToSize(label, colW - 12)
+          pdf.text(wrapped, x + 8, yy)
+        }
+
+        render(left[i], col1X)
+        render(right[i], col2X)
+      }
+    }
+
+    // --- signatures (bottom fixed) ---
+    const sigY = sigTop + 6
+    pdf.setDrawColor(229, 231, 235)
+    pdf.setLineWidth(0.4)
+    pdf.roundedRect(margin, sigTop, contentWidth, sigBoxH, 3, 3)
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(10)
+    pdf.setTextColor(17, 24, 39)
+    pdf.text("Signatures", margin + 3, sigTop + 6)
+
+    const sigW = 70
+    const sigH = 16
+    const driverX = margin + 3
+    const inspectorX = margin + contentWidth - 3 - sigW
+
+    if (signatureData) {
+      pdf.addImage(signatureData, "PNG", driverX, sigY + 4, sigW, sigH)
+    } else {
+      pdf.setDrawColor(0, 71, 171)
+      pdf.setLineWidth(0.5)
+      pdf.line(driverX, sigY + 18, driverX + sigW, sigY + 18)
+    }
+
+    if (inspectorSignatureData) {
+      pdf.addImage(inspectorSignatureData, "PNG", inspectorX, sigY + 4, sigW, sigH)
+    } else {
+      pdf.setDrawColor(0, 71, 171)
+      pdf.setLineWidth(0.5)
+      pdf.line(inspectorX, sigY + 18, inspectorX + sigW, sigY + 18)
+    }
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(9)
+    pdf.setTextColor(31, 41, 55)
+    pdf.text("Driver", driverX, sigTop + 30)
+    pdf.text("Inspector", inspectorX, sigTop + 30)
+
+    // Inspector name (colored)
+    const inspectorColors = {
+      "Alexandru Dogariu": "#FF8C00",
+      "Robert Kerekes": "#8B4513",
+      "Eduard Tudose": "#000000",
+      "Angela Ilis": "#FF69B4",
+      "Lucian Sistac": "#1E90FF",
+      "Martian Gherasim": "#008000",
+      "Alexandru Florea": "#DAA520",
+    }
+
+    const inspectorColor = inspectorColors[selectedInspector] || "#111827"
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(9)
+    pdf.setTextColor(inspectorColor)
+    pdf.text(safe(selectedInspector), inspectorX, sigTop + 26)
+
+    // Save the PDF (single page)
+    pdf.save(`ADR-Check_${safe(driverName).replace(/\s+/g, "_")}_${safe(checkDate).replace(/-/g, ".")}.pdf`)
+  } catch (error) {
+    console.error("Error generating PDF:", error)
+  } finally {
+    setIsPdfGenerating(false)
   }
+}
 
   const resetForm = useCallback(() => {
     setDriverName("")
