@@ -1062,6 +1062,19 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         // Continue without watermark
       }
     }
+    // Header (red) - light + slightly transparent
+const GState = (pdf as any).GState
+if (GState && (pdf as any).setGState) {
+  ;(pdf as any).setGState(new GState({ opacity: 0.85 })) // <- AICI e transparența pentru header
+}
+
+pdf.setFillColor(220, 38, 38) // <- roșu mai deschis (schimbă dacă vrei)
+pdf.rect(0, 0, pageW, headerH, "F")
+
+// Reset opacity so it doesn't affect anything else
+if (GState && (pdf as any).setGState) {
+  ;(pdf as any).setGState(new GState({ opacity: 1 }))
+}
     // Header (red)
     pdf.setFillColor(186, 0, 0)
     pdf.rect(0, 0, pageW, headerH, "F")
@@ -1129,8 +1142,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     drawField(leftX, rowStartY + 2 * rowStep, "DL expiry: ", dl.text, dl.color)
     drawField(rightX, rowStartY + 2 * rowStep, "ADR expiry: ", adr.text, adr.color)
 
-    drawField(leftX, rowStartY + 3 * rowStep, "Truck doc: ", truckDoc.text, truckDoc.color)
-    drawField(rightX, rowStartY + 3 * rowStep, "Trailer doc: ", trailerDoc.text, trailerDoc.color)
+    drawField(leftX, rowStartY + 3 * rowStep, "Truck tehnical insp.: ", truckDoc.text, truckDoc.color)
+    drawField(rightX, rowStartY + 3 * rowStep, "Trailer tehnical insp.: ", trailerDoc.text, trailerDoc.color)
 
     // Remarks (always show label; content optional)
     const remarksBoxX = cardX + 6
