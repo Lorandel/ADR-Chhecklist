@@ -1062,25 +1062,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         // Continue without watermark
       }
     }
-    // Header (red) - light + slightly transparent
-const GState = (pdf as any).GState
-if (GState && (pdf as any).setGState) {
-  ;(pdf as any).setGState(new GState({ opacity: 0.6 })) // <- AICI e transparența pentru header
-}
-
-pdf.setFillColor(220, 38, 38) // <- roșu mai deschis (schimbă dacă vrei)
-pdf.rect(0, 0, pageW, headerH, "F")
-
-// Reset opacity so it doesn't affect anything else
-if (GState && (pdf as any).setGState) {
-  ;(pdf as any).setGState(new GState({ opacity: 1 }))
-}
     // Header (red)
-    pdf.setFillColor(186, 0, 0)
-    pdf.rect(0, 0, pageW, headerH, "F")
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(18)
-    pdf.setTextColor(255, 255, 255)
+    pdf.setTextColor(0, 0, 0)
     pdf.text("ADR Checklist", pageW / 2, 12, { align: "center" })
 
     if (variant === "under1000") {
