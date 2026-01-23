@@ -1,6 +1,6 @@
 "use client"
 
-import type { RefObject } from "react"
+import type { RefObject, ChangeEvent } from "react"
 import { useState, useEffect, useRef, useCallback, createRef, useMemo } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
+import { compressImageFile } from "@/lib/imageCompress"
 
 const capitalizeWords = (str: string) =>
   str
@@ -16,6 +17,19 @@ const capitalizeWords = (str: string) =>
     .join(" ")
 
 export type ChecklistVariant = "full" | "under1000"
+
+type PhotoUploadStatus = "queued" | "uploading" | "done" | "error"
+
+type UploadedPhoto = {
+  id: string
+  name: string
+  previewUrl: string
+  status: PhotoUploadStatus
+  progress: number // 0-100
+  url?: string // public blob url when uploaded
+  contentType?: string
+  error?: string
+}
 
 type ADRChecklistProps = {
   variant: ChecklistVariant
@@ -55,6 +69,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [trailerDocExpired, setTrailerDocExpired] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
+
+  // Remarks + photo uploads
+  const [remarks, setRemarks] = useState("")
+  const [photos, setPhotos] = useState<UploadedPhoto[]>([])
+  const photoInputRef = useRef<HTMLInputElement>(null)
+  const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -755,10 +775,132 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     return isExpired
   }
 
+  const uploadPhoto = useCallback(
+    (file: File, photoId: string) => {
+      return new Promise<{ url: string; contentType: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        uploadXhrRefs.current[photoId] = xhr
+
+        xhr.open("POST", "/api/upload-photo")
+        xhr.responseType = "json"
+
+        xhr.upload.onprogress = (evt) => {
+          if (!evt.lengthComputable) return
+          const progress = Math.round((evt.loaded / evt.total) * 100)
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
+        }
+
+        xhr.onload = () => {
+          const res = xhr.response
+          if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
+            setPhotos((prev) =>
+              prev.map((p) =>
+                p.id === photoId
+                  ? { ...p, progress: 100, status: "done", url: res.url, contentType: res.contentType || file.type }
+                  : p,
+              ),
+            )
+            resolve({ url: res.url, contentType: res.contentType || file.type })
+            return
+          }
+          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          reject(new Error(message))
+        }
+
+        xhr.onerror = () => {
+          const message = "Upload failed (network error)"
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          reject(new Error(message))
+        }
+
+        const formData = new FormData()
+        formData.append("file", file)
+        xhr.send(formData)
+
+        // Mark as uploading immediately
+        setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0 } : p)))
+      })
+    },
+    [setPhotos],
+  )
+
+  const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+
+    const newPhotos: UploadedPhoto[] = files.map((file) => {
+      const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      return {
+        id,
+        name: file.name || `photo_${Date.now()}.jpg`,
+        previewUrl: URL.createObjectURL(file),
+        status: "queued",
+        progress: 0,
+        contentType: file.type,
+      }
+    })
+
+    setPhotos((prev) => [...prev, ...newPhotos])
+
+    // Start uploads
+    await Promise.all(
+      newPhotos.map(async (p, idx) => {
+        const originalFile = files[idx]
+
+        // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
+        let fileToUpload: File = originalFile
+        try {
+          fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
+        } catch {
+          fileToUpload = originalFile
+        }
+
+        // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
+        if (fileToUpload !== originalFile) {
+          setPhotos((prev) =>
+            prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
+          )
+        }
+
+        try {
+          await uploadPhoto(fileToUpload, p.id)
+        } catch {
+          // State already updated in uploadPhoto
+        }
+      }),
+    )
+
+    // Allow selecting the same file again
+    e.target.value = ""
+  }
+
+  const removePhoto = (photoId: string) => {
+    const xhr = uploadXhrRefs.current[photoId]
+    if (xhr && xhr.readyState !== XMLHttpRequest.DONE) {
+      try {
+        xhr.abort()
+      } catch {
+        // ignore
+      }
+    }
+
+    setPhotos((prev) => {
+      const toRemove = prev.find((p) => p.id === photoId)
+      if (toRemove?.previewUrl) {
+        try {
+          URL.revokeObjectURL(toRemove.previewUrl)
+        } catch {
+          // ignore
+        }
+      }
+      return prev.filter((p) => p.id !== photoId)
+    })
+  }
+
   // Generate PDF report
-  
   const generatePDF = async () => {
-    if (isPdfGenerating || typeof window === "undefined") return
+    if (!isMounted || typeof window === "undefined") return
 
     setIsPdfGenerating(true)
 
@@ -769,449 +911,30 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
       const pageWidth = pdf.internal.pageSize.getWidth()
       const pageHeight = pdf.internal.pageSize.getHeight()
+      const margin = 20
+      let y = 20
 
-      // Layout
-      const margin = 12
-      const contentWidth = pageWidth - margin * 2
-      let y = 14
-
-      // ---------- Helpers ----------
-      const loadAsDataUrl = async (url: string) => {
-        const blob = await fetch(url).then((res) => res.blob())
-        return await new Promise<string>((resolve) => {
-          const reader = new FileReader()
-          reader.onloadend = () => resolve(reader.result as string)
-          reader.readAsDataURL(blob)
-        })
-      }
-
-      // Create a consistent square icon (same size for all) so the PDF looks tidy.
-      const loadSquareIcon = async (url: string, sizePx = 96) => {
-        const src = await loadAsDataUrl(url)
-        const img = new Image()
-        img.src = src
-        await img.decode()
-
-        const canvas = document.createElement("canvas")
-        canvas.width = sizePx
-        canvas.height = sizePx
-        const ctx = canvas.getContext("2d")
-        if (!ctx) return src
-
-        // White background
-        ctx.fillStyle = "#FFFFFF"
-        ctx.fillRect(0, 0, sizePx, sizePx)
-
-        // Contain (no distortion)
-        const scale = Math.min(sizePx / img.width, sizePx / img.height)
-        const w = img.width * scale
-        const h = img.height * scale
-        const x = (sizePx - w) / 2
-        const yy = (sizePx - h) / 2
-        ctx.drawImage(img, x, yy, w, h)
-
-        return canvas.toDataURL("image/png")
-      }
-
-      const theme = {
-        ink: "#111827",
-        muted: "#6B7280",
-        border: "#D1D5DB",
-        soft: "#F3F4F6",
-        brand: "#0B3A66",
-        good: "#0B7A3B",
-        bad: "#B42318",
-      }
-
-      const sectionTitle = (title: string, x: number, yy: number) => {
-        pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(11)
-        pdf.setTextColor(theme.ink)
-        pdf.text(title, x, yy)
-      }
-
-      const safeText = (t: string, x: number, yy: number, opts: any = {}, color = theme.ink, fontStyle: "normal" | "bold" = "bold") => {
-        pdf.setFont("helvetica", fontStyle)
-        pdf.setTextColor(color)
-        pdf.text(t, x, yy, opts)
-        pdf.setTextColor(theme.ink)
-      }
-
-      const wrapText = (t: string, maxWidth: number) => pdf.splitTextToSize(t, maxWidth)
-
-      // Stylish status box (checkbox)
-      const drawStatusBox = (x: number, yy: number, ok: boolean) => {
-        const size = 5
-        const r = 1.1
-
-        pdf.setLineWidth(0.35)
-        pdf.setDrawColor(theme.border)
-        pdf.setFillColor(ok ? 225 : 255, ok ? 245 : 228, ok ? 231 : 228) // soft green / soft red
-        // @ts-ignore - jsPDF roundedRect exists at runtime
-        pdf.roundedRect(x, yy, size, size, r, r, "FD")
-
-        if (ok) {
-          pdf.setDrawColor(11, 122, 59)
-          pdf.setLineWidth(1)
-          pdf.line(x + 1.2, yy + 2.8, x + 2.2, yy + 3.9)
-          pdf.line(x + 2.2, yy + 3.9, x + 4.1, yy + 1.4)
-        } else {
-          pdf.setDrawColor(180, 35, 24)
-          pdf.setLineWidth(1)
-          pdf.line(x + 1.3, yy + 1.3, x + 3.7, yy + 3.7)
-          pdf.line(x + 3.7, yy + 1.3, x + 1.3, yy + 3.7)
-        }
-
-        pdf.setDrawColor(0)
-        pdf.setLineWidth(0.2)
-      }
-
-      // ---------- Watermark (keep as-is) ----------
+      // Load watermark image
       try {
         const watermarkUrl = "/images/albias-watermark.png"
-        const watermarkImage = await loadAsDataUrl(watermarkUrl)
-        // Centered + very light
+        const watermarkImage = await fetch(watermarkUrl)
+          .then((res) => res.blob())
+          .then((blob) => {
+            return new Promise<string>((resolve) => {
+              const reader = new FileReader()
+              reader.onloadend = () => resolve(reader.result as string)
+              reader.readAsDataURL(blob)
+            })
+          })
+
+        // Draw watermark (centered and semi-transparent)
         pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
       } catch (watermarkError) {
         console.error("Error adding watermark:", watermarkError)
+        // Continue without watermark
       }
 
-      // ---------- Header ----------
-      // Top brand bar
-      pdf.setFillColor(11, 58, 102)
-      pdf.rect(0, 0, pageWidth, 12, "F")
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(16)
-      pdf.setTextColor("#FFFFFF")
-      pdf.text("ADR Checklist", pageWidth / 2, 8.5, { align: "center" })
-      pdf.setTextColor(theme.ink)
-
-      y = 18
-
-      // ---------- Info box ----------
-      const infoBoxX = margin
-      const infoBoxY = y
-      const infoBoxH = 44
-      // Soft background
-      pdf.setFillColor(243, 244, 246)
-      // @ts-ignore
-      pdf.roundedRect(infoBoxX, infoBoxY, contentWidth, infoBoxH, 2, 2, "F")
-      pdf.setDrawColor(theme.border)
-      pdf.setLineWidth(0.35)
-      // @ts-ignore
-      pdf.roundedRect(infoBoxX, infoBoxY, contentWidth, infoBoxH, 2, 2, "S")
-
-      pdf.setFontSize(9)
-      const labelColor = theme.muted
-      const valueColor = "#0B3A66"
-
-      const line = (label: string, value: string, x: number, yy: number, vColor = valueColor) => {
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor(labelColor)
-        pdf.text(label, x, yy)
-        pdf.setTextColor(vColor)
-        pdf.text(value || "-", x + 42, yy)
-        pdf.setTextColor(theme.ink)
-      }
-
-      const infoLeftX = infoBoxX + 8
-      const infoRightX = infoBoxX + contentWidth / 2 + 4
-      let iy = infoBoxY + 10
-
-      line("Driver:", driverName, infoLeftX, iy)
-      line("Truck plate:", truckPlate, infoRightX, iy)
-      iy += 7
-      line("Trailer plate:", trailerPlate, infoLeftX, iy)
-      line("Inspection date:", checkDate, infoRightX, iy)
-      iy += 7
-
-      if (drivingLicenseDate.month && drivingLicenseDate.year) {
-        line(
-          "DL expiry:",
-          `${drivingLicenseDate.month}/${drivingLicenseDate.year}${drivingLicenseExpired ? " (EXPIRED)" : ""}`,
-          infoLeftX,
-          iy,
-          drivingLicenseExpired ? theme.bad : theme.good,
-        )
-      } else {
-        line("DL expiry:", "-", infoLeftX, iy)
-      }
-
-      if (includeAdrCertificate) {
-        if (adrCertificateDate.month && adrCertificateDate.year) {
-          line(
-            "ADR expiry:",
-            `${adrCertificateDate.month}/${adrCertificateDate.year}${adrCertificateExpired ? " (EXPIRED)" : ""}`,
-            infoRightX,
-            iy,
-            adrCertificateExpired ? theme.bad : theme.good,
-          )
-        } else {
-          line("ADR expiry:", "-", infoRightX, iy)
-        }
-      } else {
-        line("ADR expiry:", "N/A", infoRightX, iy)
-      }
-
-      iy += 7
-
-      if (truckDocDate.month && truckDocDate.year) {
-        line(
-          "Truck doc:",
-          `${truckDocDate.month}/${truckDocDate.year}${truckDocExpired ? " (EXPIRED)" : ""}`,
-          infoLeftX,
-          iy,
-          truckDocExpired ? theme.bad : theme.good,
-        )
-      } else {
-        line("Truck doc:", "-", infoLeftX, iy)
-      }
-
-      if (trailerDocDate.month && trailerDocDate.year) {
-        line(
-          "Trailer doc:",
-          `${trailerDocDate.month}/${trailerDocDate.year}${trailerDocExpired ? " (EXPIRED)" : ""}`,
-          infoRightX,
-          iy,
-          trailerDocExpired ? theme.bad : theme.good,
-        )
-      } else {
-        line("Trailer doc:", "-", infoRightX, iy)
-      }
-
-      y = infoBoxY + infoBoxH + 10
-
-      // ---------- Preload equipment icons (uniform size) ----------
-      const iconSizeMM = 6
-      const iconSizePx = 96
-      const uniqueUrls = Array.from(new Set(equipmentItems.map((it) => it.image).filter(Boolean)))
-      const iconByUrl: Record<string, string> = {}
-      await Promise.all(
-        uniqueUrls.map(async (url) => {
-          try {
-            iconByUrl[url] = await loadSquareIcon(url, iconSizePx)
-          } catch (e) {
-            console.error("Icon load failed:", url, e)
-          }
-        }),
-      )
-
-      // ---------- Equipment box ----------
-      sectionTitle("Equipment Checklist", margin, y - 2)
-
-      const equipBoxX = margin
-      const equipBoxY = y
-      const rowHeight = 10
-      const rows = Math.ceil(equipmentItems.length / 2)
-      const equipBoxH = 10 + rows * rowHeight + 6
-
-      pdf.setDrawColor(theme.border)
-      pdf.setLineWidth(0.35)
-      // @ts-ignore
-      pdf.roundedRect(equipBoxX, equipBoxY, contentWidth, equipBoxH, 2, 2, "S")
-
-      // Column layout
-      const colGap = 8
-      const colW = (contentWidth - colGap) / 2
-      const leftX = equipBoxX + 6
-      const rightX = equipBoxX + 6 + colW + colGap
-      const topY = equipBoxY + 10
-
-      const leftColumnItems = equipmentItems.slice(0, rows)
-      const rightColumnItems = equipmentItems.slice(rows)
-
-      const renderEquipmentItem = (item: any, x: number, yy: number) => {
-        if (!item) return
-        const isChecked = !!checkedItems[item.name]
-        const date = expiryDates[item.name]
-
-        // Date-aware item (fire extinguisher)
-        let ok = isChecked
-        let dateStr = ""
-        let expired = false
-        if (item.hasDate && date?.month && date?.year) {
-          const now = new Date()
-          const expiry = new Date(`${date.year}-${date.month}-01`)
-          expiry.setMonth(expiry.getMonth() + 1)
-          expiry.setDate(0)
-          expired = now > expiry
-          ok = isChecked && !expired
-          dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
-        }
-
-        // Status box
-        drawStatusBox(x, yy - 4.2, ok)
-
-        // Icon (uniform size)
-        const iconUrl = item.image
-        const iconData = iconUrl ? iconByUrl[iconUrl] : null
-        const iconX = x + 7
-        const iconY = yy - 6.2
-        if (iconData) {
-          try {
-            pdf.addImage(iconData, "PNG", iconX, iconY, iconSizeMM, iconSizeMM)
-          } catch (e) {
-            // ignore icon errors
-          }
-        }
-
-        // Text
-        const textX = iconX + iconSizeMM + 2.3
-        pdf.setFontSize(9)
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor(theme.ink)
-
-        if (dateStr) {
-          const base = `${item.name} - `
-          pdf.text(base, textX, yy)
-          pdf.setTextColor(expired ? theme.bad : theme.good)
-          pdf.text(dateStr, textX + pdf.getTextWidth(base), yy)
-          pdf.setTextColor(theme.ink)
-        } else {
-          // Wrap long lines to keep within column and keep everything on a single page
-          const maxW = colW - (textX - x) - 4
-          const lines = wrapText(item.name, maxW)
-          pdf.text(lines[0], textX, yy)
-          if (lines.length > 1) {
-            pdf.setFont("helvetica", "normal")
-            pdf.setTextColor(theme.muted)
-            pdf.text(lines[1], textX, yy + 3.6)
-            pdf.setTextColor(theme.ink)
-            pdf.setFont("helvetica", "bold")
-          }
-        }
-
-        // Extra note for specific items
-        const needsNote =
-          item.name === "Flashlight" ||
-          item.name === "Rubber gloves" ||
-          item.name === "Safety glasses" ||
-          item.name === "Mask + filter (ADR class 6.1/2.3)" ||
-          item.name === "Collection bucket"
-
-        if (needsNote) {
-          pdf.setFont("helvetica", "normal")
-          pdf.setFontSize(7.5)
-          pdf.setTextColor(theme.bad)
-          pdf.text("One piece for each driver!", textX, yy + 3.6)
-          pdf.setTextColor(theme.ink)
-        }
-      }
-
-      for (let i = 0; i < rows; i++) {
-        const yy = topY + i * rowHeight
-        renderEquipmentItem(leftColumnItems[i], leftX, yy)
-        renderEquipmentItem(rightColumnItems[i], rightX, yy)
-      }
-
-      y = equipBoxY + equipBoxH + 10
-
-      // ---------- Before/After boxes (side-by-side) ----------
-      const smallRowH = 7
-      const boxGap = 8
-      const halfW = (contentWidth - boxGap) / 2
-      const beforeX = margin
-      const afterX = margin + halfW + boxGap
-
-      const beforeH = 10 + beforeLoadingItems.length * smallRowH + 8
-      const afterH = 10 + afterLoadingItems.length * smallRowH + 8
-      const bothH = Math.max(beforeH, afterH)
-
-      // Draw boxes
-      pdf.setDrawColor(theme.border)
-      pdf.setLineWidth(0.35)
-      // @ts-ignore
-      pdf.roundedRect(beforeX, y, halfW, bothH, 2, 2, "S")
-      // @ts-ignore
-      pdf.roundedRect(afterX, y, halfW, bothH, 2, 2, "S")
-
-      pdf.setFontSize(10)
-      safeText("Before Loading", beforeX + 6, y + 8, {}, theme.ink, "bold")
-      safeText("After Loading", afterX + 6, y + 8, {}, theme.ink, "bold")
-
-      let by = y + 16
-      beforeLoadingItems.forEach((item) => {
-        drawStatusBox(beforeX + 6, by - 4.2, !!beforeLoadingChecked[item])
-        pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(8.5)
-        pdf.setTextColor(theme.ink)
-        const lines = wrapText(item, halfW - 18)
-        pdf.text(lines[0], beforeX + 13, by)
-        if (lines.length > 1) {
-          pdf.setFont("helvetica", "normal")
-          pdf.setTextColor(theme.muted)
-          pdf.text(lines[1], beforeX + 13, by + 3.2)
-          pdf.setTextColor(theme.ink)
-        }
-        by += smallRowH
-      })
-
-      let ay = y + 16
-      afterLoadingItems.forEach((item) => {
-        drawStatusBox(afterX + 6, ay - 4.2, !!afterLoadingChecked[item])
-        pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(8.5)
-        pdf.setTextColor(theme.ink)
-        const lines = wrapText(item, halfW - 18)
-        pdf.text(lines[0], afterX + 13, ay)
-        if (lines.length > 1) {
-          pdf.setFont("helvetica", "normal")
-          pdf.setTextColor(theme.muted)
-          pdf.text(lines[1], afterX + 13, ay + 3.2)
-          pdf.setTextColor(theme.ink)
-        }
-        ay += smallRowH
-      })
-
-      y = y + bothH + 10
-
-      // ---------- Signatures ----------
-      const sigH = 34
-      pdf.setDrawColor(theme.border)
-      pdf.setLineWidth(0.35)
-      // @ts-ignore
-      pdf.roundedRect(margin, y, contentWidth, sigH, 2, 2, "S")
-
-      const sigY = y + 8
-      const sigW = 72
-      const sigX1 = margin + 6
-      const sigX2 = margin + contentWidth - sigW - 6
-
-      // Driver signature box
-      pdf.setFontSize(9)
-      pdf.setFont("helvetica", "bold")
-      pdf.setTextColor(theme.muted)
-      pdf.text("Driver signature", sigX1, y + 7)
-
-      if (signatureData) {
-        pdf.addImage(signatureData, "PNG", sigX1, sigY, sigW, 18)
-      } else {
-        pdf.setDrawColor(11, 58, 102)
-        pdf.setLineWidth(0.6)
-        pdf.line(sigX1, sigY + 18, sigX1 + sigW, sigY + 18)
-        pdf.setFont("helvetica", "normal")
-        pdf.setTextColor(theme.bad)
-        pdf.text("Not signed", sigX1, sigY + 23)
-      }
-
-      // Inspector signature box
-      pdf.setFont("helvetica", "bold")
-      pdf.setTextColor(theme.muted)
-      pdf.text("Inspector signature", sigX2, y + 7)
-
-      if (inspectorSignatureData) {
-        pdf.addImage(inspectorSignatureData, "PNG", sigX2, sigY, sigW, 18)
-      } else {
-        pdf.setDrawColor(11, 58, 102)
-        pdf.setLineWidth(0.6)
-        pdf.line(sigX2, sigY + 18, sigX2 + sigW, sigY + 18)
-        pdf.setFont("helvetica", "normal")
-        pdf.setTextColor(theme.bad)
-        pdf.text("Not signed", sigX2, sigY + 23)
-      }
-
-      // Inspector name (colored)
-      const inspectorColors: Record<string, string> = {
+      const inspectorColors = {
         "Alexandru Dogariu": "#FF8C00",
         "Robert Kerekes": "#8B4513",
         "Eduard Tudose": "#000000",
@@ -1221,15 +944,220 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "Alexandru Florea": "#DAA520",
       }
 
-      const inspectorColor = inspectorColors[selectedInspector] || theme.ink
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(9)
-      pdf.setTextColor(theme.muted)
-      pdf.text("Inspector:", sigX2, y + sigH - 6)
-      pdf.setTextColor(inspectorColor)
-      pdf.text(selectedInspector || "Not selected", sigX2 + 18, y + sigH - 6)
+      const drawCheckbox = (x: number, y: number, checked: boolean) => {
+        pdf.setDrawColor(0)
+        pdf.setLineWidth(0.5)
+        pdf.rect(x, y, 4, 4)
+        if (checked) {
+          pdf.setDrawColor(0, 100, 0)
+          pdf.setLineWidth(0.8)
+          pdf.line(x + 0.5, y + 2, x + 1.5, y + 3.2)
+          pdf.line(x + 1.5, y + 3.2, x + 3.5, y + 0.8)
+        } else {
+          pdf.setDrawColor(255, 0, 0)
+          pdf.setLineWidth(0.8)
+          pdf.line(x, y, x + 4, y + 4)
+          pdf.line(x + 4, y, x, y + 4)
+        }
+        pdf.setDrawColor(0)
+        pdf.setLineWidth(0.5)
+      }
 
-      pdf.setTextColor(theme.ink)
+      const addSafeText = (text: string, x: number, y: number, options = {}, color = "#000000") => {
+        pdf.setTextColor(color)
+        pdf.setFont("helvetica", "bold")
+        pdf.text(text, x, y, options)
+        pdf.setTextColor("#000000")
+      }
+
+      const addLine = (text: string, value: string, x: number, y: number, color = "#000000") => {
+        const label = `${text} `
+        pdf.setFont("helvetica", "bold")
+        pdf.setTextColor("#000000")
+        pdf.text(label, x, y)
+        const labelWidth = pdf.getTextWidth(label)
+        pdf.setFont("helvetica", "bold")
+        pdf.setTextColor(color)
+        pdf.text(value, x + labelWidth, y)
+        pdf.setTextColor("#000000")
+      }
+
+      pdf.setFontSize(18)
+      addSafeText("ADR Checklist", pageWidth / 2, y, { align: "center" })
+      y += 10
+
+      pdf.setFontSize(10)
+
+      const lines = [
+        { label: "Driver's Name:", value: driverName, color: "#191970" },
+        { label: "Truck License Plate:", value: truckPlate, color: "#191970" },
+        { label: "Trailer License Plate:", value: trailerPlate, color: "#191970" },
+      ]
+
+      if (drivingLicenseDate.month && drivingLicenseDate.year) {
+        const expired = drivingLicenseExpired
+        lines.push({
+          label: "Driving License Expiry:",
+          value: `${drivingLicenseDate.month}/${drivingLicenseDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      if (includeAdrCertificate && adrCertificateDate.month && adrCertificateDate.year) {
+        const expired = adrCertificateExpired
+        lines.push({
+          label: "ADR Certificate Expiry:",
+          value: `${adrCertificateDate.month}/${adrCertificateDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      if (truckDocDate.month && truckDocDate.year) {
+        const expired = truckDocExpired
+        lines.push({
+          label: "Truck Document Expiry:",
+          value: `${truckDocDate.month}/${truckDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      if (trailerDocDate.month && trailerDocDate.year) {
+        const expired = trailerDocExpired
+        lines.push({
+          label: "Trailer Document Expiry:",
+          value: `${trailerDocDate.month}/${trailerDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+          color: expired ? "#FF0000" : "#006400",
+        })
+      }
+
+      lines.push({ label: "Inspection Date:", value: checkDate, color: "#191970" })
+
+      lines.forEach(({ label, value, color }) => {
+        addLine(label, value, margin, y, color)
+        y += 6
+      })
+
+      // Remarks
+      const trimmedRemarks = remarks.trim()
+      if (trimmedRemarks) {
+        y += 2
+        addSafeText("Remarks:", margin, y)
+        y += 6
+        pdf.setFont("helvetica", "normal")
+        pdf.setTextColor("#000000")
+        const wrapped = pdf.splitTextToSize(trimmedRemarks, pageWidth - margin * 2)
+        pdf.text(wrapped, margin, y)
+        y += wrapped.length * 5 + 4
+        pdf.setFont("helvetica", "bold")
+      }
+
+      y += 4
+      addSafeText("Equipment Checklist", margin, y)
+      y += 6
+
+      const leftColumnItems = equipmentItems.slice(0, 6)
+      const rightColumnItems = equipmentItems.slice(6)
+      const columnGap = 10
+      const leftX = margin
+      const rightX = pageWidth / 2 + columnGap
+      const columnHeight = Math.max(leftColumnItems.length, rightColumnItems.length)
+      const rowHeight = 8
+
+      for (let i = 0; i < columnHeight; i++) {
+        const currentY = y + i * rowHeight
+
+        const renderItem = (item: any, x: number) => {
+          if (!item) return
+          const isChecked = checkedItems[item.name]
+          const date = expiryDates[item.name]
+          let label = item.name
+
+          if (item.hasDate && date?.month && date?.year) {
+            const now = new Date()
+            const expiry = new Date(`${date.year}-${date.month}-01`)
+            expiry.setMonth(expiry.getMonth() + 1)
+            expiry.setDate(0)
+            const expired = now > expiry
+            const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
+            label = `${item.name} - `
+            drawCheckbox(x, currentY - 3, isChecked && !expired)
+
+            addSafeText(label, x + 6, currentY)
+            addSafeText(dateStr, x + 6 + pdf.getTextWidth(label), currentY, {}, expired ? "#FF0000" : "#006400")
+            return
+          }
+
+          drawCheckbox(x, currentY - 3, isChecked)
+          addSafeText(label, x + 6, currentY)
+
+          // Add "One piece for each driver!" text in red for specific items
+          if (
+            item.name === "Flashlight" ||
+            item.name === "Rubber gloves" ||
+            item.name === "Safety glasses" ||
+            item.name === "Mask + filter (ADR class 6.1/2.3)" ||
+            item.name === "Collection bucket"
+          ) {
+            pdf.setTextColor("#FF0000")
+            pdf.setFont("helvetica", "normal")
+            pdf.text("One piece for each driver!", x + 6, currentY + 4)
+            pdf.setTextColor("#000000")
+            pdf.setFont("helvetica", "bold")
+          }
+        }
+
+        renderItem(leftColumnItems[i], leftX)
+        renderItem(rightColumnItems[i], rightX)
+      }
+
+      y += columnHeight * rowHeight + 10
+      addSafeText("Before Loading", margin, y)
+      y += 6
+      beforeLoadingItems.forEach((item) => {
+        drawCheckbox(margin, y - 3, beforeLoadingChecked[item])
+        addSafeText(item, margin + 6, y)
+        y += 6
+      })
+
+      y += 4
+      addSafeText("After Loading", margin, y)
+      y += 6
+      afterLoadingItems.forEach((item) => {
+        drawCheckbox(margin, y - 3, afterLoadingChecked[item])
+        addSafeText(item, margin + 6, y)
+        y += 6
+      })
+
+      y += 10
+
+      if (signatureData) {
+        pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
+        addSafeText("Driver Signature", margin, y + 25)
+      } else {
+        pdf.setDrawColor(0, 71, 171) // Blue color (RGB)
+        pdf.setLineWidth(0.5)
+        pdf.line(margin, y + 20, margin + 70, y + 20)
+        addSafeText("Driver Signature (Not Signed)", margin, y + 25)
+      }
+
+      const inspectorX = pageWidth - margin - 70
+      if (inspectorSignatureData) {
+        pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
+      } else {
+        pdf.setDrawColor(0, 71, 171) // Blue color (RGB)
+        pdf.setLineWidth(0.5)
+        pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
+      }
+
+      const inspectorColor = inspectorColors[selectedInspector] || "#000000"
+      const inspectorLabel = "Inspector: "
+      pdf.setFont("helvetica", "bold")
+      pdf.setTextColor("#000000")
+      pdf.text(inspectorLabel, inspectorX, y + 25)
+      const labelWidth = pdf.getTextWidth(inspectorLabel)
+      pdf.setFont("helvetica", "bold")
+      pdf.setTextColor(inspectorColor)
+      pdf.text(selectedInspector || "Not selected", inspectorX + labelWidth, y + 25)
 
       // Save the PDF for download only (no email or Google Drive)
       pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
@@ -1239,7 +1167,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       setIsPdfGenerating(false)
     }
   }
-
 
   const resetForm = useCallback(() => {
     setDriverName("")
@@ -1299,6 +1226,21 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     // Reset inspector
     setSelectedInspector("")
+
+    // Reset remarks + photos
+    setRemarks("")
+    setPhotos((prev) => {
+      prev.forEach((p) => {
+        if (p.previewUrl) {
+          try {
+            URL.revokeObjectURL(p.previewUrl)
+          } catch {
+            // ignore
+          }
+        }
+      })
+      return []
+    })
 
     // Reset other states
     setShowResult(false)
@@ -1416,6 +1358,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
         if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
+        if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
         // Validate dates after loading
         if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
@@ -1460,6 +1403,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       afterLoadingChecked,
       expiryDates,
       selectedInspector,
+      remarks,
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
@@ -1477,6 +1421,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     afterLoadingChecked,
     expiryDates,
     selectedInspector,
+    remarks,
   ])
 
   // Add this right after the return statement
@@ -1678,6 +1623,20 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         y += 6
       })
 
+      // Remarks
+      const trimmedRemarks = remarks.trim()
+      if (trimmedRemarks) {
+        y += 2
+        addSafeText("Remarks:", margin, y)
+        y += 6
+        pdf.setFont("helvetica", "normal")
+        pdf.setTextColor("#000000")
+        const wrapped = pdf.splitTextToSize(trimmedRemarks, pageWidth - margin * 2)
+        pdf.text(wrapped, margin, y)
+        y += wrapped.length * 5 + 4
+        pdf.setFont("helvetica", "bold")
+      }
+
       y += 4
       addSafeText("Equipment Checklist", margin, y)
       y += 6
@@ -1774,55 +1733,53 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       console.log("PDF content generated successfully")
       setEmailStatus("PDF generated, preparing to send email...")
 
-      // Get PDF as base64
+      // Convert PDF to base64
+      let pdfBase64 = ""
       try {
         const pdfBuffer = pdf.output("arraybuffer")
-        const pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
-        console.log("PDF converted to base64 successfully, length:", pdfBase64.length)
+        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
+        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
+      } catch (convError: any) {
+        console.error("Error processing PDF:", convError)
+        throw new Error(`PDF processing error: ${convError.message}`)
+      }
 
-        // Check if base64 string is valid
-        if (!pdfBase64 || pdfBase64.length === 0) {
-          throw new Error("Generated PDF is empty")
-        }
+      setEmailStatus("Sending email...")
 
-        setEmailStatus("Sending email...")
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
-        // Send email
-        const response = await fetch("/api/send-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            inspectorName: selectedInspector,
-            pdfBase64: pdfBase64,
-            driverName,
-            truckPlate,
-            trailerPlate,
-            inspectionDate: checkDate,
-          }),
-        })
+      // Send email
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inspectorName: selectedInspector,
+          pdfBase64,
+          driverName,
+          truckPlate,
+          trailerPlate,
+          inspectionDate: checkDate,
+          remarks,
+          photos: uploadedPhotos,
+        }),
+      })
 
-        console.log("API response status:", response.status)
-        const data = await response.json()
-        console.log("API response data:", data)
+      const data = await response.json().catch(() => ({}))
+      console.log("API response status:", response.status)
+      console.log("API response data:", data)
 
-        if (!response.ok) {
-          throw new Error(data.message || `Server responded with status ${response.status}`)
-        }
+      if (!response.ok) {
+        throw new Error(data.message || `Server responded with status ${response.status}`)
+      }
 
-        if (data.success) {
-          let successMessage = "Email sent successfully!"
-          if (data.driveLink) {
-            successMessage += " PDF was also saved to Google Drive."
-          }
-          setEmailStatus(successMessage)
-          // Reset form after successful email
-          resetForm()
-        } else {
-          setEmailStatus(data.message || "Email sent successfully!")
-        }
-      } catch (pdfError) {
-        console.error("Error processing PDF:", pdfError)
-        throw new Error(`PDF processing error: ${pdfError.message}`)
+      if (data.success) {
+        setEmailStatus("Email sent successfully!")
+        resetForm()
+      } else {
+        setEmailStatus(data.message || "Email sent successfully!")
       }
     } catch (err) {
       console.error("Email sending error:", err)
@@ -2335,6 +2292,85 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           </SelectContent>
         </Select>
 
+        {/* Remarks + Photos (below inspector select, above signatures) */}
+        <div className="mt-4">
+          <Label htmlFor="remarks" className="block mb-2">
+            Remarks:
+          </Label>
+          <textarea
+            id="remarks"
+            value={remarks}
+            onChange={(e) => setRemarks(e.target.value)}
+            placeholder="Add any remarks here..."
+            className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
+          />
+
+          <div className="mt-4 flex flex-col gap-3">
+            <div className="flex items-start gap-4">
+              <div className="shrink-0">
+                <Button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  className="bg-black text-white hover:brightness-95"
+                >
+                  Upload photos
+                </Button>
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  className="hidden"
+                  onChange={handlePhotoInputChange}
+                />
+                <p className="mt-1 text-xs text-gray-600">Camera will open on mobile.</p>
+              </div>
+
+              {/* Thumbnails */}
+              <div className="flex flex-wrap gap-2">
+                {photos.map((p) => (
+                  <div
+                    key={p.id}
+                    className="group relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 bg-gray-50"
+                    title={p.name}
+                  >
+                    <img
+                      src={p.previewUrl}
+                      alt={p.name}
+                      className={`h-full w-full object-cover transition-opacity ${p.status === "uploading" || p.status === "queued" ? "opacity-60" : "opacity-100"}`}
+                    />
+
+                    {/* Progress bar overlay */}
+                    {(p.status === "uploading" || p.status === "queued") && (
+                      <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
+                        <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
+                      </div>
+                    )}
+
+                    {/* Remove button */}
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(p.id)}
+                      aria-label="Remove photo"
+                      className="absolute right-1 top-1 rounded bg-black/70 px-1 text-xs text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
+                    >
+                      ×
+                    </button>
+
+                    {/* Error badge */}
+                    {p.status === "error" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-red-600/70 text-[10px] font-semibold text-white">
+                        Error
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Container to hold both signature boxes side by side */}
         <div className="flex gap-6 mt-6">
           <div className="flex-1">
@@ -2376,11 +2412,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         </Button>
         <Button
           onClick={handleSendEmail}
-          disabled={isSendingEmail || isPdfGenerating || !selectedInspector}
+          disabled={
+            isSendingEmail ||
+            isPdfGenerating ||
+            !selectedInspector ||
+            photos.some((p) => p.status === "uploading" || p.status === "queued")
+          }
           style={{ backgroundColor: "#0099d0" }}
           className="w-full hover:brightness-90"
         >
-          {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+          {isSendingEmail ? "Sending Email..." : "Send ZIP via Email"}
         </Button>
 
         {emailStatus && (

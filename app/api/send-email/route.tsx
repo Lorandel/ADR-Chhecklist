@@ -1,4 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
+
+type IncomingPhoto = {
+  url: string
+  name?: string
+  contentType?: string
+}
 export const runtime = "nodejs"
 const inspectorEmails: Record<string, string[]> = {
   "Eduard Tudose": ["eduard.tudose@alblas.nl"],
@@ -57,7 +63,16 @@ export async function POST(req: NextRequest) {
     console.log("=== Email API Called ===")
 
     const body = await req.json()
-    const { inspectorName, driverName, truckPlate, trailerPlate, inspectionDate, pdfBase64 } = body
+    const { inspectorName, driverName, truckPlate, trailerPlate, inspectionDate, pdfBase64, remarks, photos } = body as {
+      inspectorName: string
+      driverName: string
+      truckPlate: string
+      trailerPlate: string
+      inspectionDate: string
+      pdfBase64: string
+      remarks?: string
+      photos?: IncomingPhoto[]
+    }
 
     console.log("Inspector:", inspectorName)
     console.log("Driver:", driverName)
@@ -109,7 +124,8 @@ export async function POST(req: NextRequest) {
     // Convert base64 to buffer
     let pdfBuffer: Buffer
     try {
-      pdfBuffer = Buffer.from(pdfBase64, "base64")
+      const cleanedBase64 = typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
+      pdfBuffer = Buffer.from(cleanedBase64, "base64")
       console.log("PDF buffer size:", pdfBuffer.length, "bytes")
 
       if (pdfBuffer.length === 0) {
@@ -146,6 +162,37 @@ export async function POST(req: NextRequest) {
     } else {
       console.error("❌ Vercel Blob upload failed:", blobResult.error)
     }
+
+    // Create ZIP (PDF + photos)
+    const { default: JSZip } = await import("jszip")
+    const zip = new JSZip()
+    const pdfInZipName = `ADR-Checklist_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}.pdf`
+    zip.file(pdfInZipName, pdfBuffer)
+
+    const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "_")
+
+    const photoList: IncomingPhoto[] = Array.isArray(photos) ? photos : []
+    for (let i = 0; i < photoList.length; i++) {
+      const photo = photoList[i]
+      if (!photo?.url) continue
+      try {
+        const resp = await fetch(photo.url)
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const arrBuf = await resp.arrayBuffer()
+        const buf = Buffer.from(arrBuf)
+        if (buf.length === 0) throw new Error("Empty photo buffer")
+        const original = safeFileName(photo.name || `photo_${i + 1}.jpg`)
+        zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, buf)
+      } catch (e: any) {
+        console.error(`❌ Failed to add photo #${i + 1} to ZIP:`, e?.message)
+      }
+    }
+
+    const zipBuffer = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+      compressionOptions: { level: 6 },
+    })
 
     // Dynamic import for nodemailer (interop safe)
 const nodemailerMod: any = await import("nodemailer")
@@ -191,6 +238,10 @@ Trailer: ${trailerPlate}
 Inspection Date: ${inspectionDate}
 Inspector: ${inspectorName}
 
+Remarks: ${typeof remarks === "string" && remarks.trim() ? remarks.trim() : "-"}
+
+Photos: ${(Array.isArray(photos) ? photos.length : 0) || 0}
+
 ${blobResult.success && blobResult.url ? `The document is also available online: ${blobResult.url}` : ""}
 
 This checklist was generated automatically by the ADR Checklist System.`,
@@ -220,6 +271,14 @@ This checklist was generated automatically by the ADR Checklist System.`,
               <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Inspector:</td>
               <td style="padding: 8px; border: 1px solid #ddd;">${inspectorName}</td>
             </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Remarks:</td>
+              <td style="padding: 8px; border: 1px solid #ddd; white-space: pre-wrap;">${typeof remarks === "string" && remarks.trim() ? remarks.trim() : "-"}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Photos:</td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${(Array.isArray(photos) ? photos.length : 0) || 0}</td>
+            </tr>
           </table>
           
           ${blobResult.success && blobResult.url ? `<p><strong>Online Access:</strong> <a href="${blobResult.url}" target="_blank" style="color: #0066cc;">View/Download PDF Online</a></p>` : ""}
@@ -231,9 +290,9 @@ This checklist was generated automatically by the ADR Checklist System.`,
       `,
       attachments: [
         {
-          filename: `ADR-Check_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}.pdf`,
-          content: pdfBuffer,
-          contentType: "application/pdf",
+          filename: `ADR-Check_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}.zip`,
+          content: zipBuffer,
+          contentType: "application/zip",
         },
       ],
     }
