@@ -881,9 +881,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     // top bar
     pdf.setFillColor(255, 255, 255)
-    pdf.setDrawColor(226, 232, 240)
+    // Lighter red for the header border around the ADR Checklist title
+    pdf.setDrawColor(239, 68, 68)
     pdf.setLineWidth(0.35)
     pdf.roundedRect(margin, y, contentWidth, 18, 3, 3, "FD")
+
+    // thin accent line at the very top of the header (same lighter red)
+    pdf.setLineWidth(0.6)
+    pdf.line(margin + 2, y + 0.9, margin + contentWidth - 2, y + 0.9)
+    pdf.setLineWidth(0.35)
 
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(16)
@@ -1107,34 +1113,32 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     if (y < sigTop - 20) y = renderChecklistSection("Before Loading", beforeLoadingItems, beforeLoadingChecked, y)
     if (y < sigTop - 20) y = renderChecklistSection("After Loading", afterLoadingItems, afterLoadingChecked, y)
+    // ---- signatures (fixed bottom) ----
+    pdf.setFillColor(255, 255, 255)
+    pdf.setDrawColor(226, 232, 240)
+    pdf.roundedRect(margin, sigTop, contentWidth, sigBoxH, 3, 3, "FD")
+
     // Watermark on top (low opacity) to remain visible even over boxes
+    // Draw it AFTER the signature box background so it won't be covered by it.
     if (watermarkData) {
       try {
         // jsPDF supports GState in v2.x; fall back if unavailable
         const GStateCtor = (pdf as any).GState
+        const wmW = 120
+        const wmH = 120
         if (GStateCtor) {
           const prev = (pdf as any).getGState?.()
-          ;(pdf as any).setGState(new GStateCtor({ opacity: 0.12 }))
-          const wmW = 120
-          const wmH = 120
+          ;(pdf as any).setGState(new GStateCtor({ opacity: 0.18 }))
           pdf.addImage(watermarkData, "PNG", (pageWidth - wmW) / 2, (pageHeight - wmH) / 2, wmW, wmH)
           if (prev) (pdf as any).setGState(prev)
           else (pdf as any).setGState(new GStateCtor({ opacity: 1 }))
         } else {
-          const wmW = 120
-          const wmH = 120
           pdf.addImage(watermarkData, "PNG", (pageWidth - wmW) / 2, (pageHeight - wmH) / 2, wmW, wmH)
         }
       } catch {
         // ignore
       }
     }
-
-
-    // ---- signatures (fixed bottom) ----
-    pdf.setFillColor(255, 255, 255)
-    pdf.setDrawColor(226, 232, 240)
-    pdf.roundedRect(margin, sigTop, contentWidth, sigBoxH, 3, 3, "FD")
 
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(10)
