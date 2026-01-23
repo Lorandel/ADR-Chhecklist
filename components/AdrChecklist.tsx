@@ -1,6 +1,6 @@
 "use client"
 
-import type { RefObject, ChangeEvent } from "react"
+import type { RefObject } from "react"
 import { useState, useEffect, useRef, useCallback, createRef, useMemo } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
-import { compressImageFile } from "@/lib/imageCompress"
 
 const capitalizeWords = (str: string) =>
   str
@@ -17,19 +16,6 @@ const capitalizeWords = (str: string) =>
     .join(" ")
 
 export type ChecklistVariant = "full" | "under1000"
-
-type PhotoUploadStatus = "queued" | "uploading" | "done" | "error"
-
-type UploadedPhoto = {
-  id: string
-  name: string
-  previewUrl: string
-  status: PhotoUploadStatus
-  progress: number // 0-100
-  url?: string // public blob url when uploaded
-  contentType?: string
-  error?: string
-}
 
 type ADRChecklistProps = {
   variant: ChecklistVariant
@@ -70,11 +56,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
 
-  // Remarks + photo uploads
   const [remarks, setRemarks] = useState("")
-  const [photos, setPhotos] = useState<UploadedPhoto[]>([])
-  const photoInputRef = useRef<HTMLInputElement>(null)
-  const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -775,142 +757,38 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     return isExpired
   }
 
-  const uploadPhoto = useCallback(
-    (file: File, photoId: string) => {
-      return new Promise<{ url: string; contentType: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        uploadXhrRefs.current[photoId] = xhr
-
-        xhr.open("POST", "/api/upload-photo")
-        xhr.responseType = "json"
-
-        xhr.upload.onprogress = (evt) => {
-          if (!evt.lengthComputable) return
-          const progress = Math.round((evt.loaded / evt.total) * 100)
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
-        }
-
-        xhr.onload = () => {
-          const res = xhr.response
-          if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
-            setPhotos((prev) =>
-              prev.map((p) =>
-                p.id === photoId
-                  ? { ...p, progress: 100, status: "done", url: res.url, contentType: res.contentType || file.type }
-                  : p,
-              ),
-            )
-            resolve({ url: res.url, contentType: res.contentType || file.type })
-            return
-          }
-          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
-          reject(new Error(message))
-        }
-
-        xhr.onerror = () => {
-          const message = "Upload failed (network error)"
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
-          reject(new Error(message))
-        }
-
-        const formData = new FormData()
-        formData.append("file", file)
-        xhr.send(formData)
-
-        // Mark as uploading immediately
-        setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0 } : p)))
-      })
-    },
-    [setPhotos],
-  )
-
-  const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || [])
-    if (files.length === 0) return
-
-    const newPhotos: UploadedPhoto[] = files.map((file) => {
-      const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
-      return {
-        id,
-        name: file.name || `photo_${Date.now()}.jpg`,
-        previewUrl: URL.createObjectURL(file),
-        status: "queued",
-        progress: 0,
-        contentType: file.type,
-      }
-    })
-
-    setPhotos((prev) => [...prev, ...newPhotos])
-
-    // Start uploads
-    await Promise.all(
-      newPhotos.map(async (p, idx) => {
-        const originalFile = files[idx]
-
-        // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
-        let fileToUpload: File = originalFile
-        try {
-          fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
-        } catch {
-          fileToUpload = originalFile
-        }
-
-        // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
-        if (fileToUpload !== originalFile) {
-          setPhotos((prev) =>
-            prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
-          )
-        }
-
-        try {
-          await uploadPhoto(fileToUpload, p.id)
-        } catch {
-          // State already updated in uploadPhoto
-        }
-      }),
-    )
-
-    // Allow selecting the same file again
-    e.target.value = ""
-  }
-
-  const removePhoto = (photoId: string) => {
-    const xhr = uploadXhrRefs.current[photoId]
-    if (xhr && xhr.readyState !== XMLHttpRequest.DONE) {
-      try {
-        xhr.abort()
-      } catch {
-        // ignore
-      }
+  // Generate PDF report (styled, single page, shared for Download + Email)
+  const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+    const bytes = new Uint8Array(buffer)
+    const chunkSize = 0x8000
+    let binary = ""
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize)
+      binary += String.fromCharCode(...chunk)
     }
-
-    setPhotos((prev) => {
-      const toRemove = prev.find((p) => p.id === photoId)
-      if (toRemove?.previewUrl) {
-        try {
-          URL.revokeObjectURL(toRemove.previewUrl)
-        } catch {
-          // ignore
-        }
-      }
-      return prev.filter((p) => p.id !== photoId)
-    })
+    return btoa(binary)
   }
 
+  const buildPdfDocument = async () => {
+    if (!isMounted || typeof window === "undefined") throw new Error("Not mounted")
 
-
-  // Build a single-page, stylized ADR PDF (used for both Download and Send Email)
-  const buildAdrPdf = async () => {
     const { jsPDF } = await import("jspdf")
-
     const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
-    const pageW = pdf.internal.pageSize.getWidth()
-    const pageH = pdf.internal.pageSize.getHeight()
+
+    const pageWidth = pdf.internal.pageSize.getWidth()
+    const pageHeight = pdf.internal.pageSize.getHeight()
 
     const margin = 10
-    const gap = 6
-    const headerH = 18
+    const contentWidth = pageWidth - margin * 2
+    const sigBoxH = 28
+    const sigTop = pageHeight - margin - sigBoxH
+
+    const remarksBoxH = 20
+    const remarksGap = 2
+    const remarksTop = sigTop - remarksGap - remarksBoxH
+    const bottomLimit = remarksTop
+
+    const safe = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : "-")
 
     const inspectorColors: Record<string, string> = {
       "Alexandru Dogariu": "#FF8C00",
@@ -922,465 +800,465 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       "Alexandru Florea": "#DAA520",
     }
 
-    const safeVal = (v: string) => {
-      const s = (v || "").toString().trim()
-      return s.length ? s : "-"
-    }
-
-    const formatExpiry = (
-      d: { month: string; year: string },
-      expired: boolean,
-      opts?: { notApplicable?: boolean },
-    ): { text: string; color: string } => {
-      if (opts?.notApplicable) return { text: "N/A", color: "#6B7280" }
-      if (!d?.month || !d?.year) return { text: "-", color: "#111827" }
-      return {
-        text: `${d.month}/${d.year}${expired ? " (EXPIRED)" : ""}`,
-        color: expired ? "#B91C1C" : "#166534",
-      }
-    }
-
-    const isJpeg = (url: string) => /\.(jpe?g)$/i.test(url)
-
-    const imageCache = new Map<string, string>()
-    const loadImageDataUrl = async (url: string) => {
+    const loadCache = new Map<string, string>()
+    const loadImageAsDataUrl = async (url: string) => {
+      if (loadCache.has(url)) return loadCache.get(url) as string
       const res = await fetch(url)
-      if (!res.ok) throw new Error(`Failed to load image: ${url} (${res.status})`)
+      if (!res.ok) throw new Error(`Failed to fetch image: ${url}`)
       const blob = await res.blob()
-      return await new Promise<string>((resolve, reject) => {
+      const dataUrl = await new Promise<string>((resolve) => {
         const reader = new FileReader()
         reader.onloadend = () => resolve(reader.result as string)
-        reader.onerror = () => reject(new Error(`Failed to read image as DataURL: ${url}`))
         reader.readAsDataURL(blob)
       })
-    }
-
-    const getImage = async (url: string) => {
-      if (imageCache.has(url)) return imageCache.get(url) as string
-      const dataUrl = await loadImageDataUrl(url)
-      imageCache.set(url, dataUrl)
+      loadCache.set(url, dataUrl)
       return dataUrl
     }
 
-    const truncateToWidth = (str: string, maxWidth: number) => {
-      const s = (str || "").toString()
-      if (pdf.getTextWidth(s) <= maxWidth) return s
-      let out = s
-      while (out.length > 0 && pdf.getTextWidth(out + "…") > maxWidth) {
-        out = out.slice(0, -1)
-      }
-      return out.length ? out + "…" : ""
+    // ---- watermark (center, uses file transparency; no "extra" fading) ----
+    let watermarkData: string | null = null
+    try {
+      watermarkData = await loadImageAsDataUrl("/images/albias-watermark.png")
+    } catch {
+      watermarkData = null
     }
 
-    const drawStatus = (x: number, y: number, ok: boolean) => {
-      const w = 5
-      const h = 5
+    // ---- helpers (professional status boxes) ---- (professional status boxes) ----
+    const drawStatus = (x: number, y: number, status: "ok" | "bad" | "na") => {
+      const size = 5.2
+      pdf.setLineWidth(0.35)
 
-      pdf.setLineWidth(0.2)
-      pdf.setDrawColor(203, 213, 225) // slate-300
-
-      if (ok) {
-        pdf.setFillColor(230, 244, 234) // green-50-ish
+      if (status === "ok") {
+        pdf.setFillColor(22, 163, 74) // green
+        pdf.setDrawColor(22, 163, 74)
+        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "F")
+        // check mark
+        pdf.setDrawColor(255, 255, 255)
+        pdf.setLineWidth(0.9)
+        pdf.line(x + 1.1, y + 2.9, x + 2.1, y + 3.9)
+        pdf.line(x + 2.1, y + 3.9, x + 4.3, y + 1.3)
+      } else if (status === "bad") {
+        pdf.setFillColor(220, 38, 38) // red
+        pdf.setDrawColor(220, 38, 38)
+        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "F")
+        // X
+        pdf.setDrawColor(255, 255, 255)
+        pdf.setLineWidth(0.9)
+        pdf.line(x + 1.2, y + 1.2, x + 4.0, y + 4.0)
+        pdf.line(x + 4.0, y + 1.2, x + 1.2, y + 4.0)
       } else {
-        pdf.setFillColor(252, 232, 230) // red-50-ish
+        pdf.setDrawColor(156, 163, 175)
+        pdf.setFillColor(255, 255, 255)
+        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "S")
       }
 
-      // rounded status box
-      // @ts-ignore - roundedRect exists at runtime
-      pdf.roundedRect(x, y, w, h, 1.2, 1.2, "FD")
-
-      if (ok) {
-        pdf.setDrawColor(22, 101, 52)
-        pdf.setLineWidth(0.9)
-        pdf.line(x + 1.1, y + 2.7, x + 2.2, y + 3.8)
-        pdf.line(x + 2.2, y + 3.8, x + 4.0, y + 1.2)
-      } else {
-        pdf.setDrawColor(185, 28, 28)
-        pdf.setLineWidth(0.9)
-        pdf.line(x + 1.2, y + 1.2, x + 3.8, y + 3.8)
-        pdf.line(x + 3.8, y + 1.2, x + 1.2, y + 3.8)
-      }
-
+      // reset
+      pdf.setDrawColor(17, 24, 39)
       pdf.setLineWidth(0.2)
-      pdf.setDrawColor(203, 213, 225)
     }
 
-    const drawIconBox = async (x: number, y: number, size: number, imgUrl: string) => {
-      const img = await getImage(imgUrl)
-      pdf.setLineWidth(0.2)
+    const sectionHeader = (title: string, y: number) => {
+      pdf.setFillColor(248, 250, 252)
       pdf.setDrawColor(226, 232, 240)
-      pdf.setFillColor(255, 255, 255)
-      // @ts-ignore - roundedRect exists at runtime
-      pdf.roundedRect(x, y, size, size, 1.2, 1.2, "FD")
-
-      const padding = 0.6
-      const imgType = isJpeg(imgUrl) ? "JPEG" : "PNG"
-      pdf.addImage(img, imgType, x + padding, y + padding, size - padding * 2, size - padding * 2)
-    }
-
-    // Preload all icons + watermark (faster and consistent)
-    try {
-      const urls = [
-        "/images/albias-watermark.png",
-        ...Array.from(new Set(equipmentItems.map((i) => i.image).filter(Boolean))),
-      ]
-      await Promise.all(
-        urls.map(async (u) => {
-          try {
-            await getImage(u)
-          } catch {
-            // ignore missing icons
-          }
-        }),
-      )
-    } catch {
-      // ignore
-    }
-
-    // Watermark (slightly more visible than the sample)
-    try {
-      const watermark = await getImage("/images/albias-watermark.png")
-      // @ts-ignore - GState exists at runtime
-      const GState = (pdf as any).GState
-      if (GState) {
-        // @ts-ignore
-        const gs = new (pdf as any).GState({ opacity: 0.18 })
-        // @ts-ignore
-        ;(pdf as any).setGState(gs)
-      }
-
-      pdf.addImage(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
-
-      // reset opacity
-      // @ts-ignore
-      if ((pdf as any).setGState && (pdf as any).GState) {
-        // @ts-ignore
-        ;(pdf as any).setGState(new (pdf as any).GState({ opacity: 1 }))
-      }
-    } catch {
-      // Continue without watermark
-    }
-
-    // Header (red)
-    pdf.setFillColor(186, 0, 0)
-    pdf.rect(0, 0, pageW, headerH, "F")
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(18)
-    pdf.setTextColor(255, 255, 255)
-    pdf.text("ADR Checklist", pageW / 2, 12, { align: "center" })
-
-    if (variant === "under1000") {
-      pdf.setFontSize(9)
-      pdf.setFont("helvetica", "normal")
-      pdf.text("UNDER 1000 PTS • Reduced checklist", pageW / 2, 16.5, { align: "center" })
-    }
-
-    pdf.setTextColor(17, 24, 39)
-
-    // ---- Driver / vehicle info card ----
-    const cardX = margin
-    const cardY = headerH + gap
-    const cardW = pageW - margin * 2
-    const cardH = 46
-
-    pdf.setDrawColor(226, 232, 240)
-    pdf.setLineWidth(0.3)
-    pdf.setFillColor(248, 250, 252)
-    // @ts-ignore
-    pdf.roundedRect(cardX, cardY, cardW, cardH, 3, 3, "FD")
-
-    const colGap = 8
-    const colW = (cardW - colGap) / 2
-    const leftX = cardX + 6
-    const rightX = cardX + 6 + colW + colGap
-
-    const rowStartY = cardY + 9
-    const rowStep = 7
-
-    const drawField = (x: number, y: number, label: string, value: string, valueColor = "#111827") => {
-      pdf.setFontSize(8)
-      pdf.setFont("helvetica", "normal")
-      pdf.setTextColor(100, 116, 139) // slate-500
-      pdf.text(label, x, y)
-
+      pdf.setLineWidth(0.35)
+      pdf.roundedRect(margin, y, contentWidth, 7, 2, 2, "FD")
       pdf.setFont("helvetica", "bold")
-      pdf.setTextColor(valueColor)
-      const lw = pdf.getTextWidth(label)
-      const v = truncateToWidth(value, colW - lw - 2)
-      pdf.text(v, x + lw + 1.5, y)
-
-      pdf.setTextColor(17, 24, 39)
+      pdf.setFontSize(10)
+      pdf.setTextColor(15, 23, 42)
+      pdf.text(title, margin + 3, y + 5)
+      return y + 9
     }
 
-    const dl = formatExpiry(drivingLicenseDate, drivingLicenseExpired)
-    const adr = includeAdrCertificate
-      ? formatExpiry(adrCertificateDate, adrCertificateExpired)
-      : formatExpiry({ month: "", year: "" }, false, { notApplicable: true })
-    const truckDoc = formatExpiry(truckDocDate, truckDocExpired)
-    const trailerDoc = formatExpiry(trailerDocDate, trailerDocExpired)
+    const kv = (label: string, value: string, x: number, y: number, valueColor = "#0F172A") => {
+      pdf.setFont("helvetica", "bold")
+      pdf.setFontSize(8.7)
+      pdf.setTextColor(51, 65, 85)
+      pdf.text(label, x, y)
+      const lw = pdf.getTextWidth(label) + 1
+      pdf.setFont("helvetica", "normal")
+      pdf.setTextColor(valueColor)
+      pdf.text(value, x + lw, y)
+      pdf.setTextColor(15, 23, 42)
+    }
 
-    drawField(leftX, rowStartY + 0 * rowStep, "Driver: ", safeVal(driverName), "#111827")
-    drawField(rightX, rowStartY + 0 * rowStep, "Truck plate: ", safeVal(truckPlate), "#111827")
+    const expiryColor = (expired: boolean) => (expired ? "#DC2626" : "#16A34A")
 
-    drawField(leftX, rowStartY + 1 * rowStep, "Trailer plate: ", safeVal(trailerPlate), "#111827")
-    drawField(rightX, rowStartY + 1 * rowStep, "Inspection date: ", safeVal(checkDate), "#111827")
 
-    drawField(leftX, rowStartY + 2 * rowStep, "DL expiry: ", dl.text, dl.color)
-    drawField(rightX, rowStartY + 2 * rowStep, "ADR expiry: ", adr.text, adr.color)
+    const drawFittedParagraph = (
+      text: string,
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      opts?: { maxFont?: number; minFont?: number; step?: number; lineHeightFactor?: number },
+    ) => {
+      const clean = (text || "").trim() || "-"
+      const maxFont = opts?.maxFont ?? 9
+      const minFont = opts?.minFont ?? 1.5
+      const step = opts?.step ?? 0.25
+      const lineHeightFactor = opts?.lineHeightFactor ?? 1.05
 
-    drawField(leftX, rowStartY + 3 * rowStep, "Truck doc: ", truckDoc.text, truckDoc.color)
-    drawField(rightX, rowStartY + 3 * rowStep, "Trailer doc: ", trailerDoc.text, trailerDoc.color)
+      let chosen = minFont
+      let chosenLines: string[] = []
 
-    // Remarks (always show label; content optional)
-    const remarksBoxX = cardX + 6
-    const remarksBoxY = cardY + 34
-    const remarksBoxW = cardW - 12
-    const remarksBoxH = 10
+      for (let fs = maxFont; fs >= minFont; fs = Math.round((fs - step) * 100) / 100) {
+        pdf.setFont("helvetica", "normal")
+        pdf.setFontSize(fs)
+        const lines = pdf.splitTextToSize(clean, w) as string[]
+        const lineH = fs * 0.3527777778 * lineHeightFactor
+        const needed = lines.length * lineH
+        if (needed <= h) {
+          chosen = fs
+          chosenLines = lines
+          break
+        }
+      }
 
-    pdf.setDrawColor(226, 232, 240)
+      if (chosenLines.length === 0) {
+        pdf.setFont("helvetica", "normal")
+        pdf.setFontSize(minFont)
+        chosenLines = pdf.splitTextToSize(clean, w) as string[]
+      }
+
+      const lineH = chosen * 0.3527777778 * lineHeightFactor
+      let cy = y
+      for (const line of chosenLines) {
+        pdf.text(line, x, cy)
+        cy += lineH
+      }
+    }
+
+
+    // ---- header ----
+    let y = margin
+
+    // top bar
     pdf.setFillColor(255, 255, 255)
-    // @ts-ignore
-    pdf.roundedRect(remarksBoxX, remarksBoxY, remarksBoxW, remarksBoxH, 2, 2, "FD")
+    pdf.setDrawColor(226, 232, 240)
+    pdf.setLineWidth(0.35)
+    pdf.roundedRect(margin, y, contentWidth, 18, 3, 3, "FD")
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(16)
+    pdf.setTextColor(15, 23, 42)
+    pdf.text("ADR Checklist", pageWidth / 2, y + 7, { align: "center" })
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(9)
+    pdf.setTextColor(51, 65, 85)
+    pdf.text(variant === "under1000" ? "Reduced (Under 1000 pts)" : "Full (1000+ pts)", pageWidth / 2, y + 14, {
+      align: "center",
+    })
 
     pdf.setFont("helvetica", "normal")
-    pdf.setFontSize(8)
-    pdf.setTextColor(100, 116, 139)
-    pdf.text("Remarks:", remarksBoxX + 2, remarksBoxY + 6.7)
+    pdf.setFontSize(9)
+    pdf.setTextColor(71, 85, 105)
+    pdf.text(`Inspection: ${safe(checkDate)}`, pageWidth - margin - 3, y + 7, { align: "right" })
 
-    const trimmedRemarks = (remarks || "").trim()
-    if (trimmedRemarks) {
-      pdf.setTextColor(17, 24, 39)
-      pdf.setFont("helvetica", "normal")
-      const maxTextW = remarksBoxW - 22
-      const wrapped = pdf.splitTextToSize(trimmedRemarks, maxTextW)
-      const limited = wrapped.slice(0, 2)
-      if (wrapped.length > 2) {
-        // add ellipsis to last visible line
-        limited[1] = truncateToWidth(limited[1], maxTextW - 1)
-        if (!limited[1].endsWith("…")) limited[1] += "…"
-      }
-      pdf.text(limited, remarksBoxX + 20, remarksBoxY + 4.0)
-    }
+    y += 22
 
-    // ---- Equipment checklist box ----
-    const equipX = margin
-    const equipY = cardY + cardH + gap
-    const equipW = pageW - margin * 2
-    const equipH = 84
-
-    pdf.setDrawColor(226, 232, 240)
+    // ---- details ----
     pdf.setFillColor(255, 255, 255)
-    pdf.setLineWidth(0.3)
-    // @ts-ignore
-    pdf.roundedRect(equipX, equipY, equipW, equipH, 3, 3, "FD")
+    pdf.setDrawColor(226, 232, 240)
+    pdf.roundedRect(margin, y, contentWidth, 26, 3, 3, "FD")
 
     pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(11)
-    pdf.setTextColor(17, 24, 39)
-    pdf.text("Equipment Checklist", equipX + 6, equipY + 8)
+    pdf.setFontSize(10)
+    pdf.setTextColor(15, 23, 42)
+    pdf.text("Load details", margin + 3, y + 6)
 
-    const equipInnerY = equipY + 14
-    const equipInnerX = equipX + 6
-    const equipInnerW = equipW - 12
-    const equipColGap = 10
-    const equipColW = (equipInnerW - equipColGap) / 2
+    const leftX = margin + 3
+    const rightX = margin + contentWidth / 2 + 2
 
-    const allEq = equipmentItems
-    const half = Math.ceil(allEq.length / 2)
-    const eqCols = [allEq.slice(0, half), allEq.slice(half)]
-    const colXs = [equipInnerX, equipInnerX + equipColW + equipColGap]
+    kv("Driver:", safe(driverName), leftX, y + 12)
+    kv("Truck:", safe(truckPlate), leftX, y + 17)
+    kv("Trailer:", safe(trailerPlate), leftX, y + 22)
 
-    const eqRowH = 11
+    kv(
+      "Driving licence:",
+      drivingLicenseDate.month && drivingLicenseDate.year
+        ? `${drivingLicenseDate.month}/${drivingLicenseDate.year}${drivingLicenseExpired ? " (EXPIRED)" : ""}`
+        : "-",
+      rightX,
+      y + 12,
+      drivingLicenseDate.month && drivingLicenseDate.year ? expiryColor(drivingLicenseExpired) : "#0F172A",
+    )
 
-    const onePieceItems = new Set([
-      "Flashlight",
-      "Rubber gloves",
-      "Safety glasses",
-      "Mask + filter (ADR class 6.1/2.3)",
-      "Collection bucket",
-    ])
+    kv(
+      "Truck doc:",
+      truckDocDate.month && truckDocDate.year ? `${truckDocDate.month}/${truckDocDate.year}${truckDocExpired ? " (EXPIRED)" : ""}` : "-",
+      rightX,
+      y + 17,
+      truckDocDate.month && truckDocDate.year ? expiryColor(truckDocExpired) : "#0F172A",
+    )
 
-    for (let c = 0; c < 2; c++) {
-      const col = eqCols[c]
-      for (let i = 0; i < col.length; i++) {
-        const item = col[i]
-        const rowY = equipInnerY + i * eqRowH
-        const x0 = colXs[c]
+    kv(
+      "Trailer doc:",
+      trailerDocDate.month && trailerDocDate.year
+        ? `${trailerDocDate.month}/${trailerDocDate.year}${trailerDocExpired ? " (EXPIRED)" : ""}`
+        : "-",
+      rightX,
+      y + 22,
+      trailerDocDate.month && trailerDocDate.year ? expiryColor(trailerDocExpired) : "#0F172A",
+    )
 
-        const isChecked = !!checkedItems[item.name]
-        const date = expiryDates[item.name]
+    y += 32
 
-        let expired = false
-        if (item.hasDate && date?.month && date?.year) {
-          const now = new Date()
-          const expiry = new Date(`${date.year}-${date.month}-01`)
-          expiry.setMonth(expiry.getMonth() + 1)
-          expiry.setDate(0)
-          expired = now > expiry
-        }
+    // ---- Equipment (two columns, with images) ----
+    y = sectionHeader("Equipment", y)
 
-        const ok = item.hasDate ? isChecked && !expired : isChecked
+    const colGap = 6
+    const colW = (contentWidth - colGap) / 2
+    const col1X = margin
+    const col2X = margin + colW + colGap
 
-        drawStatus(x0, rowY - 4, ok)
+    const rowH = 9.2
+    const icon = 7.2
+    const pad = 2
+    const statusSize = 5.2
 
-        // icon box
+    // Preload equipment images (best-effort)
+    const uniquePaths = Array.from(
+      new Set(
+        equipmentItems
+          .map((it: any) => (it?.additionalImage ? it.additionalImage : it?.image))
+          .filter(Boolean) as string[],
+      ),
+    )
+
+    const imageMap = new Map<string, string>()
+    await Promise.all(
+      uniquePaths.map(async (p) => {
         try {
-          await drawIconBox(x0 + 6.2, rowY - 5.2, 7, item.image)
+          const data = await loadImageAsDataUrl(p)
+          imageMap.set(p, data)
         } catch {
-          // ignore missing icon
+          // ignore
         }
+      }),
+    )
 
-        const textX = x0 + 6.2 + 8.5
-        const maxTextW = equipColW - (textX - x0) - 2
-
-        pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(9)
-        pdf.setTextColor(17, 24, 39)
-
-        if (item.hasDate && date?.month && date?.year) {
-          const namePart = `${item.name} - `
-          const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
-
-          const nameFit = truncateToWidth(namePart, maxTextW * 0.65)
-          pdf.text(nameFit, textX, rowY)
-
-          pdf.setFont("helvetica", "bold")
-          pdf.setTextColor(expired ? 185 : 22, expired ? 28 : 101, expired ? 28 : 52)
-          const nameW = pdf.getTextWidth(nameFit)
-          const dateFit = truncateToWidth(dateStr, maxTextW - nameW)
-          pdf.text(dateFit, textX + nameW, rowY)
-
-          pdf.setTextColor(17, 24, 39)
-        } else {
-          const nameFit = truncateToWidth(item.name, maxTextW)
-          pdf.text(nameFit, textX, rowY)
-        }
-
-        // One piece note
-        if (onePieceItems.has(item.name)) {
-          pdf.setFont("helvetica", "normal")
-          pdf.setFontSize(6.5)
-          pdf.setTextColor(185, 28, 28)
-          pdf.text("One piece for each driver!", textX, rowY + 4)
-          pdf.setTextColor(17, 24, 39)
-        }
+    const getEquipmentStatus = (itemName: string, hasDate?: boolean) => {
+      if (hasDate) {
+        const m = expiryDates[itemName]?.month || ""
+        const yr = expiryDates[itemName]?.year || ""
+        const complete = m.length === 2 && yr.length === 4
+        if (!complete) return "na" as const
+        return expiredItems[itemName] ? ("bad" as const) : checkedItems[itemName] ? ("ok" as const) : ("bad" as const)
       }
+      return checkedItems[itemName] ? ("ok" as const) : ("bad" as const)
     }
 
-    // ---- Before/After loading (two boxes) ----
-    const loadY = equipY + equipH + gap
-    const loadWTotal = pageW - margin * 2
-    const loadColGap = 10
-    const boxW = (loadWTotal - loadColGap) / 2
-    const boxH = 70
-
-    const beforeX = margin
-    const afterX = margin + boxW + loadColGap
-
-    const drawLoadingBox = (title: string, x: number, y: number, items: string[], checkedMap: Record<string, boolean>) => {
+    const renderEquipmentRow = (item: any, x: number, yy: number) => {
+      if (!item) return
+      // row container
       pdf.setDrawColor(226, 232, 240)
       pdf.setFillColor(255, 255, 255)
-      pdf.setLineWidth(0.3)
-      // @ts-ignore
-      pdf.roundedRect(x, y, boxW, boxH, 3, 3, "FD")
+      pdf.roundedRect(x, yy, colW, rowH, 2, 2, "FD")
 
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(11)
-      pdf.setTextColor(17, 24, 39)
-      pdf.text(title, x + 6, y + 8)
+      // icon frame
+      const ix = x + pad
+      const iy = yy + (rowH - icon) / 2
+      pdf.setDrawColor(203, 213, 225)
+      pdf.setFillColor(248, 250, 252)
+      pdf.roundedRect(ix, iy, icon, icon, 1.6, 1.6, "FD")
 
-      let yy = y + 16
-      const textX = x + 6 + 6.2
-      const maxW = boxW - 14
-
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(7.8)
-
-      for (const it of items) {
-        const ok = !!checkedMap[it]
-        drawStatus(x + 6, yy - 4, ok)
-        const line = truncateToWidth(it, maxW)
-        pdf.text(line, textX, yy)
-        yy += 7
-      }
-    }
-
-    drawLoadingBox("Before Loading", beforeX, loadY, beforeLoadingItems, beforeLoadingChecked)
-    drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingChecked)
-
-    // ---- Signatures box ----
-    const sigY = loadY + boxH + gap
-    const sigX = margin
-    const sigW = pageW - margin * 2
-    const sigH = 34
-
-    pdf.setDrawColor(226, 232, 240)
-    pdf.setFillColor(255, 255, 255)
-    pdf.setLineWidth(0.3)
-    // @ts-ignore
-    pdf.roundedRect(sigX, sigY, sigW, sigH, 3, 3, "FD")
-
-    const sigInnerPad = 6
-    const sigGap = 12
-    const sigColW = (sigW - sigInnerPad * 2 - sigGap) / 2
-    const leftSigX = sigX + sigInnerPad
-    const rightSigX = sigX + sigInnerPad + sigColW + sigGap
-
-    const sigImgW = sigColW
-    const sigImgH = 16
-
-    const drawSignatureArea = (x: number, title: string, imgData: string | null, extra?: { inspector?: boolean }) => {
-      // signature image / line
+      const imgPath = item.additionalImage ? item.additionalImage : item.image
+      const imgData = imgPath ? imageMap.get(imgPath) : null
       if (imgData) {
         try {
-          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+          pdf.addImage(imgData, "PNG", ix + 0.6, iy + 0.6, icon - 1.2, icon - 1.2)
         } catch {
-          // fallback to line
-          pdf.setDrawColor(148, 163, 184)
-          pdf.setLineWidth(0.4)
-          pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
+          // ignore
         }
-      } else {
-        pdf.setDrawColor(148, 163, 184)
-        pdf.setLineWidth(0.4)
-        pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
       }
 
-      pdf.setFont("helvetica", "normal")
-      pdf.setFontSize(8)
-      pdf.setTextColor(100, 116, 139)
-      pdf.text(title, x, sigY + 30)
+      // label + expiry
+      const textX = ix + icon + 2.2
+      const maxTextW = colW - (textX - x) - statusSize - 3
+      pdf.setFont("helvetica", "bold")
+      pdf.setFontSize(8.2)
+      pdf.setTextColor(15, 23, 42)
 
-      if (extra?.inspector) {
-        const inspectorColor = inspectorColors[selectedInspector] || "#111827"
-        const label = "Inspector: "
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor(17, 24, 39)
-        pdf.text(label, x, sigY + 30)
-        const lw = pdf.getTextWidth(label)
-        pdf.setTextColor(inspectorColor)
-        pdf.text(selectedInspector || "Not selected", x + lw, sigY + 30)
+      const name = item.name || ""
+      const note =
+        name === "Flashlight" ||
+        name === "Rubber gloves" ||
+        name === "Safety glasses" ||
+        name === "Mask + filter (ADR class 6.1/2.3)" ||
+        name === "Collection bucket"
+          ? " (1/driver)"
+          : ""
+
+      const line1 = pdf.splitTextToSize(name + note, maxTextW)
+      pdf.text((line1[0] as string) || "", textX, yy + 4.0)
+
+      // expiry (small, right under)
+      if (item.hasDate) {
+        const m = expiryDates[name]?.month || ""
+        const yr = expiryDates[name]?.year || ""
+        if (m && yr) {
+          const expStr = `${m}/${yr}${expiredItems[name] ? " EXP" : ""}`
+          pdf.setFont("helvetica", "bold")
+          pdf.setFontSize(7.2)
+          pdf.setTextColor(expiryColor(!!expiredItems[name]))
+          pdf.text(expStr, textX, yy + 7.3)
+        } else {
+          pdf.setFont("helvetica", "normal")
+          pdf.setFontSize(7.0)
+          pdf.setTextColor(100, 116, 139)
+          pdf.text("Expiry: -", textX, yy + 7.2)
+        }
       }
 
-      pdf.setTextColor(17, 24, 39)
+      // status box (right)
+      const status = getEquipmentStatus(name, item.hasDate)
+      drawStatus(x + colW - statusSize - 2.2, yy + (rowH - statusSize) / 2, status)
     }
 
-    drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
-    drawSignatureArea(rightSigX, "", inspectorSignatureData, { inspector: true })
+    const leftItems = equipmentItems.slice(0, Math.ceil(equipmentItems.length / 2))
+    const rightItems = equipmentItems.slice(Math.ceil(equipmentItems.length / 2))
+    const rows = Math.max(leftItems.length, rightItems.length)
 
+    for (let i = 0; i < rows; i++) {
+      const yy = y + i * (rowH + 1.8)
+      if (yy + rowH + 4 > bottomLimit) break
+      renderEquipmentRow(leftItems[i], col1X, yy)
+      renderEquipmentRow(rightItems[i], col2X, yy)
+    }
+
+    y += rows * (rowH + 1.8) + 2
+
+    // ---- Before Loading / After Loading (compact, two columns) ----
+    const renderChecklistSection = (title: string, items: string[], checkedMap: Record<string, boolean>, startY: number) => {
+      let cy = sectionHeader(title, startY)
+      const row = 5.1
+      const col1 = items.slice(0, Math.ceil(items.length / 2))
+      const col2 = items.slice(Math.ceil(items.length / 2))
+
+      const max = Math.max(col1.length, col2.length)
+      for (let i = 0; i < max; i++) {
+        const yy = cy + i * row
+        if (yy + row + 3 > bottomLimit) break
+
+        const drawLine = (label: string | undefined, x: number) => {
+          if (!label) return
+          const status: "ok" | "bad" = checkedMap[label] ? "ok" : "bad"
+          drawStatus(x + 2, yy - 3.6, status)
+          pdf.setFont("helvetica", "normal")
+          pdf.setFontSize(8.0)
+          pdf.setTextColor(15, 23, 42)
+          const wrapped = pdf.splitTextToSize(label, colW - 10)
+          pdf.text(wrapped, x + 9, yy)
+        }
+
+        drawLine(col1[i], col1X)
+        drawLine(col2[i], col2X)
+      }
+      return cy + max * row + 2
+    }
+
+    if (y < bottomLimit - 20) y = renderChecklistSection("Before Loading", beforeLoadingItems, beforeLoadingChecked, y)
+    if (y < bottomLimit - 20) y = renderChecklistSection("After Loading", afterLoadingItems, afterLoadingChecked, y)
+    // Watermark on top (low opacity) to remain visible even over boxes
+    if (watermarkData) {
+      try {
+        // jsPDF supports GState in v2.x; fall back if unavailable
+        const GStateCtor = (pdf as any).GState
+        if (GStateCtor) {
+          const prev = (pdf as any).getGState?.()
+          ;(pdf as any).setGState(new GStateCtor({ opacity: 0.12 }))
+          const wmW = 120
+          const wmH = 120
+          pdf.addImage(watermarkData, "PNG", (pageWidth - wmW) / 2, (pageHeight - wmH) / 2, wmW, wmH)
+          if (prev) (pdf as any).setGState(prev)
+          else (pdf as any).setGState(new GStateCtor({ opacity: 1 }))
+        } else {
+          const wmW = 120
+          const wmH = 120
+          pdf.addImage(watermarkData, "PNG", (pageWidth - wmW) / 2, (pageHeight - wmH) / 2, wmW, wmH)
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // ---- remarks (fixed above signatures) ----
+    pdf.setFillColor(255, 255, 255)
+    pdf.setDrawColor(226, 232, 240)
+    pdf.roundedRect(margin, remarksTop, contentWidth, remarksBoxH, 3, 3, "FD")
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(9.2)
+    pdf.setTextColor(15, 23, 42)
+    pdf.text("Remarks", margin + 3, remarksTop + 6)
+
+    pdf.setFont("helvetica", "normal")
+    pdf.setFontSize(8.2)
+    pdf.setTextColor(15, 23, 42)
+    drawFittedParagraph(remarks, margin + 3, remarksTop + 10, contentWidth - 6, remarksBoxH - 12, {
+      maxFont: 8.2,
+      minFont: 1.5,
+      step: 0.25,
+      lineHeightFactor: 1.05,
+    })
+
+
+
+
+    // ---- signatures (fixed bottom) ----
+    pdf.setFillColor(255, 255, 255)
+    pdf.setDrawColor(226, 232, 240)
+    pdf.roundedRect(margin, sigTop, contentWidth, sigBoxH, 3, 3, "FD")
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(10)
+    pdf.setTextColor(15, 23, 42)
+    pdf.text("Signatures", margin + 3, sigTop + 6)
+
+    const sigW = 72
+    const sigH = 14
+    const driverX = margin + 3
+    const inspectorX = margin + contentWidth - 3 - sigW
+
+    pdf.setDrawColor(148, 163, 184)
+    pdf.setLineWidth(0.35)
+    pdf.roundedRect(driverX, sigTop + 10, sigW, sigH, 2, 2, "S")
+    pdf.roundedRect(inspectorX, sigTop + 10, sigW, sigH, 2, 2, "S")
+
+    if (signatureData) {
+      pdf.addImage(signatureData, "PNG", driverX + 1, sigTop + 10.8, sigW - 2, sigH - 1.6)
+    }
+    if (inspectorSignatureData) {
+      pdf.addImage(inspectorSignatureData, "PNG", inspectorX + 1, sigTop + 10.8, sigW - 2, sigH - 1.6)
+    }
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(8.6)
+    pdf.setTextColor(51, 65, 85)
+    pdf.text("Driver", driverX, sigTop + 26)
+    pdf.text("Inspector", inspectorX, sigTop + 26)
+
+    const inspectorColor = inspectorColors[selectedInspector] || "#0F172A"
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(8.6)
+    pdf.setTextColor(inspectorColor)
+    pdf.text(safe(selectedInspector), inspectorX, sigTop + 22)
+
+    // Single page by construction: we never add pages
     return pdf
   }
-  // Generate PDF report
 
-  // Generate PDF report
   const generatePDF = async () => {
     if (!isMounted || typeof window === "undefined") return
-
     setIsPdfGenerating(true)
-
     try {
-      const pdf = await buildAdrPdf()
-      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
+      const pdf = await buildPdfDocument()
+      const filename = `ADR-Check_${(driverName || "Driver").replace(/\s+/g, "_")}_${(checkDate || "date").replace(
+        /-/g,
+        ".",
+      )}.pdf`
+      pdf.save(filename)
     } catch (error) {
       console.error("Error generating PDF:", error)
     } finally {
@@ -1392,6 +1270,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setDriverName("")
     setTruckPlate("")
     setTrailerPlate("")
+    setRemarks("")
     setDrivingLicenseDate({ month: "", year: "" })
     setAdrCertificateDate({ month: "", year: "" })
     setTruckDocDate({ month: "", year: "" })
@@ -1446,21 +1325,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     // Reset inspector
     setSelectedInspector("")
-
-    // Reset remarks + photos
-    setRemarks("")
-    setPhotos((prev) => {
-      prev.forEach((p) => {
-        if (p.previewUrl) {
-          try {
-            URL.revokeObjectURL(p.previewUrl)
-          } catch {
-            // ignore
-          }
-        }
-      })
-      return []
-    })
 
     // Reset other states
     setShowResult(false)
@@ -1578,6 +1442,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
         if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
+
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
         // Validate dates after loading
@@ -1701,27 +1566,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setEmailStatus("Preparing email...")
 
     try {
-      setEmailStatus("Generating PDF...")
+      // Build the same styled 1-page PDF used by Download
+      const pdf = await buildPdfDocument()
+      setEmailStatus("PDF generated, sending email...")
 
-      const pdf = await buildAdrPdf()
+      const pdfBuffer = pdf.output("arraybuffer")
+      const pdfBase64 = arrayBufferToBase64(pdfBuffer)
 
-      // Convert PDF to base64
-      let pdfBase64 = ""
-      try {
-        const pdfBuffer = pdf.output("arraybuffer")
-        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
-        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
-        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
-      } catch (convError: any) {
-        console.error("Error processing PDF:", convError)
-        throw new Error(`PDF processing error: ${convError.message}`)
+      if (!pdfBase64 || pdfBase64.length === 0) {
+        throw new Error("Generated PDF is empty")
       }
-
-      setEmailStatus("Sending email...")
-
-      const uploadedPhotos = photos
-        .filter((p) => p.status === "done" && !!p.url)
-        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
       const response = await fetch("/api/send-email", {
         method: "POST",
@@ -1733,12 +1587,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           truckPlate,
           trailerPlate,
           inspectionDate: checkDate,
-          remarks,
-          photos: uploadedPhotos,
         }),
       })
 
-      const data = await response.json().catch(() => ({}))
+      const data = await response.json()
 
       if (!response.ok) {
         throw new Error(data.message || `Server responded with status ${response.status}`)
@@ -2229,6 +2081,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         </div>
       </div>
 
+
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold mb-4">Remarks:</h2>
+        <textarea
+          value={remarks}
+          onChange={(e) => setRemarks(e.target.value)}
+          className="w-full min-h-[120px] border border-gray-300 rounded-md p-2"
+          placeholder="Write remarks here..."
+        />
+      </div>
+
       {showResult && (
         <div className="mb-6 p-4 border rounded">
           {allChecked ? (
@@ -2260,85 +2123,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             ))}
           </SelectContent>
         </Select>
-
-        {/* Remarks + Photos (below inspector select, above signatures) */}
-        <div className="mt-4">
-          <Label htmlFor="remarks" className="block mb-2">
-            Remarks:
-          </Label>
-          <textarea
-            id="remarks"
-            value={remarks}
-            onChange={(e) => setRemarks(e.target.value)}
-            placeholder="Add any remarks here..."
-            className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
-          />
-
-          <div className="mt-4 flex flex-col gap-3">
-            <div className="flex items-start gap-4">
-              <div className="shrink-0">
-                <Button
-                  type="button"
-                  onClick={() => photoInputRef.current?.click()}
-                  className="bg-black text-white hover:brightness-95"
-                >
-                  Upload photos
-                </Button>
-                <input
-                  ref={photoInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  multiple
-                  className="hidden"
-                  onChange={handlePhotoInputChange}
-                />
-                <p className="mt-1 text-xs text-gray-600">Camera will open on mobile.</p>
-              </div>
-
-              {/* Thumbnails */}
-              <div className="flex flex-wrap gap-2">
-                {photos.map((p) => (
-                  <div
-                    key={p.id}
-                    className="group relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 bg-gray-50"
-                    title={p.name}
-                  >
-                    <img
-                      src={p.previewUrl}
-                      alt={p.name}
-                      className={`h-full w-full object-cover transition-opacity ${p.status === "uploading" || p.status === "queued" ? "opacity-60" : "opacity-100"}`}
-                    />
-
-                    {/* Progress bar overlay */}
-                    {(p.status === "uploading" || p.status === "queued") && (
-                      <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
-                        <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
-                      </div>
-                    )}
-
-                    {/* Remove button */}
-                    <button
-                      type="button"
-                      onClick={() => removePhoto(p.id)}
-                      aria-label="Remove photo"
-                      className="absolute right-1 top-1 rounded bg-black/70 px-1 text-xs text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
-                    >
-                      ×
-                    </button>
-
-                    {/* Error badge */}
-                    {p.status === "error" && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-red-600/70 text-[10px] font-semibold text-white">
-                        Error
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
 
         {/* Container to hold both signature boxes side by side */}
         <div className="flex gap-6 mt-6">
@@ -2381,16 +2165,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         </Button>
         <Button
           onClick={handleSendEmail}
-          disabled={
-            isSendingEmail ||
-            isPdfGenerating ||
-            !selectedInspector ||
-            photos.some((p) => p.status === "uploading" || p.status === "queued")
-          }
+          disabled={isSendingEmail || isPdfGenerating || !selectedInspector}
           style={{ backgroundColor: "#0099d0" }}
           className="w-full hover:brightness-90"
         >
-          {isSendingEmail ? "Sending Email..." : "Send ZIP via Email"}
+          {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
         </Button>
 
         {emailStatus && (
