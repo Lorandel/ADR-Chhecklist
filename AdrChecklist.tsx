@@ -1,6 +1,6 @@
 "use client"
 
-import type { RefObject } from "react"
+import type { RefObject, ChangeEvent } from "react"
 import { useState, useEffect, useRef, useCallback, createRef, useMemo } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
+import { compressImageFile } from "@/lib/imageCompress"
 
 const capitalizeWords = (str: string) =>
   str
@@ -16,6 +17,19 @@ const capitalizeWords = (str: string) =>
     .join(" ")
 
 export type ChecklistVariant = "full" | "under1000"
+
+type PhotoUploadStatus = "queued" | "uploading" | "done" | "error"
+
+type UploadedPhoto = {
+  id: string
+  name: string
+  previewUrl: string
+  status: PhotoUploadStatus
+  progress: number // 0-100
+  url?: string // public blob url when uploaded
+  contentType?: string
+  error?: string
+}
 
 type ADRChecklistProps = {
   variant: ChecklistVariant
@@ -55,6 +69,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [trailerDocExpired, setTrailerDocExpired] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
+
+  // Remarks + photo uploads
+  const [remarks, setRemarks] = useState("")
+  const [photos, setPhotos] = useState<UploadedPhoto[]>([])
+  const photoInputRef = useRef<HTMLInputElement>(null)
+  const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -755,33 +775,179 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     return isExpired
   }
 
-  // Generate PDF report (styled, single page, shared for Download + Email)
-  const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-    const bytes = new Uint8Array(buffer)
-    const chunkSize = 0x8000
-    let binary = ""
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, i + chunkSize)
-      binary += String.fromCharCode(...chunk)
-    }
-    return btoa(binary)
+  const uploadPhoto = useCallback(
+    (file: File, photoId: string) => {
+      return new Promise<{ url: string; contentType: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        uploadXhrRefs.current[photoId] = xhr
+
+        xhr.open("POST", "/api/upload-photo")
+        xhr.responseType = "json"
+
+        xhr.upload.onprogress = (evt) => {
+          if (!evt.lengthComputable) return
+          const progress = Math.round((evt.loaded / evt.total) * 100)
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
+        }
+
+        xhr.onload = () => {
+          const res = xhr.response
+          if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
+            setPhotos((prev) =>
+              prev.map((p) =>
+                p.id === photoId
+                  ? { ...p, progress: 100, status: "done", url: res.url, contentType: res.contentType || file.type }
+                  : p,
+              ),
+            )
+            resolve({ url: res.url, contentType: res.contentType || file.type })
+            return
+          }
+          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          reject(new Error(message))
+        }
+
+        xhr.onerror = () => {
+          const message = "Upload failed (network error)"
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          reject(new Error(message))
+        }
+
+        const formData = new FormData()
+        formData.append("file", file)
+        xhr.send(formData)
+
+        // Mark as uploading immediately
+        setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0 } : p)))
+      })
+    },
+    [setPhotos],
+  )
+
+  const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+
+    const newPhotos: UploadedPhoto[] = files.map((file) => {
+      const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      return {
+        id,
+        name: file.name || `photo_${Date.now()}.jpg`,
+        previewUrl: URL.createObjectURL(file),
+        status: "queued",
+        progress: 0,
+        contentType: file.type,
+      }
+    })
+
+    setPhotos((prev) => [...prev, ...newPhotos])
+
+    // Start uploads
+    await Promise.all(
+      newPhotos.map(async (p, idx) => {
+        const originalFile = files[idx]
+
+        // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
+        let fileToUpload: File = originalFile
+        try {
+          fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
+        } catch {
+          fileToUpload = originalFile
+        }
+
+        // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
+        if (fileToUpload !== originalFile) {
+          setPhotos((prev) =>
+            prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
+          )
+        }
+
+        try {
+          await uploadPhoto(fileToUpload, p.id)
+        } catch {
+          // State already updated in uploadPhoto
+        }
+      }),
+    )
+
+    // Allow selecting the same file again
+    e.target.value = ""
   }
 
-  const buildPdfDocument = async () => {
-    if (!isMounted || typeof window === "undefined") throw new Error("Not mounted")
+  const removePhoto = (photoId: string) => {
+    const xhr = uploadXhrRefs.current[photoId]
+    if (xhr && xhr.readyState !== XMLHttpRequest.DONE) {
+      try {
+        xhr.abort()
+      } catch {
+        // ignore
+      }
+    }
 
-    const { jsPDF } = await import("jspdf")
-    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+    setPhotos((prev) => {
+      const toRemove = prev.find((p) => p.id === photoId)
+      if (toRemove?.previewUrl) {
+        try {
+          URL.revokeObjectURL(toRemove.previewUrl)
+        } catch {
+          // ignore
+        }
+      }
+      return prev.filter((p) => p.id !== photoId)
+    })
+  }
 
+
+  // ---- PDF rendering helpers (used for Download PDF + Send Email) ----
+  const BRAND_RED = "#D82C2D" // picked from watermark dominant red
+
+  const loadImageDataUrl = async (url: string, cache: Map<string, string>) => {
+    const cached = cache.get(url)
+    if (cached) return cached
+
+    const dataUrl = await fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Failed to fetch image: ${url} (${res.status})`)
+        return res.blob()
+      })
+      .then(
+        (blob) =>
+          new Promise<string>((resolve) => {
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(reader.result as string)
+            reader.readAsDataURL(blob)
+          }),
+      )
+
+    cache.set(url, dataUrl)
+    return dataUrl
+  }
+
+  const renderAdrChecklistPdf = async (pdf: any) => {
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
+    const margin = 18
+    let y = 18
 
-    const margin = 10
-    const contentWidth = pageWidth - margin * 2
-    const sigBoxH = 28
-    const sigTop = pageHeight - margin - sigBoxH
+    // watermark (kept same)
+    try {
+      const watermarkUrl = "/images/albias-watermark.png"
+      const watermarkImage = await fetch(watermarkUrl)
+        .then((res) => res.blob())
+        .then(
+          (blob) =>
+            new Promise<string>((resolve) => {
+              const reader = new FileReader()
+              reader.onloadend = () => resolve(reader.result as string)
+              reader.readAsDataURL(blob)
+            }),
+        )
 
-    const safe = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : "-")
+      pdf.addImage(watermarkImage, "PNG", pageWidth / 2 - 50, pageHeight / 2 - 50, 100, 100, undefined, "NONE", 0.1)
+    } catch {
+      // ignore watermark errors
+    }
 
     const inspectorColors: Record<string, string> = {
       "Alexandru Dogariu": "#FF8C00",
@@ -793,691 +959,292 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       "Alexandru Florea": "#DAA520",
     }
 
-    const loadCache = new Map<string, string>()
-    const loadImageAsDataUrl = async (url: string) => {
-      if (loadCache.has(url)) return loadCache.get(url) as string
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`Failed to fetch image: ${url}`)
-      const blob = await res.blob()
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result as string)
-        reader.readAsDataURL(blob)
-      })
-      loadCache.set(url, dataUrl)
-      return dataUrl
-    }
-
-    // ---- watermark (center, uses file transparency; no "extra" fading) ----
-    let watermarkData: string | null = null
-    try {
-      watermarkData = await loadImageAsDataUrl("/images/albias-watermark.png")
-    } catch {
-      watermarkData = null
-    }
-
-    // ---- helpers (professional status boxes) ---- (professional status boxes) ----
-    const drawStatus = (x: number, y: number, status: "ok" | "bad" | "na") => {
-      const size = 5.2
-      pdf.setLineWidth(0.35)
-
-      if (status === "ok") {
-        pdf.setFillColor(22, 163, 74) // green
-        pdf.setDrawColor(22, 163, 74)
-        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "F")
-        // check mark
-        pdf.setDrawColor(255, 255, 255)
-        pdf.setLineWidth(0.9)
-        pdf.line(x + 1.1, y + 2.9, x + 2.1, y + 3.9)
-        pdf.line(x + 2.1, y + 3.9, x + 4.3, y + 1.3)
-      } else if (status === "bad") {
-        pdf.setFillColor(220, 38, 38) // red
-        pdf.setDrawColor(220, 38, 38)
-        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "F")
-        // X
-        pdf.setDrawColor(255, 255, 255)
-        pdf.setLineWidth(0.9)
-        pdf.line(x + 1.2, y + 1.2, x + 4.0, y + 4.0)
-        pdf.line(x + 4.0, y + 1.2, x + 1.2, y + 4.0)
-      } else {
-        pdf.setDrawColor(156, 163, 175)
-        pdf.setFillColor(255, 255, 255)
-        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "S")
-      }
-
-      // reset
-      pdf.setDrawColor(17, 24, 39)
-      pdf.setLineWidth(0.2)
-    }
-
-    const sectionHeader = (title: string, y: number) => {
-      pdf.setFillColor(248, 250, 252)
-      pdf.setDrawColor(226, 232, 240)
-      pdf.setLineWidth(0.35)
-      pdf.roundedRect(margin, y, contentWidth, 7, 2, 2, "FD")
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(10)
-      pdf.setTextColor(15, 23, 42)
-      pdf.text(title, margin + 3, y + 5)
-      return y + 9
-    }
-
-    const kv = (label: string, value: string, x: number, y: number, valueColor = "#0F172A") => {
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(8.7)
-      pdf.setTextColor(51, 65, 85)
-      pdf.text(label, x, y)
-      const lw = pdf.getTextWidth(label) + 1
-      pdf.setFont("helvetica", "normal")
-      pdf.setTextColor(valueColor)
-      pdf.text(value, x + lw, y)
-      pdf.setTextColor(15, 23, 42)
-    }
-
-    const expiryColor = (expired: boolean) => (expired ? "#DC2626" : "#16A34A")
-
-    // ---- header ----
-    let y = margin
-
-    // top bar
-    pdf.setFillColor(255, 255, 255)
-    pdf.setDrawColor(226, 232, 240)
-    pdf.setLineWidth(0.35)
-    pdf.roundedRect(margin, y, contentWidth, 18, 3, 3, "FD")
-
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(16)
-    pdf.setTextColor(15, 23, 42)
-    pdf.text("ADR Checklist", pageWidth / 2, y + 7, { align: "center" })
-
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(9)
-    pdf.setTextColor(51, 65, 85)
-    pdf.text(variant === "under1000" ? "Reduced (Under 1000 pts)" : "Full (1000+ pts)", pageWidth / 2, y + 14, {
-      align: "center",
-    })
-
-    pdf.setFont("helvetica", "normal")
-    pdf.setFontSize(9)
-    pdf.setTextColor(71, 85, 105)
-    pdf.text(`Inspection: ${safe(checkDate)}`, pageWidth - margin - 3, y + 7, { align: "right" })
-
-    y += 22
-
-    // ---- details ----
-    pdf.setFillColor(255, 255, 255)
-    pdf.setDrawColor(226, 232, 240)
-    pdf.roundedRect(margin, y, contentWidth, 26, 3, 3, "FD")
-
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(10)
-    pdf.setTextColor(15, 23, 42)
-    pdf.text("Load details", margin + 3, y + 6)
-
-    const leftX = margin + 3
-    const rightX = margin + contentWidth / 2 + 2
-
-    kv("Driver:", safe(driverName), leftX, y + 12)
-    kv("Truck:", safe(truckPlate), leftX, y + 17)
-    kv("Trailer:", safe(trailerPlate), leftX, y + 22)
-
-    kv(
-      "Driving licence:",
-      drivingLicenseDate.month && drivingLicenseDate.year
-        ? `${drivingLicenseDate.month}/${drivingLicenseDate.year}${drivingLicenseExpired ? " (EXPIRED)" : ""}`
-        : "-",
-      rightX,
-      y + 12,
-      drivingLicenseDate.month && drivingLicenseDate.year ? expiryColor(drivingLicenseExpired) : "#0F172A",
-    )
-
-    kv(
-      "Truck doc:",
-      truckDocDate.month && truckDocDate.year ? `${truckDocDate.month}/${truckDocDate.year}${truckDocExpired ? " (EXPIRED)" : ""}` : "-",
-      rightX,
-      y + 17,
-      truckDocDate.month && truckDocDate.year ? expiryColor(truckDocExpired) : "#0F172A",
-    )
-
-    kv(
-      "Trailer doc:",
-      trailerDocDate.month && trailerDocDate.year
-        ? `${trailerDocDate.month}/${trailerDocDate.year}${trailerDocExpired ? " (EXPIRED)" : ""}`
-        : "-",
-      rightX,
-      y + 22,
-      trailerDocDate.month && trailerDocDate.year ? expiryColor(trailerDocExpired) : "#0F172A",
-    )
-
-    y += 32
-
-    // ---- Equipment (two columns, with images) ----
-    y = sectionHeader("Equipment", y)
-
-    const colGap = 6
-    const colW = (contentWidth - colGap) / 2
-    const col1X = margin
-    const col2X = margin + colW + colGap
-
-    const rowH = 9.2
-    const icon = 7.2
-    const pad = 2
-    const statusSize = 5.2
-
-    // Preload equipment images (best-effort)
-    const uniquePaths = Array.from(
-      new Set(
-        equipmentItems
-          .map((it: any) => (it?.additionalImage ? it.additionalImage : it?.image))
-          .filter(Boolean) as string[],
-      ),
-    )
-
-    const imageMap = new Map<string, string>()
-    await Promise.all(
-      uniquePaths.map(async (p) => {
-        try {
-          const data = await loadImageAsDataUrl(p)
-          imageMap.set(p, data)
-        } catch {
-          // ignore
-        }
-      }),
-    )
-
-    const getEquipmentStatus = (itemName: string, hasDate?: boolean) => {
-      if (hasDate) {
-        const m = expiryDates[itemName]?.month || ""
-        const yr = expiryDates[itemName]?.year || ""
-        const complete = m.length === 2 && yr.length === 4
-        if (!complete) return "na" as const
-        return expiredItems[itemName] ? ("bad" as const) : checkedItems[itemName] ? ("ok" as const) : ("bad" as const)
-      }
-      return checkedItems[itemName] ? ("ok" as const) : ("bad" as const)
-    }
-
-    const renderEquipmentRow = (item: any, x: number, yy: number) => {
-      if (!item) return
-      // row container
-      pdf.setDrawColor(226, 232, 240)
+    const drawCheckbox = (x: number, yTop: number, checked: boolean) => {
+      const s = 5
+      const r = 0.9
+      pdf.setDrawColor(60)
+      pdf.setLineWidth(0.45)
       pdf.setFillColor(255, 255, 255)
-      pdf.roundedRect(x, yy, colW, rowH, 2, 2, "FD")
+      pdf.roundedRect(x, yTop, s, s, r, r, "FD")
 
-      // icon frame
-      const ix = x + pad
-      const iy = yy + (rowH - icon) / 2
-      pdf.setDrawColor(203, 213, 225)
-      pdf.setFillColor(248, 250, 252)
-      pdf.roundedRect(ix, iy, icon, icon, 1.6, 1.6, "FD")
+      if (checked) {
+        pdf.setDrawColor(0, 120, 0)
+        pdf.setLineWidth(1.0)
+        pdf.line(x + 1.0, yTop + 2.7, x + 2.1, yTop + 3.9)
+        pdf.line(x + 2.0, yTop + 3.9, x + 4.2, yTop + 1.2)
+      } else {
+        pdf.setDrawColor(200, 0, 0)
+        pdf.setLineWidth(0.95)
+        pdf.line(x + 1.0, yTop + 1.0, x + 4.0, yTop + 4.0)
+        pdf.line(x + 4.0, yTop + 1.0, x + 1.0, yTop + 4.0)
+      }
+      pdf.setDrawColor(0)
+      pdf.setLineWidth(0.3)
+    }
 
-      const imgPath = item.additionalImage ? item.additionalImage : item.image
-      const imgData = imgPath ? imageMap.get(imgPath) : null
-      if (imgData) {
+    const addBold = (text: string, x: number, y: number, options: any = {}, color = "#000000") => {
+      pdf.setTextColor(color)
+      pdf.setFont("helvetica", "bold")
+      pdf.text(text, x, y, options)
+      pdf.setTextColor("#000000")
+    }
+
+    const addNormalWrapped = (text: string, x: number, y: number, maxWidth: number, lineH = 4.6) => {
+      pdf.setFont("helvetica", "normal")
+      pdf.setTextColor("#000000")
+      const wrapped = pdf.splitTextToSize(text, maxWidth)
+      pdf.text(wrapped, x, y)
+      return { lines: wrapped.length, height: wrapped.length * lineH }
+    }
+
+    const addKeyValue = (label: string, value: string, x: number, y: number, valueColor = "#191970") => {
+      const labelColW = 34
+      pdf.setFont("helvetica", "bold")
+      pdf.setTextColor("#000000")
+      pdf.text(label, x, y)
+      pdf.setFont("helvetica", "bold")
+      pdf.setTextColor(valueColor)
+      pdf.text(value || "-", x + labelColW, y)
+      pdf.setTextColor("#000000")
+    }
+
+    pdf.setFontSize(20)
+    addBold("ADR Checklist", pageWidth / 2, y, { align: "center" }, BRAND_RED)
+    y += 8.5
+
+    pdf.setFontSize(11)
+
+    const infoLines: Array<{ label: string; value: string; color?: string }> = [
+      { label: "Driver:", value: driverName, color: "#191970" },
+      { label: "Truck:", value: truckPlate, color: "#191970" },
+      { label: "Trailer:", value: trailerPlate, color: "#191970" },
+    ]
+
+    if (drivingLicenseDate.month && drivingLicenseDate.year) {
+      const expired = drivingLicenseExpired
+      infoLines.push({
+        label: "Driving licence:",
+        value: `${drivingLicenseDate.month}/${drivingLicenseDate.year}${expired ? " (EXPIRED)" : ""}`,
+        color: expired ? "#FF0000" : "#006400",
+      })
+    }
+
+    if (includeAdrCertificate && adrCertificateDate.month && adrCertificateDate.year) {
+      const expired = adrCertificateExpired
+      infoLines.push({
+        label: "ADR cert:",
+        value: `${adrCertificateDate.month}/${adrCertificateDate.year}${expired ? " (EXPIRED)" : ""}`,
+        color: expired ? "#FF0000" : "#006400",
+      })
+    }
+
+    if (truckDocDate.month && truckDocDate.year) {
+      const expired = truckDocExpired
+      infoLines.push({
+        label: "Truck doc:",
+        value: `${truckDocDate.month}/${truckDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+        color: expired ? "#FF0000" : "#006400",
+      })
+    }
+
+    if (trailerDocDate.month && trailerDocDate.year) {
+      const expired = trailerDocExpired
+      infoLines.push({
+        label: "Trailer doc:",
+        value: `${trailerDocDate.month}/${trailerDocDate.year}${expired ? " (EXPIRED)" : ""}`,
+        color: expired ? "#FF0000" : "#006400",
+      })
+    }
+
+    infoLines.push({ label: "Date:", value: checkDate, color: "#191970" })
+
+    for (const line of infoLines) {
+      addKeyValue(line.label, line.value, margin, y, line.color || "#191970")
+      y += 5.6
+    }
+
+    const trimmedRemarks = remarks.trim()
+    if (trimmedRemarks) {
+      y += 1.5
+      addBold("Remarks:", margin, y, {}, BRAND_RED)
+      y += 5.2
+      const { height } = addNormalWrapped(trimmedRemarks, margin, y, pageWidth - margin * 2, 4.6)
+      y += height + 2.5
+      pdf.setFont("helvetica", "bold")
+    }
+
+    y += 2
+    pdf.setFontSize(11)
+    addBold("Equipment Checklist", margin, y, {}, BRAND_RED)
+    y += 6.2
+
+    const imgCache = new Map<string, string>()
+    const imgSize = 6.5
+
+    const leftColumnItems = equipmentItems.slice(0, 6)
+    const rightColumnItems = equipmentItems.slice(6)
+    const columnGap = 10
+    const leftX = margin
+    const rightX = pageWidth / 2 + columnGap
+    const columnW = pageWidth / 2 - margin - columnGap
+    const columnHeight = Math.max(leftColumnItems.length, rightColumnItems.length)
+    const rowH = 8
+
+    const renderEquipment = async (item: any, colX: number, rowY: number) => {
+      if (!item) return
+
+      const isChecked = !!checkedItems[item.name]
+      const date = expiryDates[item.name]
+
+      drawCheckbox(colX, rowY - 4.7, isChecked)
+
+      const textX = colX + 6.3
+      const baselineY = rowY
+      pdf.setFont("helvetica", "bold")
+      pdf.setTextColor("#000000")
+
+      let label = item.name
+      let dateStr = ""
+      let expired = false
+
+      if (item.hasDate && date?.month && date?.year) {
+        const now = new Date()
+        const expiry = new Date(`${date.year}-${date.month}-01`)
+        expiry.setMonth(expiry.getMonth() + 1)
+        expiry.setDate(0)
+        expired = now > expiry
+        dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
+        label = `${item.name} -`
+      }
+
+      pdf.text(label, textX, baselineY)
+      let afterTextX = textX + pdf.getTextWidth(label) + 1.6
+
+      if (dateStr) {
+        pdf.setTextColor(expired ? "#FF0000" : "#006400")
+        pdf.text(dateStr, afterTextX, baselineY)
+        afterTextX += pdf.getTextWidth(dateStr) + 1.6
+        pdf.setTextColor("#000000")
+      }
+
+      if (
+        item.name === "Flashlight" ||
+        item.name === "Rubber gloves" ||
+        item.name === "Safety glasses" ||
+        item.name === "Mask + filter (ADR class 6.1/2.3)" ||
+        item.name === "Collection bucket"
+      ) {
+        pdf.setTextColor("#B00000")
+        pdf.setFont("helvetica", "normal")
+        pdf.setFontSize(9.5)
+        pdf.text("One piece for each driver!", textX, baselineY + 4)
+        pdf.setFontSize(11)
+        pdf.setFont("helvetica", "bold")
+        pdf.setTextColor("#000000")
+      }
+
+      if (item.image) {
         try {
-          pdf.addImage(imgData, "PNG", ix + 0.6, iy + 0.6, icon - 1.2, icon - 1.2)
+          const dataUrl = await loadImageDataUrl(item.image, imgCache)
+          const maxX = colX + columnW - imgSize
+          const imgX = Math.min(afterTextX, maxX)
+          const imgY = baselineY - imgSize + 1.4
+          pdf.addImage(dataUrl, "PNG", imgX, imgY, imgSize, imgSize)
         } catch {
           // ignore
         }
       }
-
-      // label + expiry
-      const textX = ix + icon + 2.2
-      const maxTextW = colW - (textX - x) - statusSize - 3
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(8.2)
-      pdf.setTextColor(15, 23, 42)
-
-      const name = item.name || ""
-      const note =
-        name === "Flashlight" ||
-        name === "Rubber gloves" ||
-        name === "Safety glasses" ||
-        name === "Mask + filter (ADR class 6.1/2.3)" ||
-        name === "Collection bucket"
-          ? " (1/driver)"
-          : ""
-
-      const line1 = pdf.splitTextToSize(name + note, maxTextW)
-      pdf.text((line1[0] as string) || "", textX, yy + 4.0)
-
-      // expiry (small, right under)
-      if (item.hasDate) {
-        const m = expiryDates[name]?.month || ""
-        const yr = expiryDates[name]?.year || ""
-        if (m && yr) {
-          const expStr = `${m}/${yr}${expiredItems[name] ? " EXP" : ""}`
-          pdf.setFont("helvetica", "bold")
-          pdf.setFontSize(7.2)
-          pdf.setTextColor(expiryColor(!!expiredItems[name]))
-          pdf.text(expStr, textX, yy + 7.3)
-        } else {
-          pdf.setFont("helvetica", "normal")
-          pdf.setFontSize(7.0)
-          pdf.setTextColor(100, 116, 139)
-          pdf.text("Expiry: -", textX, yy + 7.2)
-        }
-      }
-
-      // status box (right)
-      const status = getEquipmentStatus(name, item.hasDate)
-      drawStatus(x + colW - statusSize - 2.2, yy + (rowH - statusSize) / 2, status)
     }
 
-    const leftItems = equipmentItems.slice(0, Math.ceil(equipmentItems.length / 2))
-    const rightItems = equipmentItems.slice(Math.ceil(equipmentItems.length / 2))
-    const rows = Math.max(leftItems.length, rightItems.length)
-
-    for (let i = 0; i < rows; i++) {
-      const yy = y + i * (rowH + 1.8)
-      if (yy + rowH + 4 > sigTop) break
-      renderEquipmentRow(leftItems[i], col1X, yy)
-      renderEquipmentRow(rightItems[i], col2X, yy)
+    for (let i = 0; i < columnHeight; i++) {
+      const rowY = y + i * rowH
+      await renderEquipment(leftColumnItems[i], leftX, rowY)
+      await renderEquipment(rightColumnItems[i], rightX, rowY)
     }
 
-    y += rows * (rowH + 1.8) + 2
+    y += columnHeight * rowH + 8
 
-    // ---- Before Loading / After Loading (compact, two columns) ----
-    const renderChecklistSection = (title: string, items: string[], checkedMap: Record<string, boolean>, startY: number) => {
-      let cy = sectionHeader(title, startY)
-      const row = 5.1
-      const col1 = items.slice(0, Math.ceil(items.length / 2))
-      const col2 = items.slice(Math.ceil(items.length / 2))
-
-      const max = Math.max(col1.length, col2.length)
-      for (let i = 0; i < max; i++) {
-        const yy = cy + i * row
-        if (yy + row + 3 > sigTop) break
-
-        const drawLine = (label: string | undefined, x: number) => {
-          if (!label) return
-          const status: "ok" | "bad" = checkedMap[label] ? "ok" : "bad"
-          drawStatus(x + 2, yy - 3.6, status)
-          pdf.setFont("helvetica", "normal")
-          pdf.setFontSize(8.0)
-          pdf.setTextColor(15, 23, 42)
-          const wrapped = pdf.splitTextToSize(label, colW - 10)
-          pdf.text(wrapped, x + 9, yy)
-        }
-
-        drawLine(col1[i], col1X)
-        drawLine(col2[i], col2X)
-      }
-      return cy + max * row + 2
+    pdf.setFontSize(11)
+    addBold("Before Loading", margin, y, {}, BRAND_RED)
+    y += 6
+    for (const item of beforeLoadingItems) {
+      drawCheckbox(margin, y - 4.7, !!beforeLoadingChecked[item])
+      addBold(item, margin + 6.3, y)
+      y += 5.6
     }
 
-    if (y < sigTop - 20) y = renderChecklistSection("Before Loading", beforeLoadingItems, beforeLoadingChecked, y)
-    if (y < sigTop - 20) y = renderChecklistSection("After Loading", afterLoadingItems, afterLoadingChecked, y)
-    // Watermark on top (low opacity) to remain visible even over boxes
-    if (watermarkData) {
-      try {
-        // jsPDF supports GState in v2.x; fall back if unavailable
-        const GStateCtor = (pdf as any).GState
-        if (GStateCtor) {
-          const prev = (pdf as any).getGState?.()
-          ;(pdf as any).setGState(new GStateCtor({ opacity: 0.12 }))
-          const wmW = 120
-          const wmH = 120
-          pdf.addImage(watermarkData, "PNG", (pageWidth - wmW) / 2, (pageHeight - wmH) / 2, wmW, wmH)
-          if (prev) (pdf as any).setGState(prev)
-          else (pdf as any).setGState(new GStateCtor({ opacity: 1 }))
-        } else {
-          const wmW = 120
-          const wmH = 120
-          pdf.addImage(watermarkData, "PNG", (pageWidth - wmW) / 2, (pageHeight - wmH) / 2, wmW, wmH)
-        }
-      } catch {
-        // ignore
-      }
+    y += 2
+    addBold("After Loading", margin, y, {}, BRAND_RED)
+    y += 6
+    for (const item of afterLoadingItems) {
+      drawCheckbox(margin, y - 4.7, !!afterLoadingChecked[item])
+      addBold(item, margin + 6.3, y)
+      y += 5.6
     }
 
-
-    // ---- signatures (fixed bottom) ----
-    pdf.setFillColor(255, 255, 255)
-    pdf.setDrawColor(226, 232, 240)
-    pdf.roundedRect(margin, sigTop, contentWidth, sigBoxH, 3, 3, "FD")
-
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(10)
-    pdf.setTextColor(15, 23, 42)
-    pdf.text("Signatures", margin + 3, sigTop + 6)
-
-    const sigW = 72
-    const sigH = 14
-    const driverX = margin + 3
-    const inspectorX = margin + contentWidth - 3 - sigW
-
-    pdf.setDrawColor(148, 163, 184)
-    pdf.setLineWidth(0.35)
-    pdf.roundedRect(driverX, sigTop + 10, sigW, sigH, 2, 2, "S")
-    pdf.roundedRect(inspectorX, sigTop + 10, sigW, sigH, 2, 2, "S")
+    y += 8
+    pdf.setFontSize(10.5)
 
     if (signatureData) {
-      pdf.addImage(signatureData, "PNG", driverX + 1, sigTop + 10.8, sigW - 2, sigH - 1.6)
+      pdf.addImage(signatureData, "PNG", margin, y, 70, 20)
+      addBold("Driver Signature", margin, y + 25)
+    } else {
+      pdf.setDrawColor(0, 71, 171)
+      pdf.setLineWidth(0.5)
+      pdf.line(margin, y + 20, margin + 70, y + 20)
+      addBold("Driver Signature (Not Signed)", margin, y + 25)
     }
+
+    const inspectorX = pageWidth - margin - 70
     if (inspectorSignatureData) {
-      pdf.addImage(inspectorSignatureData, "PNG", inspectorX + 1, sigTop + 10.8, sigW - 2, sigH - 1.6)
+      pdf.addImage(inspectorSignatureData, "PNG", inspectorX, y, 70, 20)
+    } else {
+      pdf.setDrawColor(0, 71, 171)
+      pdf.setLineWidth(0.5)
+      pdf.line(inspectorX, y + 20, inspectorX + 70, y + 20)
     }
 
+    const inspectorColor = inspectorColors[selectedInspector] || "#000000"
+    const inspectorLabel = "Inspector:"
     pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(8.6)
-    pdf.setTextColor(51, 65, 85)
-    pdf.text("Driver", driverX, sigTop + 26)
-    pdf.text("Inspector", inspectorX, sigTop + 26)
-
-    const inspectorColor = inspectorColors[selectedInspector] || "#0F172A"
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(8.6)
+    pdf.setTextColor("#000000")
+    pdf.text(inspectorLabel, inspectorX, y + 25)
+    const labelW = pdf.getTextWidth(inspectorLabel) + 2
     pdf.setTextColor(inspectorColor)
-    pdf.text(safe(selectedInspector), inspectorX, sigTop + 22)
-
-    // Single page by construction: we never add pages
-    return pdf
+    pdf.text(selectedInspector || "Not selected", inspectorX + labelW, y + 25)
+    pdf.setTextColor("#000000")
   }
 
-  const generatePDF = async () => {
+  // --- PDF actions (Download PDF + Send Email) ---
+  const handleDownloadPDF = async () => {
     if (!isMounted || typeof window === "undefined") return
+
     setIsPdfGenerating(true)
+    setEmailStatus(null)
+
     try {
-      const pdf = await buildPdfDocument()
-      const filename = `ADR-Check_${(driverName || "Driver").replace(/\s+/g, "_")}_${(checkDate || "date").replace(
-        /-/g,
-        ".",
-      )}.pdf`
-      pdf.save(filename)
-    } catch (error) {
-      console.error("Error generating PDF:", error)
+      const { jsPDF } = await import("jspdf")
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+      await renderAdrChecklistPdf(pdf)
+
+      const safeName = (driverName || "driver")
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^a-zA-Z0-9_\-]/g, "")
+      const safeDate = (checkDate || "date")
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^0-9_\-]/g, "")
+      const fileName = `ADR_Checklist_${safeName}_${safeDate}.pdf`
+
+      pdf.save(fileName)
+    } catch (err: any) {
+      console.error("PDF download error:", err)
+      setEmailStatus(`Failed to generate PDF: ${err?.message || err}`)
     } finally {
       setIsPdfGenerating(false)
     }
   }
-
-  const resetForm = useCallback(() => {
-    setDriverName("")
-    setTruckPlate("")
-    setTrailerPlate("")
-    setDrivingLicenseDate({ month: "", year: "" })
-    setAdrCertificateDate({ month: "", year: "" })
-    setTruckDocDate({ month: "", year: "" })
-    setTrailerDocDate({ month: "", year: "" })
-    setDrivingLicenseExpired(false)
-    setAdrCertificateExpired(false)
-    setTruckDocExpired(false)
-    setTrailerDocExpired(false)
-    setDateValid({
-      drivingLicense: false,
-      adrCertificate: false,
-      truckDoc: false,
-      trailerDoc: false,
-    })
-
-    // Reset equipment items
-    const resetEquipmentState: Record<string, boolean> = {}
-    equipmentItems.forEach((item) => {
-      resetEquipmentState[item.name] = false
-    })
-    setCheckedItems(resetEquipmentState)
-
-    // Reset before loading items
-    const resetBeforeLoadingState: Record<string, boolean> = {}
-    beforeLoadingItems.forEach((item) => {
-      resetBeforeLoadingState[item] = false
-    })
-    setBeforeLoadingChecked(resetBeforeLoadingState)
-
-    // Reset after loading items
-    const resetAfterLoadingState: Record<string, boolean> = {}
-    afterLoadingItems.forEach((item) => {
-      resetAfterLoadingState[item] = false
-    })
-    setAfterLoadingChecked(resetAfterLoadingState)
-
-    // Reset expiry dates
-    const resetDates: Record<string, { month: string; year: string }> = {}
-    const resetExpiredItems: Record<string, boolean> = {}
-    equipmentItems.forEach((item) => {
-      if (item.hasDate) {
-        resetDates[item.name] = { month: "", year: "" }
-        resetExpiredItems[item.name] = false
-      }
-    })
-    setExpiryDates(resetDates)
-    setExpiredItems(resetExpiredItems)
-
-    // Reset signatures (important: these must run with the latest canvas refs)
-    clearSignature()
-    clearInspectorSignature()
-
-    // Reset inspector
-    setSelectedInspector("")
-
-    // Reset other states
-    setShowResult(false)
-    setMissingItems([])
-    setAllChecked(false)
-
-    // Clear localStorage
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(storageKey)
-    }
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, storageKey])
-
-  // Initialize component
-  useEffect(() => {
-    setIsMounted(true)
-
-    // Set today's date and inspection info
-    const today = new Date()
-    const day = String(today.getDate()).padStart(2, "0")
-    const month = String(today.getMonth() + 1).padStart(2, "0")
-    const year = today.getFullYear()
-
-    setCheckDate(`${day}-${month}-${year}`)
-    setInspectionMonth(today.getMonth() + 1)
-    setInspectionYear(today.getFullYear())
-
-    // Initialize equipment items
-    const initialEquipmentState: Record<string, boolean> = {}
-    equipmentItems.forEach((item) => {
-      initialEquipmentState[item.name] = false
-    })
-    setCheckedItems(initialEquipmentState)
-
-    const initialBeforeLoadingState: Record<string, boolean> = {}
-    beforeLoadingItems.forEach((item) => {
-      initialBeforeLoadingState[item] = false
-    })
-    setBeforeLoadingChecked(initialBeforeLoadingState)
-
-    const initialAfterLoadingState: Record<string, boolean> = {}
-    afterLoadingItems.forEach((item) => {
-      initialAfterLoadingState[item] = false
-    })
-    setAfterLoadingChecked(initialAfterLoadingState)
-
-    // Initialize expiry date refs and states
-    const initialDates: Record<string, { month: string; year: string }> = {}
-    const initialExpiredItems: Record<string, boolean> = {}
-
-    equipmentItems.forEach((item) => {
-      if (item.hasDate) {
-        initialDates[item.name] = { month: "", year: "" }
-        initialExpiredItems[item.name] = false
-        dateInputRefs.current[item.name] = {
-          month: createRef<HTMLInputElement>(),
-          year: createRef<HTMLInputElement>(),
-        }
-      }
-    })
-
-    setExpiryDates(initialDates)
-    setExpiredItems(initialExpiredItems)
-  }, [])
-
-  // Effect for canvas initialization
-  useEffect(() => {
-    if (!isMounted || typeof window === "undefined") return
-
-    // Initialize signature canvases
-    initializeCanvas()
-    initializeInspectorCanvas()
-
-    const cleanupDriver = setupSignaturePad()
-    const cleanupInspector = setupInspectorSignaturePad()
-
-    // ✨ Title fade-in animation
-    const title = document.getElementById("adr-title")
-    if (title) {
-      title.style.opacity = "0"
-      title.style.transform = "translateY(-10px)"
-      setTimeout(() => {
-        title.style.transition = "all 0.6s ease-out"
-        title.style.opacity = "1"
-        title.style.transform = "translateY(0)"
-      }, 200)
-    }
-
-    // Cleanup event listeners on unmount
-    return () => {
-      if (cleanupDriver) cleanupDriver()
-      if (cleanupInspector) cleanupInspector()
-    }
-  }, [isMounted])
-
-  // Separate useEffect for localStorage operations
-  useEffect(() => {
-    if (!isMounted || typeof window === "undefined") return
-
-    // Try to load saved data from localStorage
-    const savedData = localStorage.getItem(storageKey)
-    if (savedData) {
-      try {
-        const parsedData = JSON.parse(savedData)
-
-        // Restore form data
-        if (parsedData.driverName) setDriverName(parsedData.driverName)
-        if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
-        if (parsedData.trailerPlate) setTrailerPlate(parsedData.trailerPlate)
-        if (parsedData.drivingLicenseDate) setDrivingLicenseDate(parsedData.drivingLicenseDate)
-        if (includeAdrCertificate && parsedData.adrCertificateDate) setAdrCertificateDate(parsedData.adrCertificateDate)
-        if (parsedData.truckDocDate) setTruckDocDate(parsedData.truckDocDate)
-        if (parsedData.trailerDocDate) setTrailerDocDate(parsedData.trailerDocDate)
-        if (parsedData.checkedItems) setCheckedItems(parsedData.checkedItems)
-        if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
-        if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
-        if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
-        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
-
-        // Validate dates after loading
-        if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
-          setTimeout(() => validateLicenseDate("drivingLicense"), 0)
-        }
-        if (includeAdrCertificate && parsedData.adrCertificateDate?.month && parsedData.adrCertificateDate?.year) {
-          setTimeout(() => validateLicenseDate("adrCertificate"), 0)
-        }
-        if (parsedData.truckDocDate?.month && parsedData.truckDocDate?.year) {
-          setTimeout(() => validateTruckDocDate(), 0)
-        }
-        if (parsedData.trailerDocDate?.month && parsedData.trailerDocDate?.year) {
-          setTimeout(() => validateTrailerDocDate(), 0)
-        }
-
-        // Validate equipment expiry dates
-        if (parsedData.expiryDates) {
-          Object.keys(parsedData.expiryDates).forEach((itemName) => {
-            setTimeout(() => checkIfDateIsExpired(itemName), 0)
-          })
-        }
-      } catch (error) {
-        console.error("Error loading saved data:", error)
-      }
-    }
-  }, [isMounted])
-
-  // Add an effect to save data to localStorage whenever relevant state changes
-  useEffect(() => {
-    if (!isMounted || typeof window === "undefined") return
-
-    const dataToSave = {
-      driverName,
-      truckPlate,
-      trailerPlate,
-      drivingLicenseDate,
-      ...(includeAdrCertificate ? { adrCertificateDate } : {}),
-      truckDocDate,
-      trailerDocDate,
-      checkedItems,
-      beforeLoadingChecked,
-      afterLoadingChecked,
-      expiryDates,
-      selectedInspector,
-    }
-
-    localStorage.setItem(storageKey, JSON.stringify(dataToSave))
-  }, [
-    isMounted,
-    driverName,
-    truckPlate,
-    trailerPlate,
-    drivingLicenseDate,
-    adrCertificateDate,
-    truckDocDate,
-    trailerDocDate,
-    checkedItems,
-    beforeLoadingChecked,
-    afterLoadingChecked,
-    expiryDates,
-    selectedInspector,
-  ])
-
-  // Add this right after the return statement
-  if (!isMounted) {
-    return (
-      <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
-        <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold">Loading ADR Checklist...</h1>
-        </div>
-      </div>
-    )
-  }
-
-  const validateLicenseDate = (type: "drivingLicense" | "adrCertificate") => {
-    const date = type === "drivingLicense" ? drivingLicenseDate : adrCertificateDate
-    if (date.month.length === 2 && date.year.length === 4) {
-      const month = Number.parseInt(date.month, 10)
-      const year = Number.parseInt(date.year, 10)
-      const isExpired = year < inspectionYear || (year === inspectionYear && month < inspectionMonth)
-
-      if (type === "drivingLicense") {
-        setDrivingLicenseExpired(isExpired)
-        setDateValid((prev) => ({ ...prev, drivingLicense: !isExpired }))
-      } else {
-        setAdrCertificateExpired(isExpired)
-        setDateValid((prev) => ({ ...prev, adrCertificate: !isExpired }))
-      }
-    }
-  }
-
-  const validateTruckDocDate = () => {
-    if (truckDocDate.month.length === 2 && truckDocDate.year.length === 4) {
-      const month = Number.parseInt(truckDocDate.month, 10)
-      const year = Number.parseInt(truckDocDate.year, 10)
-      const isExpired = year < inspectionYear || (year === inspectionYear && month < inspectionMonth)
-      setTruckDocExpired(isExpired)
-      setDateValid((prev) => ({ ...prev, truckDoc: !isExpired }))
-    }
-  }
-
-  const validateTrailerDocDate = () => {
-    if (trailerDocDate.month.length === 2 && trailerDocDate.year.length === 4) {
-      const month = Number.parseInt(trailerDocDate.month, 10)
-      const year = Number.parseInt(trailerDocDate.year, 10)
-      const isExpired = year < inspectionYear || (year === inspectionYear && month < inspectionMonth)
-      setTrailerDocExpired(isExpired)
-      setDateValid((prev) => ({ ...prev, trailerDoc: !isExpired }))
-    }
-  }
-
-  // Find the handleSendEmail function and replace it with this improved version:
 
   const handleSendEmail = async () => {
     if (!isMounted || typeof window === "undefined") return
@@ -1486,16 +1253,20 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setEmailStatus("Preparing email...")
 
     try {
-      // Build the same styled 1-page PDF used by Download
-      const pdf = await buildPdfDocument()
-      setEmailStatus("PDF generated, sending email...")
+      const { jsPDF } = await import("jspdf")
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+      await renderAdrChecklistPdf(pdf)
 
-      const pdfBuffer = pdf.output("arraybuffer")
-      const pdfBase64 = arrayBufferToBase64(pdfBuffer)
+      // Convert PDF to base64 (safe in browser)
+      const dataUri = pdf.output("datauristring")
+      const pdfBase64 = (dataUri.split(",")[1] || "").trim()
+      if (!pdfBase64) throw new Error("Generated PDF is empty")
 
-      if (!pdfBase64 || pdfBase64.length === 0) {
-        throw new Error("Generated PDF is empty")
-      }
+      setEmailStatus("Sending email...")
+
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
       const response = await fetch("/api/send-email", {
         method: "POST",
@@ -1507,10 +1278,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           truckPlate,
           trailerPlate,
           inspectionDate: checkDate,
+          remarks,
+          photos: uploadedPhotos,
         }),
       })
 
-      const data = await response.json()
+      const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
         throw new Error(data.message || `Server responded with status ${response.status}`)
@@ -1523,6 +1296,51 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         setEmailStatus(data.message || "Email sent successfully!")
       }
     } catch (err: any) {
+      console.error("Email sending error:", err)
+      setEmailStatus(`Failed to send email: ${err?.message || err}. Please try again.`)
+    } finally {
+      setIsSendingEmail(false)
+    }
+  }
+
+
+      setEmailStatus("Sending email...")
+
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
+
+      // Send email
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inspectorName: selectedInspector,
+          pdfBase64,
+          driverName,
+          truckPlate,
+          trailerPlate,
+          inspectionDate: checkDate,
+          remarks,
+          photos: uploadedPhotos,
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      console.log("API response status:", response.status)
+      console.log("API response data:", data)
+
+      if (!response.ok) {
+        throw new Error(data.message || `Server responded with status ${response.status}`)
+      }
+
+      if (data.success) {
+        setEmailStatus("Email sent successfully!")
+        resetForm()
+      } else {
+        setEmailStatus(data.message || "Email sent successfully!")
+      }
+    } catch (err) {
       console.error("Email sending error:", err)
       setEmailStatus(`Failed to send email: ${err.message}. Please try again.`)
     } finally {
@@ -2033,6 +1851,85 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           </SelectContent>
         </Select>
 
+        {/* Remarks + Photos (below inspector select, above signatures) */}
+        <div className="mt-4">
+          <Label htmlFor="remarks" className="block mb-2">
+            Remarks:
+          </Label>
+          <textarea
+            id="remarks"
+            value={remarks}
+            onChange={(e) => setRemarks(e.target.value)}
+            placeholder="Add any remarks here..."
+            className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
+          />
+
+          <div className="mt-4 flex flex-col gap-3">
+            <div className="flex items-start gap-4">
+              <div className="shrink-0">
+                <Button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  className="bg-black text-white hover:brightness-95"
+                >
+                  Upload photos
+                </Button>
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  className="hidden"
+                  onChange={handlePhotoInputChange}
+                />
+                <p className="mt-1 text-xs text-gray-600">Camera will open on mobile.</p>
+              </div>
+
+              {/* Thumbnails */}
+              <div className="flex flex-wrap gap-2">
+                {photos.map((p) => (
+                  <div
+                    key={p.id}
+                    className="group relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 bg-gray-50"
+                    title={p.name}
+                  >
+                    <img
+                      src={p.previewUrl}
+                      alt={p.name}
+                      className={`h-full w-full object-cover transition-opacity ${p.status === "uploading" || p.status === "queued" ? "opacity-60" : "opacity-100"}`}
+                    />
+
+                    {/* Progress bar overlay */}
+                    {(p.status === "uploading" || p.status === "queued") && (
+                      <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
+                        <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
+                      </div>
+                    )}
+
+                    {/* Remove button */}
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(p.id)}
+                      aria-label="Remove photo"
+                      className="absolute right-1 top-1 rounded bg-black/70 px-1 text-xs text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
+                    >
+                      ×
+                    </button>
+
+                    {/* Error badge */}
+                    {p.status === "error" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-red-600/70 text-[10px] font-semibold text-white">
+                        Error
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Container to hold both signature boxes side by side */}
         <div className="flex gap-6 mt-6">
           <div className="flex-1">
@@ -2069,16 +1966,21 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
+        <Button onClick={handleDownloadPDF} disabled={isPdfGenerating} className="w-full">
           {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
         </Button>
         <Button
           onClick={handleSendEmail}
-          disabled={isSendingEmail || isPdfGenerating || !selectedInspector}
+          disabled={
+            isSendingEmail ||
+            isPdfGenerating ||
+            !selectedInspector ||
+            photos.some((p) => p.status === "uploading" || p.status === "queued")
+          }
           style={{ backgroundColor: "#0099d0" }}
           className="w-full hover:brightness-90"
         >
-          {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+          {isSendingEmail ? "Sending Email..." : "Send ZIP via Email"}
         </Button>
 
         {emailStatus && (
