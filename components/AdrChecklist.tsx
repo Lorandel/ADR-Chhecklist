@@ -1037,30 +1037,31 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       // ignore
     }
 
-    // Watermark (slightly more visible than the sample)
-    try {
-      const watermark = await getImage("/images/albias-watermark.png")
-      // @ts-ignore - GState exists at runtime
-      const GState = (pdf as any).GState
-      if (GState) {
-        // @ts-ignore
-        const gs = new (pdf as any).GState({ opacity: 0.18 })
-        // @ts-ignore
-        ;(pdf as any).setGState(gs)
-      }
+    // Watermark (drawn LAST so it stays visible over boxes)
+    const addWatermark = async () => {
+      try {
+        const watermark = await getImage("/images/albias-watermark.png")
+        // @ts-ignore - GState exists at runtime
+        const GState = (pdf as any).GState
+        if (GState) {
+          // @ts-ignore
+          const gs = new (pdf as any).GState({ opacity: 0.18 })
+          // @ts-ignore
+          ;(pdf as any).setGState(gs)
+        }
 
-      pdf.addImage(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
+        pdf.addImage(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
 
-      // reset opacity
-      // @ts-ignore
-      if ((pdf as any).setGState && (pdf as any).GState) {
+        // reset opacity
         // @ts-ignore
-        ;(pdf as any).setGState(new (pdf as any).GState({ opacity: 1 }))
+        if ((pdf as any).setGState && (pdf as any).GState) {
+          // @ts-ignore
+          ;(pdf as any).setGState(new (pdf as any).GState({ opacity: 1 }))
+        }
+      } catch {
+        // Continue without watermark
       }
-    } catch {
-      // Continue without watermark
     }
-
     // Header (red)
     pdf.setFillColor(186, 0, 0)
     pdf.rect(0, 0, pageW, headerH, "F")
@@ -1151,15 +1152,47 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (trimmedRemarks) {
       pdf.setTextColor(17, 24, 39)
       pdf.setFont("helvetica", "normal")
+
+      const textX = remarksBoxX + 20
+      const textY = remarksBoxY + 4.0
       const maxTextW = remarksBoxW - 22
-      const wrapped = pdf.splitTextToSize(trimmedRemarks, maxTextW)
-      const limited = wrapped.slice(0, 2)
-      if (wrapped.length > 2) {
-        // add ellipsis to last visible line
-        limited[1] = truncateToWidth(limited[1], maxTextW - 1)
-        if (!limited[1].endsWith("…")) limited[1] += "…"
+
+      // Available height for remarks text inside the box (in mm)
+      const textTop = textY
+      const textBottom = remarksBoxY + remarksBoxH - 1.2
+      const availableH = Math.max(0, textBottom - textTop)
+
+      const baseFont = 8
+      const minFont = 5
+      const step = 0.25
+      const ptToMm = 0.3527777778
+      const defaultLhf =
+        // @ts-ignore - exists at runtime
+        typeof (pdf as any).getLineHeightFactor === "function" ? (pdf as any).getLineHeightFactor() : 1.15
+
+      let fs = baseFont
+      let lines: string[] = []
+      let lhf = defaultLhf
+
+      while (fs >= minFont) {
+        pdf.setFontSize(fs)
+        lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
+        const lineH = fs * lhf * ptToMm
+        const textH = lines.length * lineH
+        if (textH <= availableH) break
+        fs -= step
       }
-      pdf.text(limited, remarksBoxX + 20, remarksBoxY + 4.0)
+
+      // If it's still too tall at min font, tighten line height a bit (keeps all text visible)
+      if (fs < minFont) fs = minFont
+      pdf.setFontSize(fs)
+      lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
+      const finalLineH = fs * lhf * ptToMm
+      if (lines.length * finalLineH > availableH) {
+        lhf = 1.0
+      }
+
+      pdf.text(lines, textX, textY, { lineHeightFactor: lhf })
     }
 
     // ---- Equipment checklist box ----
@@ -1367,6 +1400,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
     drawSignatureArea(rightSigX, "", inspectorSignatureData, { inspector: true })
+
+    await addWatermark()
+
 
     return pdf
   }
