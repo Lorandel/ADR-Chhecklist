@@ -1065,7 +1065,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     // Header (red) - light + slightly transparent
 const GState = (pdf as any).GState
 if (GState && (pdf as any).setGState) {
-  ;(pdf as any).setGState(new GState({ opacity: 0.85 })) // <- AICI e transparența pentru header
+  ;(pdf as any).setGState(new GState({ opacity: 0.6 })) // <- AICI e transparența pentru header
 }
 
 pdf.setFillColor(220, 38, 38) // <- roșu mai deschis (schimbă dacă vrei)
@@ -1133,14 +1133,14 @@ if (GState && (pdf as any).setGState) {
     const truckDoc = formatExpiry(truckDocDate, truckDocExpired)
     const trailerDoc = formatExpiry(trailerDocDate, trailerDocExpired)
 
-    drawField(leftX, rowStartY + 0 * rowStep, "Driver: ", safeVal(driverName), "#111827")
+    drawField(leftX, rowStartY + 0 * rowStep, "Driver's name: ", safeVal(driverName), "#111827")
     drawField(rightX, rowStartY + 0 * rowStep, "Truck plate: ", safeVal(truckPlate), "#111827")
 
     drawField(leftX, rowStartY + 1 * rowStep, "Trailer plate: ", safeVal(trailerPlate), "#111827")
     drawField(rightX, rowStartY + 1 * rowStep, "Inspection date: ", safeVal(checkDate), "#111827")
 
-    drawField(leftX, rowStartY + 2 * rowStep, "DL expiry: ", dl.text, dl.color)
-    drawField(rightX, rowStartY + 2 * rowStep, "ADR expiry: ", adr.text, adr.color)
+    drawField(leftX, rowStartY + 2 * rowStep, "Driving Licence expiry: ", dl.text, dl.color)
+    drawField(rightX, rowStartY + 2 * rowStep, "ADR certificate expiry: ", adr.text, adr.color)
 
     drawField(leftX, rowStartY + 3 * rowStep, "Truck tehnical insp.: ", truckDoc.text, truckDoc.color)
     drawField(rightX, rowStartY + 3 * rowStep, "Trailer tehnical insp.: ", trailerDoc.text, trailerDoc.color)
