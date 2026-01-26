@@ -55,7 +55,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setLoading(true)
       setError(null)
       try {
-        const res = await fetch("/api/adr-history")
+        // Avoid any caching (browser/CDN) by adding a cache-busting query param
+        // and forcing no-store.
+        const res = await fetch(`/api/adr-history?ts=${Date.now()}`, { cache: "no-store" })
         const data = await res.json().catch(() => ({}))
         if (!res.ok || !data?.success) {
           throw new Error(data?.message || `Failed to load history (${res.status})`)

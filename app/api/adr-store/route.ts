@@ -49,7 +49,8 @@ export async function POST(req: NextRequest) {
         file_path: objectPath,
         expires_at: expiresAt,
         email_sent: !!body.emailSent,
-        meta: body.meta ?? null,
+        // Table column is NOT NULL with default {}. Never insert null.
+        meta: body.meta ?? {},
       })
 
       // If insert fails due to unique constraint race, treat as existing.

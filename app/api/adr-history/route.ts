@@ -2,6 +2,10 @@ import { type NextRequest, NextResponse } from "next/server"
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin"
 
 export const runtime = "nodejs"
+// IMPORTANT: This endpoint must never be cached (Vercel/Next can cache GET route handlers).
+// Otherwise you may keep seeing an old empty response even after rows exist in DB.
+export const dynamic = "force-dynamic"
+export const revalidate = 0
 
 export async function GET(req: NextRequest) {
   try {
@@ -38,7 +42,14 @@ export async function GET(req: NextRequest) {
       }),
     )
 
-    return NextResponse.json({ success: true, items })
+    return NextResponse.json(
+      { success: true, items },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        },
+      },
+    )
   } catch (error: any) {
     return NextResponse.json(
       { success: false, message: "Failed to load history", error: error?.message },
