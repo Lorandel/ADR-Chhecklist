@@ -317,13 +317,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Set canvas dimensions to match display size
     const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width
-    canvas.height = rect.height
+    const dpr = window.devicePixelRatio || 1
 
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    // High-DPI canvas for crisp, premium-looking signatures (keeps same CSS size)
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr))
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr))
+
+    // Clear to transparent (canvas element itself sits on white UI background)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    ctx.imageSmoothingEnabled = true
   }
 
   // Initialize Inspector Canvas
@@ -336,13 +340,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Set canvas dimensions to match display size
     const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width
-    canvas.height = rect.height
+    const dpr = window.devicePixelRatio || 1
 
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr))
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr))
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.imageSmoothingEnabled = true
   }
 
   // Signature pad implementation for driver
@@ -355,33 +360,46 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Set canvas style
-    ctx.lineWidth = 2
+    // Ensure crisp signature rendering (HiDPI)
+    const rect = canvas.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr))
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr))
+
+    // Premium ink: subtle gradient + soft shadow, rounded caps
+    const ink = ctx.createLinearGradient(0, 0, canvas.width, 0)
+    ink.addColorStop(0, "#0B3D91")
+    ink.addColorStop(1, "#2563EB")
+
     ctx.lineCap = "round"
-    ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.lineJoin = "round"
+    ctx.strokeStyle = ink
+    ctx.lineWidth = 2.6 * dpr
+    ctx.imageSmoothingEnabled = true
+    ctx.shadowColor = "rgba(11, 61, 145, 0.25)"
+    ctx.shadowBlur = 1.2 * dpr
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0.4 * dpr
 
     let drawing = false
-    let lastX = 0
-    let lastY = 0
+    let lastPoint: { x: number; y: number } | null = null
+    let lastMid: { x: number; y: number } | null = null
 
     const getPosition = (e: MouseEvent | TouchEvent) => {
       const rect = canvas.getBoundingClientRect()
-      let clientX, clientY
+      let clientX: number
+      let clientY: number
 
       if (e instanceof MouseEvent) {
         clientX = e.clientX
         clientY = e.clientY
       } else {
-        // Handle touch events properly
         e.preventDefault()
         const touch = e.touches[0] || e.changedTouches[0]
         clientX = touch.clientX
         clientY = touch.clientY
       }
 
-      // Calculate position considering canvas scaling
       const scaleX = canvas.width / rect.width
       const scaleY = canvas.height / rect.height
 
@@ -394,31 +412,46 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const startDrawing = (e: MouseEvent | TouchEvent) => {
       e.preventDefault()
       drawing = true
-      const pos = getPosition(e)
-      lastX = pos.x
-      lastY = pos.y
+      const p = getPosition(e)
+      lastPoint = p
+      lastMid = p
+
+      // draw a small dot for taps
+      ctx.beginPath()
+      ctx.fillStyle = "#0B3D91"
+      ctx.arc(p.x, p.y, Math.max(1, ctx.lineWidth / 4), 0, Math.PI * 2)
+      ctx.fill()
     }
 
     const draw = (e: MouseEvent | TouchEvent) => {
       if (!drawing) return
       e.preventDefault()
 
-      const pos = getPosition(e)
-      const currentX = pos.x
-      const currentY = pos.y
+      const p = getPosition(e)
+      if (!lastPoint || !lastMid) {
+        lastPoint = p
+        lastMid = p
+        return
+      }
+
+      // Smooth stroke using quadratic curves between midpoints
+      const mid = { x: (lastPoint.x + p.x) / 2, y: (lastPoint.y + p.y) / 2 }
 
       ctx.beginPath()
-      ctx.moveTo(lastX, lastY)
-      ctx.lineTo(currentX, currentY)
+      ctx.moveTo(lastMid.x, lastMid.y)
+      ctx.quadraticCurveTo(lastPoint.x, lastPoint.y, mid.x, mid.y)
       ctx.stroke()
 
-      lastX = currentX
-      lastY = currentY
+      lastPoint = p
+      lastMid = mid
     }
 
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
+      lastPoint = null
+      lastMid = null
+      // Export as PNG (HiDPI canvas -> crisp image in PDF)
       setSignatureData(canvas.toDataURL("image/png"))
     }
 
@@ -428,14 +461,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     canvas.addEventListener("mouseup", stopDrawing)
     canvas.addEventListener("mouseout", stopDrawing)
 
-    // Touch events with proper settings
+    // Touch events
     canvas.addEventListener("touchstart", startDrawing, { passive: false })
     canvas.addEventListener("touchmove", draw, { passive: false })
     canvas.addEventListener("touchend", stopDrawing, { passive: false })
     canvas.addEventListener("touchcancel", stopDrawing, { passive: false })
 
     return () => {
-      // Cleanup for driver signature
       canvas.removeEventListener("mousedown", startDrawing)
       canvas.removeEventListener("mousemove", draw)
       canvas.removeEventListener("mouseup", stopDrawing)
@@ -458,33 +490,44 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Set canvas style
-    ctx.lineWidth = 2
+    const rect = canvas.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr))
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr))
+
+    const ink = ctx.createLinearGradient(0, 0, canvas.width, 0)
+    ink.addColorStop(0, "#0B3D91")
+    ink.addColorStop(1, "#2563EB")
+
     ctx.lineCap = "round"
-    ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.lineJoin = "round"
+    ctx.strokeStyle = ink
+    ctx.lineWidth = 2.6 * dpr
+    ctx.imageSmoothingEnabled = true
+    ctx.shadowColor = "rgba(11, 61, 145, 0.25)"
+    ctx.shadowBlur = 1.2 * dpr
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0.4 * dpr
 
     let drawing = false
-    let lastX = 0
-    let lastY = 0
+    let lastPoint: { x: number; y: number } | null = null
+    let lastMid: { x: number; y: number } | null = null
 
     const getPosition = (e: MouseEvent | TouchEvent) => {
       const rect = canvas.getBoundingClientRect()
-      let clientX, clientY
+      let clientX: number
+      let clientY: number
 
       if (e instanceof MouseEvent) {
         clientX = e.clientX
         clientY = e.clientY
       } else {
-        // Handle touch events properly
         e.preventDefault()
         const touch = e.touches[0] || e.changedTouches[0]
         clientX = touch.clientX
         clientY = touch.clientY
       }
 
-      // Calculate position considering canvas scaling
       const scaleX = canvas.width / rect.width
       const scaleY = canvas.height / rect.height
 
@@ -497,41 +540,51 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const startDrawing = (e: MouseEvent | TouchEvent) => {
       e.preventDefault()
       drawing = true
-      const pos = getPosition(e)
-      lastX = pos.x
-      lastY = pos.y
+      const p = getPosition(e)
+      lastPoint = p
+      lastMid = p
+
+      ctx.beginPath()
+      ctx.fillStyle = "#0B3D91"
+      ctx.arc(p.x, p.y, Math.max(1, ctx.lineWidth / 4), 0, Math.PI * 2)
+      ctx.fill()
     }
 
     const draw = (e: MouseEvent | TouchEvent) => {
       if (!drawing) return
       e.preventDefault()
 
-      const pos = getPosition(e)
-      const currentX = pos.x
-      const currentY = pos.y
+      const p = getPosition(e)
+      if (!lastPoint || !lastMid) {
+        lastPoint = p
+        lastMid = p
+        return
+      }
+
+      const mid = { x: (lastPoint.x + p.x) / 2, y: (lastPoint.y + p.y) / 2 }
 
       ctx.beginPath()
-      ctx.moveTo(lastX, lastY)
-      ctx.lineTo(currentX, currentY)
+      ctx.moveTo(lastMid.x, lastMid.y)
+      ctx.quadraticCurveTo(lastPoint.x, lastPoint.y, mid.x, mid.y)
       ctx.stroke()
 
-      lastX = currentX
-      lastY = currentY
+      lastPoint = p
+      lastMid = mid
     }
 
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
+      lastPoint = null
+      lastMid = null
       setInspectorSignatureData(canvas.toDataURL("image/png"))
     }
 
-    // Mouse events
     canvas.addEventListener("mousedown", startDrawing)
     canvas.addEventListener("mousemove", draw)
     canvas.addEventListener("mouseup", stopDrawing)
     canvas.addEventListener("mouseout", stopDrawing)
 
-    // Touch events with proper settings
     canvas.addEventListener("touchstart", startDrawing, { passive: false })
     canvas.addEventListener("touchmove", draw, { passive: false })
     canvas.addEventListener("touchend", stopDrawing, { passive: false })
@@ -560,8 +613,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
     setSignatureData(null)
   }
 
@@ -574,8 +626,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
     setInspectorSignatureData(null)
   }
 
@@ -1202,9 +1253,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const equipW = pageW - margin * 2
     const equipH = 84
 
-    pdf.setDrawColor(226, 232, 240)
-    pdf.setFillColor(255, 255, 255)
-    pdf.setLineWidth(0.3)
+    pdf.setDrawColor(203, 213, 225)
+    pdf.setFillColor(248, 250, 252)
+    pdf.setLineWidth(0.35)
     // @ts-ignore
     pdf.roundedRect(equipX, equipY, equipW, equipH, 3, 3, "FD")
 
@@ -1380,27 +1431,48 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
       }
 
-      pdf.setFont("helvetica", "normal")
-      pdf.setFontSize(8)
-      pdf.setTextColor(100, 116, 139)
-      pdf.text(title, x, sigY + 30)
+      const baseY = sigY + 30
+
+      const drawCentered = (text: string, font: "normal" | "bold", r: number, g: number, b: number) => {
+        const t = (text || "").toString()
+        pdf.setFont("helvetica", font)
+        pdf.setFontSize(8)
+        pdf.setTextColor(r, g, b)
+        const tw = pdf.getTextWidth(t)
+        const startX = x + Math.max(0, (sigImgW - tw) / 2)
+        pdf.text(t, startX, baseY)
+      }
 
       if (extra?.inspector) {
         const inspectorColor = inspectorColors[selectedInspector] || "#111827"
         const label = "Inspector: "
+        const value = title || selectedInspector || "Not selected"
+        const full = `${label}${value}`
+
+        pdf.setFontSize(8)
         pdf.setFont("helvetica", "bold")
         pdf.setTextColor(17, 24, 39)
-        pdf.text(label, x, sigY + 30)
+        const fullW = pdf.getTextWidth(full)
+        const startX = x + Math.max(0, (sigImgW - fullW) / 2)
+
+        pdf.text(label, startX, baseY)
         const lw = pdf.getTextWidth(label)
+
+        // value (colored)
+        pdf.setFont("helvetica", "bold")
         pdf.setTextColor(inspectorColor)
-        pdf.text(selectedInspector || "Not selected", x + lw, sigY + 30)
+        pdf.text(value, startX + lw, baseY)
+      } else {
+        // Driver name centered under signature
+        const driverDisplay = title || "Driver"
+        drawCentered(driverDisplay, "bold", 17, 24, 39)
       }
 
       pdf.setTextColor(17, 24, 39)
     }
 
-    drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
-    drawSignatureArea(rightSigX, "", inspectorSignatureData, { inspector: true })
+    drawSignatureArea(leftSigX, `${(driverName || "Driver").trim()}${signatureData ? "" : " (not signed)"}`, signatureData)
+    drawSignatureArea(rightSigX, (selectedInspector || "Not selected").trim(), inspectorSignatureData, { inspector: true })
 
     await addWatermark()
 
