@@ -55,8 +55,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setLoading(true)
       setError(null)
       try {
-        // Avoid any caching (browser/CDN) by adding a cache-busting query param
-        // and forcing no-store.
         const res = await fetch(`/api/adr-history?ts=${Date.now()}`, { cache: "no-store" })
         const data = await res.json().catch(() => ({}))
         if (!res.ok || !data?.success) {
@@ -93,13 +91,28 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     setRole("guest")
   }
 
+  const formatDDMMYYYY = (iso: string) => {
+    const d = new Date(iso)
+    const dd = String(d.getDate()).padStart(2, "0")
+    const mm = String(d.getMonth() + 1).padStart(2, "0")
+    const yyyy = String(d.getFullYear())
+    return `${dd}-${mm}-${yyyy}`
+  }
+
   const itemLabel = (it: HistoryItem) => {
     const m = it.meta || {}
+
     const driver = (m.driverName || m.driver_name || "").toString().trim()
-    const date = (m.inspectionDate || m.inspection_date || "").toString().trim()
-    const plate = (m. m.inspector_name|| "").toString().trim()
-    const base = driver || plate ? `${driver || "-"}${plate ? ` (${plate})` : ""}` : it.checklist_hash.slice(0, 10)
-    return date ? `${base} • ${date}` : base
+    const inspector = (m.inspectorName || m.inspector_name || "").toString().trim()
+
+    // Prefer meta date, fallback to created_at
+    let date = (m.inspectionDate || m.inspection_date || "").toString().trim()
+    if (!date && it.created_at) date = formatDDMMYYYY(it.created_at)
+
+    const base = driver || it.checklist_hash.slice(0, 10)
+    const withInspector = inspector ? `${base} (inspector: ${inspector})` : base
+
+    return date ? `${withInspector} • ${date}` : withInspector
   }
 
   const onDelete = async (it: HistoryItem) => {
@@ -156,14 +169,16 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
               <div className="space-y-4">
                 <div>
                   <Label>User</Label>
-                  <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="admin" />
+                  {/* fără placeholder "admin" */}
+                  <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="Enter user" />
                 </div>
                 <div>
                   <Label>Password</Label>
+                  {/* fără placeholder "admin" */}
                   <Input
                     value={pass}
                     onChange={(e) => setPass(e.target.value)}
-                    placeholder="admin"
+                    placeholder="Enter password"
                     type="password"
                   />
                 </div>
@@ -185,7 +200,11 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                 <div className="text-sm text-gray-600">
                   Viewing as <span className="font-semibold">{role}</span>
                 </div>
-                <Button variant="outline" className="bg-transparent" onClick={() => setRefreshTick((x) => x + 1)}>
+                <Button
+                  variant="outline"
+                  className="bg-transparent"
+                  onClick={() => setRefreshTick((x) => x + 1)}
+                >
                   Refresh
                 </Button>
               </div>
@@ -201,21 +220,20 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                 ) : (
                   <div className="space-y-2">
                     {reduced.map((it) => (
-                      <div key={it.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 p-3">
+                      <div
+                        key={it.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 p-3"
+                      >
                         <div className="min-w-0">
                           <div className="text-sm font-medium truncate">{itemLabel(it)}</div>
                           <div className="text-xs text-gray-600 truncate">
-                            {new Date(it.created_at).toLocaleString()} • expires {new Date(it.expires_at).toLocaleDateString()}
+                            {new Date(it.created_at).toLocaleString()} • expires{" "}
+                            {new Date(it.expires_at).toLocaleDateString()}
                             {it.email_sent ? " • emailed" : ""}
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <a
-                            href={it.downloadUrl || "#"}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex"
-                          >
+                          <a href={it.downloadUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex">
                             <Button variant="outline" className="bg-transparent" disabled={!it.downloadUrl}>
                               Download ZIP
                             </Button>
@@ -241,21 +259,20 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                 ) : (
                   <div className="space-y-2">
                     {full.map((it) => (
-                      <div key={it.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 p-3">
+                      <div
+                        key={it.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 p-3"
+                      >
                         <div className="min-w-0">
                           <div className="text-sm font-medium truncate">{itemLabel(it)}</div>
                           <div className="text-xs text-gray-600 truncate">
-                            {new Date(it.created_at).toLocaleString()} • expires {new Date(it.expires_at).toLocaleDateString()}
+                            {new Date(it.created_at).toLocaleString()} • expires{" "}
+                            {new Date(it.expires_at).toLocaleDateString()}
                             {it.email_sent ? " • emailed" : ""}
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <a
-                            href={it.downloadUrl || "#"}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex"
-                          >
+                          <a href={it.downloadUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex">
                             <Button variant="outline" className="bg-transparent" disabled={!it.downloadUrl}>
                               Download ZIP
                             </Button>
