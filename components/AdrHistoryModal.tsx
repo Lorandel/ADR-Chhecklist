@@ -79,7 +79,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
   const doLogin = () => {
     setError(null)
-    if (user.trim() === "admin" && pass.trim() === "admin") {
+    if (user.trim() === "admin" && pass.trim() === "admin12!") {
       setRole("admin")
       return
     }
