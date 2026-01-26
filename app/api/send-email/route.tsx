@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin"
 
 type IncomingPhoto = {
   url: string
@@ -23,47 +24,26 @@ const inspectorEmails: Record<string, string[]> = {
   ],
 }
 
-// Function to upload PDF to Vercel Blob Storage
-const uploadToVercelBlob = async (
-  pdfBuffer: Buffer,
-  fileName: string,
-): Promise<{ success: boolean; url?: string; error?: string }> => {
-  try {
-    console.log("=== Starting Vercel Blob Upload ===")
-    console.log("File name:", fileName)
-    console.log("File size:", pdfBuffer.length, "bytes")
-
-    // Import Vercel Blob
-    const { put } = await import("@vercel/blob")
-
-    // Upload to Vercel Blob
-    const blob = await put(fileName, pdfBuffer, {
-      access: "public",
-      contentType: "application/pdf",
-    })
-
-    console.log("✓ Vercel Blob upload successful")
-    console.log("Blob URL:", blob.url)
-
-    return {
-      success: true,
-      url: blob.url,
-    }
-  } catch (error: any) {
-    console.error("❌ Vercel Blob upload failed:", error.message)
-    return {
-      success: false,
-      error: error.message,
-    }
-  }
-}
+const mapVariant = (v: unknown): "full" | "reduced" => (v === "full" ? "full" : "reduced")
 
 export async function POST(req: NextRequest) {
   try {
     console.log("=== Email API Called ===")
 
     const body = await req.json()
-    const { inspectorName, driverName, truckPlate, trailerPlate, inspectionDate, pdfBase64, remarks, photos } = body as {
+    const {
+      inspectorName,
+      driverName,
+      truckPlate,
+      trailerPlate,
+      inspectionDate,
+      pdfBase64,
+      remarks,
+      photos,
+      variant,
+      checklistHash,
+      meta,
+    } = body as {
       inspectorName: string
       driverName: string
       truckPlate: string
@@ -72,6 +52,9 @@ export async function POST(req: NextRequest) {
       pdfBase64: string
       remarks?: string
       photos?: IncomingPhoto[]
+      variant?: "full" | "under1000" | "reduced"
+      checklistHash?: string
+      meta?: Record<string, unknown>
     }
 
     console.log("Inspector:", inspectorName)
@@ -148,21 +131,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // File name for both email attachment and Vercel Blob
-    const fileName = `adr-checklists/${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}_${Date.now()}.pdf`
-    console.log("Generated filename:", fileName)
-
-    // Upload to Vercel Blob Storage
-    console.log("Attempting Vercel Blob upload...")
-    const blobResult = await uploadToVercelBlob(pdfBuffer, fileName)
-
-    if (blobResult.success) {
-      console.log("✓ Vercel Blob upload successful")
-      console.log("Blob URL:", blobResult.url)
-    } else {
-      console.error("❌ Vercel Blob upload failed:", blobResult.error)
-    }
-
     // Create ZIP (PDF + photos)
     const { default: JSZip } = await import("jszip")
     const zip = new JSZip()
@@ -194,18 +162,65 @@ export async function POST(req: NextRequest) {
       compressionOptions: { level: 6 },
     })
 
-    // Dynamic import for nodemailer (interop safe)
-const nodemailerMod: any = await import("nodemailer")
-const nodemailer = nodemailerMod?.default ?? nodemailerMod
+    // Store ZIP in Supabase (dedupe by checklistHash)
+    let storedUrl: string | null = null
+    try {
+      const hash = (checklistHash || "").trim()
+      if (hash) {
+        const supabase = getSupabaseAdmin()
+        const checklistType = mapVariant(variant)
+        const bucket = "adr-checklists"
+        const objectPath = `${checklistType}/${hash}.zip`
 
-console.log("Creating email transporter...")
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
-})
+        const existing = await supabase
+          .from("adr_checklists")
+          .select("id")
+          .eq("checklist_hash", hash)
+          .maybeSingle()
+
+        const expiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString()
+
+        if (!existing.data) {
+          const up = await supabase.storage.from(bucket).upload(objectPath, zipBuffer, {
+            contentType: "application/zip",
+            upsert: false,
+          })
+
+          if (!up.error) {
+            await supabase.from("adr_checklists").insert({
+              checklist_type: checklistType,
+              checklist_hash: hash,
+              file_path: objectPath,
+              expires_at: expiresAt,
+              email_sent: true,
+              meta: meta ?? null,
+            })
+          }
+        } else {
+          const updatePayload: Record<string, unknown> = { email_sent: true, expires_at: expiresAt }
+          if (meta) updatePayload.meta = meta
+          await supabase.from("adr_checklists").update(updatePayload).eq("checklist_hash", hash)
+        }
+
+        const signed = await supabase.storage.from(bucket).createSignedUrl(objectPath, 60 * 60)
+        if (!signed.error) storedUrl = signed.data.signedUrl
+      }
+    } catch (e: any) {
+      console.error("Supabase store failed:", e?.message)
+    }
+
+    // Dynamic import for nodemailer (interop safe)
+    const nodemailerMod: any = await import("nodemailer")
+    const nodemailer = nodemailerMod?.default ?? nodemailerMod
+
+    console.log("Creating email transporter...")
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
+      },
+    })
 
 
     // Verify transporter configuration
@@ -242,7 +257,7 @@ Remarks: ${typeof remarks === "string" && remarks.trim() ? remarks.trim() : "-"}
 
 Photos: ${(Array.isArray(photos) ? photos.length : 0) || 0}
 
-${blobResult.success && blobResult.url ? `The document is also available online: ${blobResult.url}` : ""}
+${storedUrl ? `The document is also available online (valid 1 hour): ${storedUrl}` : ""}
 
 This checklist was generated automatically by the ADR Checklist System.`,
       html: `
@@ -281,7 +296,7 @@ This checklist was generated automatically by the ADR Checklist System.`,
             </tr>
           </table>
           
-          ${blobResult.success && blobResult.url ? `<p><strong>Online Access:</strong> <a href="${blobResult.url}" target="_blank" style="color: #0066cc;">View/Download PDF Online</a></p>` : ""}
+          ${storedUrl ? `<p><strong>Online Access (valid 1 hour):</strong> <a href="${storedUrl}" target="_blank" style="color: #0066cc;">Download ZIP</a></p>` : ""}
           
           <p style="color: #666; font-size: 12px; margin-top: 30px;">
             This email was generated automatically by the ADR Checklist System.
@@ -306,19 +321,13 @@ This checklist was generated automatically by the ADR Checklist System.`,
 
       // Prepare response message
       let message = `Email sent successfully to ${recipients.length} recipient(s)`
-      if (blobResult.success) {
-        message += " and saved to Vercel Blob Storage"
-      } else if (blobResult.error) {
-        message += ` (Blob storage upload failed: ${blobResult.error})`
-      }
+      if (storedUrl) message += " and saved to Supabase (ZIP)"
 
       return NextResponse.json({
         success: true,
         message: message,
-        blobUrl: blobResult.url,
-        blobUploadSuccess: blobResult.success,
+        storedUrl,
         emailMessageId: emailResult.messageId,
-        blobError: blobResult.success ? undefined : blobResult.error,
       })
     } catch (sendError) {
       console.error("Email sending failed:", sendError)

@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
+import { stableStringify } from "@/lib/stableStringify"
+import { sha256Hex } from "@/lib/hash"
 
 const capitalizeWords = (str: string) =>
   str
@@ -900,7 +902,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
 
 
-  // Build a single-page, stylized ADR PDF (used for both Download and Send Email)
+  // Build a single-page, stylized ADR PDF (used for both Download ZIP and Send Email)
   const buildAdrPdf = async () => {
     const { jsPDF } = await import("jspdf")
 
@@ -1404,19 +1406,112 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     return pdf
   }
-  // Generate PDF report
-
-  // Generate PDF report
-  const generatePDF = async () => {
+  // Generate ZIP (PDF + photos) and store in Supabase (60-day retention)
+  const generateZIP = async () => {
     if (!isMounted || typeof window === "undefined") return
 
     setIsPdfGenerating(true)
 
     try {
       const pdf = await buildAdrPdf()
-      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
+
+      // Build identity hash (used to dedupe between Download and Email)
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
+
+      const identity = {
+        variant,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+        selectedInspector,
+        remarks,
+        drivingLicenseDate,
+        adrCertificateDate,
+        truckDocDate,
+        trailerDocDate,
+        checkedItems,
+        beforeLoadingChecked,
+        afterLoadingChecked,
+        expiryDates,
+        signatureData,
+        inspectorSignatureData,
+        photos: uploadedPhotos,
+      }
+
+      const checklistHash = await sha256Hex(stableStringify(identity))
+
+      const { default: JSZip } = await import("jszip")
+      const zip = new JSZip()
+
+      // PDF in ZIP
+      const pdfBuffer = pdf.output("arraybuffer")
+      const pdfName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
+      zip.file(pdfName, pdfBuffer)
+
+      // Photos in ZIP
+      const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
+      for (let i = 0; i < uploadedPhotos.length; i++) {
+        const ph = uploadedPhotos[i]
+        try {
+          const resp = await fetch(ph.url)
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const arrBuf = await resp.arrayBuffer()
+          const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
+          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
+        } catch (e) {
+          console.warn("Failed to add photo to ZIP", e)
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      })
+
+      // Store ZIP in Supabase (best-effort; app continues even if store fails)
+      try {
+        const zipArr = await zipBlob.arrayBuffer()
+        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
+        const zipBase64 = Buffer.from(zipArr).toString("base64")
+
+        await fetch("/api/adr-store", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            variant,
+            checklistHash,
+            zipBase64,
+            emailSent: false,
+            meta: {
+              variant,
+              driverName,
+              truckPlate,
+              trailerPlate,
+              inspectionDate: checkDate,
+              inspectorName: selectedInspector,
+            },
+          }),
+        })
+      } catch (e) {
+        console.warn("Supabase store failed (download)", e)
+      }
+
+      // Download ZIP
+      const zipName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.zip`
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = zipName
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
     } catch (error) {
-      console.error("Error generating PDF:", error)
+      console.error("Error generating ZIP:", error)
     } finally {
       setIsPdfGenerating(false)
     }
@@ -1757,6 +1852,29 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         .filter((p) => p.status === "done" && !!p.url)
         .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
+      // Compute the same hash used by Download ZIP (so email updates the same DB entry).
+      const identity = {
+        variant,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+        selectedInspector,
+        remarks,
+        drivingLicenseDate,
+        adrCertificateDate,
+        truckDocDate,
+        trailerDocDate,
+        checkedItems,
+        beforeLoadingChecked,
+        afterLoadingChecked,
+        expiryDates,
+        signatureData,
+        inspectorSignatureData,
+        photos: uploadedPhotos,
+      }
+      const checklistHash = await sha256Hex(stableStringify(identity))
+
       const response = await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1769,6 +1887,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           inspectionDate: checkDate,
           remarks,
           photos: uploadedPhotos,
+          variant,
+          checklistHash,
+          meta: {
+            variant,
+            driverName,
+            truckPlate,
+            trailerPlate,
+            inspectionDate: checkDate,
+            inspectorName: selectedInspector,
+          },
         }),
       })
 
@@ -2410,8 +2538,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
-          {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
+        <Button onClick={generateZIP} disabled={isPdfGenerating} className="w-full">
+          {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
         </Button>
         <Button
           onClick={handleSendEmail}

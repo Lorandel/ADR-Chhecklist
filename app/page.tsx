@@ -3,16 +3,30 @@
 
 import { useState } from "react"
 import ADRChecklist, { type ChecklistVariant } from "@/components/AdrChecklist"
+import AdrHistoryModal from "@/components/AdrHistoryModal"
 
 export default function HomePage() {
   const [variant, setVariant] = useState<ChecklistVariant | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   if (variant) {
     return <ADRChecklist variant={variant} onBack={() => setVariant(null)} />
   }
 
   return (
-    <div className="min-h-[100vh] flex items-center justify-center p-6 bg-white">
+    <div className="min-h-[100vh] flex items-center justify-center p-6 bg-white relative">
+      <div className="absolute top-4 right-4">
+        <button
+          type="button"
+          onClick={() => setHistoryOpen(true)}
+          className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold shadow-sm hover:bg-gray-50"
+        >
+          ADR Checklists History
+        </button>
+      </div>
+
+      <AdrHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} />
+
       <div className="w-full max-w-3xl">
         {/* Watermark above title (original image opacity) */}
         <div className="flex items-center justify-center mb-6">
