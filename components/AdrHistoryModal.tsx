@@ -97,7 +97,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     const m = it.meta || {}
     const driver = (m.driverName || m.driver_name || "").toString().trim()
     const date = (m.inspectionDate || m.inspection_date || "").toString().trim()
-    const plate = (m.truckPlate || "").toString().trim()
+    const plate = (m. m.inspector_name|| "").toString().trim()
     const base = driver || plate ? `${driver || "-"}${plate ? ` (${plate})` : ""}` : it.checklist_hash.slice(0, 10)
     return date ? `${base} • ${date}` : base
   }
