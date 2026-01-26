@@ -11,6 +11,7 @@ import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
 import { sha256Hex } from "@/lib/hash"
+import { getSupabaseClient } from "@/lib/supabaseClient"
 
 const capitalizeWords = (str: string) =>
   str
@@ -1472,19 +1473,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         compressionOptions: { level: 6 },
       })
 
-      // Store ZIP in Supabase (best-effort; app continues even if store fails)
+      // Store ZIP in Supabase (direct-to-storage via signed URL; avoids Vercel 4.5MB payload limit)
       try {
-        const zipArr = await zipBlob.arrayBuffer()
-        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
-        const zipBase64 = Buffer.from(zipArr).toString("base64")
-
-        await fetch("/api/adr-store", {
+        const prepRes = await fetch("/api/adr-store", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             variant,
             checklistHash,
-            zipBase64,
             emailSent: false,
             meta: {
               variant,
@@ -1496,6 +1492,21 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             },
           }),
         })
+
+        const prep = await prepRes.json().catch(() => ({}))
+
+        if (prepRes.ok && prep?.success && prep.upload && prep.path && prep.token) {
+          const supabase = getSupabaseClient()
+          const up = await supabase.storage
+            .from("adr-checklists")
+            .uploadToSignedUrl(prep.path as string, prep.token as string, zipBlob, {
+              contentType: "application/zip",
+            })
+
+          if (up.error) {
+            throw new Error(up.error.message)
+          }
+        }
       } catch (e) {
         console.warn("Supabase store failed (download)", e)
       }
