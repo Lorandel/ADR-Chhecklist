@@ -13,7 +13,7 @@ type HistoryItem = {
   created_at: string
   expires_at: string
   email_sent: boolean
-  meta?: Record<string, any> | null
+  meta?: Record<string, any> | string | null
   downloadUrl?: string | null
 }
 
@@ -91,6 +91,20 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     setRole("guest")
   }
 
+  const safeMeta = (meta: any): Record<string, any> => {
+    if (!meta) return {}
+    if (typeof meta === "object") return meta
+    if (typeof meta === "string") {
+      try {
+        const parsed = JSON.parse(meta)
+        return parsed && typeof parsed === "object" ? parsed : {}
+      } catch {
+        return {}
+      }
+    }
+    return {}
+  }
+
   const formatDDMMYYYY = (iso: string) => {
     const d = new Date(iso)
     const dd = String(d.getDate()).padStart(2, "0")
@@ -100,13 +114,12 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   }
 
   const itemLabel = (it: HistoryItem) => {
-    const m = it.meta || {}
+    const m = safeMeta(it.meta)
 
-    const driver = (m.driverName || m.driver_name || "").toString().trim()
-    const inspector = (m.inspectorName || m.inspector_name || "").toString().trim()
+    const driver = String(m.driverName ?? m.driver_name ?? "").trim()
+    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").trim()
 
-    // Prefer meta date, fallback to created_at
-    let date = (m.inspectionDate || m.inspection_date || "").toString().trim()
+    let date = String(m.inspectionDate ?? m.inspection_date ?? "").trim()
     if (!date && it.created_at) date = formatDDMMYYYY(it.created_at)
 
     const base = driver || it.checklist_hash.slice(0, 10)
@@ -169,12 +182,10 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
               <div className="space-y-4">
                 <div>
                   <Label>User</Label>
-                  {/* fără placeholder "admin" */}
                   <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="Enter user" />
                 </div>
                 <div>
                   <Label>Password</Label>
-                  {/* fără placeholder "admin" */}
                   <Input
                     value={pass}
                     onChange={(e) => setPass(e.target.value)}
