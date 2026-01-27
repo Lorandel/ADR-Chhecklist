@@ -11,7 +11,6 @@ import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
 import { sha256Hex } from "@/lib/hash"
-import { getSupabaseClient } from "@/lib/supabaseClient"
 
 const capitalizeWords = (str: string) =>
   str
@@ -317,17 +316,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
+    // Set canvas dimensions to match display size
     const rect = canvas.getBoundingClientRect()
-    const dpr = window.devicePixelRatio || 1
+    canvas.width = rect.width
+    canvas.height = rect.height
 
-    // High-DPI canvas for crisp, premium-looking signatures (keeps same CSS size)
-    canvas.width = Math.max(1, Math.floor(rect.width * dpr))
-    canvas.height = Math.max(1, Math.floor(rect.height * dpr))
-
-    // Clear to transparent (canvas element itself sits on white UI background)
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-    ctx.imageSmoothingEnabled = true
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
   }
 
   // Initialize Inspector Canvas
@@ -340,14 +335,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
+    // Set canvas dimensions to match display size
     const rect = canvas.getBoundingClientRect()
-    const dpr = window.devicePixelRatio || 1
+    canvas.width = rect.width
+    canvas.height = rect.height
 
-    canvas.width = Math.max(1, Math.floor(rect.width * dpr))
-    canvas.height = Math.max(1, Math.floor(rect.height * dpr))
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.imageSmoothingEnabled = true
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
   }
 
   // Signature pad implementation for driver
@@ -360,46 +354,33 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Ensure crisp signature rendering (HiDPI)
-    const rect = canvas.getBoundingClientRect()
-    const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.max(1, Math.floor(rect.width * dpr))
-    canvas.height = Math.max(1, Math.floor(rect.height * dpr))
-
-    // Premium ink: subtle gradient + soft shadow, rounded caps
-    const ink = ctx.createLinearGradient(0, 0, canvas.width, 0)
-    ink.addColorStop(0, "#0B3D91")
-    ink.addColorStop(1, "#2563EB")
-
+    // Set canvas style
+    ctx.lineWidth = 2
     ctx.lineCap = "round"
-    ctx.lineJoin = "round"
-    ctx.strokeStyle = ink
-    ctx.lineWidth = 2.6 * dpr
-    ctx.imageSmoothingEnabled = true
-    ctx.shadowColor = "rgba(11, 61, 145, 0.25)"
-    ctx.shadowBlur = 1.2 * dpr
-    ctx.shadowOffsetX = 0
-    ctx.shadowOffsetY = 0.4 * dpr
+    ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
 
     let drawing = false
-    let lastPoint: { x: number; y: number } | null = null
-    let lastMid: { x: number; y: number } | null = null
+    let lastX = 0
+    let lastY = 0
 
     const getPosition = (e: MouseEvent | TouchEvent) => {
       const rect = canvas.getBoundingClientRect()
-      let clientX: number
-      let clientY: number
+      let clientX, clientY
 
       if (e instanceof MouseEvent) {
         clientX = e.clientX
         clientY = e.clientY
       } else {
+        // Handle touch events properly
         e.preventDefault()
         const touch = e.touches[0] || e.changedTouches[0]
         clientX = touch.clientX
         clientY = touch.clientY
       }
 
+      // Calculate position considering canvas scaling
       const scaleX = canvas.width / rect.width
       const scaleY = canvas.height / rect.height
 
@@ -412,46 +393,31 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const startDrawing = (e: MouseEvent | TouchEvent) => {
       e.preventDefault()
       drawing = true
-      const p = getPosition(e)
-      lastPoint = p
-      lastMid = p
-
-      // draw a small dot for taps
-      ctx.beginPath()
-      ctx.fillStyle = "#0B3D91"
-      ctx.arc(p.x, p.y, Math.max(1, ctx.lineWidth / 4), 0, Math.PI * 2)
-      ctx.fill()
+      const pos = getPosition(e)
+      lastX = pos.x
+      lastY = pos.y
     }
 
     const draw = (e: MouseEvent | TouchEvent) => {
       if (!drawing) return
       e.preventDefault()
 
-      const p = getPosition(e)
-      if (!lastPoint || !lastMid) {
-        lastPoint = p
-        lastMid = p
-        return
-      }
-
-      // Smooth stroke using quadratic curves between midpoints
-      const mid = { x: (lastPoint.x + p.x) / 2, y: (lastPoint.y + p.y) / 2 }
+      const pos = getPosition(e)
+      const currentX = pos.x
+      const currentY = pos.y
 
       ctx.beginPath()
-      ctx.moveTo(lastMid.x, lastMid.y)
-      ctx.quadraticCurveTo(lastPoint.x, lastPoint.y, mid.x, mid.y)
+      ctx.moveTo(lastX, lastY)
+      ctx.lineTo(currentX, currentY)
       ctx.stroke()
 
-      lastPoint = p
-      lastMid = mid
+      lastX = currentX
+      lastY = currentY
     }
 
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      lastPoint = null
-      lastMid = null
-      // Export as PNG (HiDPI canvas -> crisp image in PDF)
       setSignatureData(canvas.toDataURL("image/png"))
     }
 
@@ -461,13 +427,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     canvas.addEventListener("mouseup", stopDrawing)
     canvas.addEventListener("mouseout", stopDrawing)
 
-    // Touch events
+    // Touch events with proper settings
     canvas.addEventListener("touchstart", startDrawing, { passive: false })
     canvas.addEventListener("touchmove", draw, { passive: false })
     canvas.addEventListener("touchend", stopDrawing, { passive: false })
     canvas.addEventListener("touchcancel", stopDrawing, { passive: false })
 
     return () => {
+      // Cleanup for driver signature
       canvas.removeEventListener("mousedown", startDrawing)
       canvas.removeEventListener("mousemove", draw)
       canvas.removeEventListener("mouseup", stopDrawing)
@@ -490,44 +457,33 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    const rect = canvas.getBoundingClientRect()
-    const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.max(1, Math.floor(rect.width * dpr))
-    canvas.height = Math.max(1, Math.floor(rect.height * dpr))
-
-    const ink = ctx.createLinearGradient(0, 0, canvas.width, 0)
-    ink.addColorStop(0, "#0B3D91")
-    ink.addColorStop(1, "#2563EB")
-
+    // Set canvas style
+    ctx.lineWidth = 2
     ctx.lineCap = "round"
-    ctx.lineJoin = "round"
-    ctx.strokeStyle = ink
-    ctx.lineWidth = 2.6 * dpr
-    ctx.imageSmoothingEnabled = true
-    ctx.shadowColor = "rgba(11, 61, 145, 0.25)"
-    ctx.shadowBlur = 1.2 * dpr
-    ctx.shadowOffsetX = 0
-    ctx.shadowOffsetY = 0.4 * dpr
+    ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
 
     let drawing = false
-    let lastPoint: { x: number; y: number } | null = null
-    let lastMid: { x: number; y: number } | null = null
+    let lastX = 0
+    let lastY = 0
 
     const getPosition = (e: MouseEvent | TouchEvent) => {
       const rect = canvas.getBoundingClientRect()
-      let clientX: number
-      let clientY: number
+      let clientX, clientY
 
       if (e instanceof MouseEvent) {
         clientX = e.clientX
         clientY = e.clientY
       } else {
+        // Handle touch events properly
         e.preventDefault()
         const touch = e.touches[0] || e.changedTouches[0]
         clientX = touch.clientX
         clientY = touch.clientY
       }
 
+      // Calculate position considering canvas scaling
       const scaleX = canvas.width / rect.width
       const scaleY = canvas.height / rect.height
 
@@ -540,51 +496,41 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const startDrawing = (e: MouseEvent | TouchEvent) => {
       e.preventDefault()
       drawing = true
-      const p = getPosition(e)
-      lastPoint = p
-      lastMid = p
-
-      ctx.beginPath()
-      ctx.fillStyle = "#0B3D91"
-      ctx.arc(p.x, p.y, Math.max(1, ctx.lineWidth / 4), 0, Math.PI * 2)
-      ctx.fill()
+      const pos = getPosition(e)
+      lastX = pos.x
+      lastY = pos.y
     }
 
     const draw = (e: MouseEvent | TouchEvent) => {
       if (!drawing) return
       e.preventDefault()
 
-      const p = getPosition(e)
-      if (!lastPoint || !lastMid) {
-        lastPoint = p
-        lastMid = p
-        return
-      }
-
-      const mid = { x: (lastPoint.x + p.x) / 2, y: (lastPoint.y + p.y) / 2 }
+      const pos = getPosition(e)
+      const currentX = pos.x
+      const currentY = pos.y
 
       ctx.beginPath()
-      ctx.moveTo(lastMid.x, lastMid.y)
-      ctx.quadraticCurveTo(lastPoint.x, lastPoint.y, mid.x, mid.y)
+      ctx.moveTo(lastX, lastY)
+      ctx.lineTo(currentX, currentY)
       ctx.stroke()
 
-      lastPoint = p
-      lastMid = mid
+      lastX = currentX
+      lastY = currentY
     }
 
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      lastPoint = null
-      lastMid = null
       setInspectorSignatureData(canvas.toDataURL("image/png"))
     }
 
+    // Mouse events
     canvas.addEventListener("mousedown", startDrawing)
     canvas.addEventListener("mousemove", draw)
     canvas.addEventListener("mouseup", stopDrawing)
     canvas.addEventListener("mouseout", stopDrawing)
 
+    // Touch events with proper settings
     canvas.addEventListener("touchstart", startDrawing, { passive: false })
     canvas.addEventListener("touchmove", draw, { passive: false })
     canvas.addEventListener("touchend", stopDrawing, { passive: false })
@@ -613,7 +559,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
     setSignatureData(null)
   }
 
@@ -626,7 +573,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
     setInspectorSignatureData(null)
   }
 
@@ -1253,9 +1201,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const equipW = pageW - margin * 2
     const equipH = 84
 
-    pdf.setDrawColor(203, 213, 225)
-    pdf.setFillColor(248, 250, 252)
-    pdf.setLineWidth(0.35)
+    pdf.setDrawColor(226, 232, 240)
+    pdf.setFillColor(255, 255, 255)
+    pdf.setLineWidth(0.3)
     // @ts-ignore
     pdf.roundedRect(equipX, equipY, equipW, equipH, 3, 3, "FD")
 
@@ -1431,48 +1379,27 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
       }
 
-      const baseY = sigY + 30
-
-      const drawCentered = (text: string, font: "normal" | "bold", r: number, g: number, b: number) => {
-        const t = (text || "").toString()
-        pdf.setFont("helvetica", font)
-        pdf.setFontSize(8)
-        pdf.setTextColor(r, g, b)
-        const tw = pdf.getTextWidth(t)
-        const startX = x + Math.max(0, (sigImgW - tw) / 2)
-        pdf.text(t, startX, baseY)
-      }
+      pdf.setFont("helvetica", "normal")
+      pdf.setFontSize(8)
+      pdf.setTextColor(100, 116, 139)
+      pdf.text(title, x, sigY + 30)
 
       if (extra?.inspector) {
         const inspectorColor = inspectorColors[selectedInspector] || "#111827"
         const label = "Inspector: "
-        const value = title || selectedInspector || "Not selected"
-        const full = `${label}${value}`
-
-        pdf.setFontSize(8)
         pdf.setFont("helvetica", "bold")
         pdf.setTextColor(17, 24, 39)
-        const fullW = pdf.getTextWidth(full)
-        const startX = x + Math.max(0, (sigImgW - fullW) / 2)
-
-        pdf.text(label, startX, baseY)
+        pdf.text(label, x, sigY + 30)
         const lw = pdf.getTextWidth(label)
-
-        // value (colored)
-        pdf.setFont("helvetica", "bold")
         pdf.setTextColor(inspectorColor)
-        pdf.text(value, startX + lw, baseY)
-      } else {
-        // Driver name centered under signature
-        const driverDisplay = title || "Driver"
-        drawCentered(driverDisplay, "bold", 17, 24, 39)
+        pdf.text(selectedInspector || "Not selected", x + lw, sigY + 30)
       }
 
       pdf.setTextColor(17, 24, 39)
     }
 
-    drawSignatureArea(leftSigX, `${(driverName || "Driver").trim()}${signatureData ? "" : " (not signed)"}`, signatureData)
-    drawSignatureArea(rightSigX, (selectedInspector || "Not selected").trim(), inspectorSignatureData, { inspector: true })
+    drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
+    drawSignatureArea(rightSigX, "", inspectorSignatureData, { inspector: true })
 
     await addWatermark()
 
@@ -1545,14 +1472,19 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         compressionOptions: { level: 6 },
       })
 
-      // Store ZIP in Supabase (direct-to-storage via signed URL; avoids Vercel 4.5MB payload limit)
+      // Store ZIP in Supabase (best-effort; app continues even if store fails)
       try {
-        const prepRes = await fetch("/api/adr-store", {
+        const zipArr = await zipBlob.arrayBuffer()
+        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
+        const zipBase64 = Buffer.from(zipArr).toString("base64")
+
+        await fetch("/api/adr-store", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             variant,
             checklistHash,
+            zipBase64,
             emailSent: false,
             meta: {
               variant,
@@ -1564,21 +1496,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             },
           }),
         })
-
-        const prep = await prepRes.json().catch(() => ({}))
-
-        if (prepRes.ok && prep?.success && prep.upload && prep.path && prep.token) {
-          const supabase = getSupabaseClient()
-          const up = await supabase.storage
-            .from("adr-checklists")
-            .uploadToSignedUrl(prep.path as string, prep.token as string, zipBlob, {
-              contentType: "application/zip",
-            })
-
-          if (up.error) {
-            throw new Error(up.error.message)
-          }
-        }
       } catch (e) {
         console.warn("Supabase store failed (download)", e)
       }
@@ -1792,6 +1709,31 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
+        // Restore signatures
+        if (typeof parsedData.signatureData === "string") setSignatureData(parsedData.signatureData)
+        if (typeof parsedData.inspectorSignatureData === "string") setInspectorSignatureData(parsedData.inspectorSignatureData)
+
+        // Restore photos (we persist only uploaded photos with URLs)
+        if (Array.isArray(parsedData.photos)) {
+          const restored: UploadedPhoto[] = parsedData.photos
+            .filter((p: any) => p && typeof p === "object" && typeof p.url === "string" && p.url.length > 0)
+            .map((p: any) => ({
+              id:
+                typeof p.id === "string" && p.id.length > 0
+                  ? p.id
+                  : typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `${Date.now()}_${Math.random()}`,
+              name: typeof p.name === "string" ? p.name : "photo.jpg",
+              previewUrl: p.url,
+              status: "done" as const,
+              progress: 100,
+              url: p.url,
+              contentType: typeof p.contentType === "string" ? p.contentType : undefined,
+            }))
+          setPhotos(restored)
+        }
+
         // Validate dates after loading
         if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
           setTimeout(() => validateLicenseDate("drivingLicense"), 0)
@@ -1818,6 +1760,44 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [isMounted])
 
+
+  // Restore signature drawings on the canvases after a refresh
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (!signatureData) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const img = new window.Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#fff"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.src = signatureData
+  }, [isMounted, signatureData])
+
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (!inspectorSignatureData) return
+    const canvas = inspectorCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const img = new window.Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#fff"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.src = inspectorSignatureData
+  }, [isMounted, inspectorSignatureData])
+
   // Add an effect to save data to localStorage whenever relevant state changes
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
@@ -1836,6 +1816,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       expiryDates,
       selectedInspector,
       remarks,
+      signatureData,
+      inspectorSignatureData,
+      photos: photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ id: p.id, name: p.name, url: p.url, contentType: p.contentType })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
@@ -1854,6 +1839,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     expiryDates,
     selectedInspector,
     remarks,
+    signatureData,
+    inspectorSignatureData,
+    photos,
   ])
 
   // Add this right after the return statement
@@ -1906,7 +1894,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
   // Find the handleSendEmail function and replace it with this improved version:
 
-  
   const handleSendEmail = async () => {
     if (!isMounted || typeof window === "undefined") return
 
@@ -1914,11 +1901,29 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setEmailStatus("Preparing email...")
 
     try {
-      // Build identity hash (same as Download ZIP) so we dedupe/update the same DB row.
+      setEmailStatus("Generating PDF...")
+
+      const pdf = await buildAdrPdf()
+
+      // Convert PDF to base64
+      let pdfBase64 = ""
+      try {
+        const pdfBuffer = pdf.output("arraybuffer")
+        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
+        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
+      } catch (convError: any) {
+        console.error("Error processing PDF:", convError)
+        throw new Error(`PDF processing error: ${convError.message}`)
+      }
+
+      setEmailStatus("Sending email...")
+
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
         .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
+      // Compute the same hash used by Download ZIP (so email updates the same DB entry).
       const identity = {
         variant,
         driverName,
@@ -1939,92 +1944,20 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         inspectorSignatureData,
         photos: uploadedPhotos,
       }
-
       const checklistHash = await sha256Hex(stableStringify(identity))
 
-      // Ask server to prepare/update the DB row and (if needed) return a signed upload URL.
-      setEmailStatus("Preparing storage...")
-      const prepRes = await fetch("/api/adr-store", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          variant,
-          checklistHash,
-          emailSent: true,
-          meta: {
-            variant,
-            driverName,
-            truckPlate,
-            trailerPlate,
-            inspectionDate: checkDate,
-            inspectorName: selectedInspector,
-          },
-        }),
-      })
-
-      const prep = await prepRes.json().catch(() => ({}))
-      if (!prepRes.ok || !prep?.success) {
-        throw new Error(prep?.message || `Storage prep failed (${prepRes.status})`)
-      }
-
-      // If this is a new checklist (or not yet uploaded), upload the ZIP directly to Supabase Storage.
-      if (prep.upload && prep.path && prep.token) {
-        setEmailStatus("Generating ZIP...")
-
-        const pdf = await buildAdrPdf()
-
-        const { default: JSZip } = await import("jszip")
-        const zip = new JSZip()
-
-        const pdfBuffer = pdf.output("arraybuffer")
-        const pdfName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
-        zip.file(pdfName, pdfBuffer)
-
-        const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
-        for (let i = 0; i < uploadedPhotos.length; i++) {
-          const ph = uploadedPhotos[i]
-          try {
-            const resp = await fetch(ph.url)
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-            const arrBuf = await resp.arrayBuffer()
-            const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
-            zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
-          } catch (e) {
-            console.warn("Failed to add photo to ZIP", e)
-          }
-        }
-
-        const zipBlob = await zip.generateAsync({
-          type: "blob",
-          compression: "DEFLATE",
-          compressionOptions: { level: 6 },
-        })
-
-        setEmailStatus("Uploading ZIP...")
-        const supabase = getSupabaseClient()
-        const up = await supabase.storage
-          .from("adr-checklists")
-          .uploadToSignedUrl(prep.path as string, prep.token as string, zipBlob, {
-            contentType: "application/zip",
-          })
-
-        if (up.error) {
-          throw new Error(up.error.message)
-        }
-      }
-
-      // Now send email with ZIP as attachment (server downloads ZIP from Supabase Storage).
-      setEmailStatus("Sending email...")
       const response = await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inspectorName: selectedInspector,
+          pdfBase64,
           driverName,
           truckPlate,
           trailerPlate,
           inspectionDate: checkDate,
           remarks,
+          photos: uploadedPhotos,
           variant,
           checklistHash,
           meta: {
@@ -2039,12 +1972,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       })
 
       const data = await response.json().catch(() => ({}))
-      if (!response.ok || !data?.success) {
-        throw new Error(data?.message || `Server responded with status ${response.status}`)
+
+      if (!response.ok) {
+        throw new Error(data.message || `Server responded with status ${response.status}`)
       }
 
-      setEmailStatus("Email sent successfully!")
-      resetForm()
+      if (data.success) {
+        setEmailStatus("Email sent successfully!")
+        resetForm()
+      } else {
+        setEmailStatus(data.message || "Email sent successfully!")
+      }
     } catch (err: any) {
       console.error("Email sending error:", err)
       setEmailStatus(`Failed to send email: ${err.message}. Please try again.`)
@@ -2053,8 +1991,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }
 
-
-return (
+  return (
     <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
       <div className="text-center mb-6">
         <h1 id="adr-title" className="text-2xl font-bold">
