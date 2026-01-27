@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import Image from "next/image"
+import NextImage from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 
 const capitalizeWords = (str: string) =>
@@ -15,8 +15,6 @@ const capitalizeWords = (str: string) =>
     .split(" ")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(" ")
-
-const createHtmlImage = () => (typeof window !== "undefined" ? createHtmlImage()! : null)
 
 export type ChecklistVariant = "full" | "under1000"
 
@@ -1675,7 +1673,7 @@ useEffect(() => {
   const ctx = canvas.getContext("2d")
   if (!ctx) return
 
-  const img = createHtmlImage()!
+  const img = new window.Image()
   img.onload = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = "#fff"
@@ -1693,7 +1691,7 @@ useEffect(() => {
   const ctx = canvas.getContext("2d")
   if (!ctx) return
 
-  const img = createHtmlImage()!
+  const img = new window.Image()
   img.onload = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = "#fff"
@@ -1936,7 +1934,7 @@ useEffect(() => {
 
           {/* Driving License Document Box */}
           <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
-            <Image
+            <NextImage
               src="/images/driving-license.jpg"
               alt="Driving License"
               fill
@@ -2003,7 +2001,7 @@ useEffect(() => {
             <>
               {/* ADR Certificate Document Box */}
           <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
-            <Image
+            <NextImage
               src="/images/adr-certificate.jpg"
               alt="ADR Certificate"
               fill
@@ -2072,7 +2070,7 @@ useEffect(() => {
 
           {/* Combined Vehicle Documents Box */}
           <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
-            <Image
+            <NextImage
               src="/images/truck-document.jpg"
               alt="Vehicle Documents"
               fill
@@ -2187,7 +2185,7 @@ useEffect(() => {
           <div key={index} className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
             {/* Faded background image */}
             {item.image && (
-              <Image
+              <NextImage
                 src={item.image || "/placeholder.svg"}
                 alt={item.name}
                 fill
@@ -2227,7 +2225,7 @@ useEffect(() => {
                 <div className="flex items-center justify-center mx-4 gap-2 h-full">
                   {item.additionalImage && (
                     <div className="equipment-image-container ml-2">
-                      <Image
+                      <NextImage
                         src={item.additionalImage || "/placeholder.svg"}
                         alt={`${item.name} additional`}
                         width={50}
