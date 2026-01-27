@@ -16,6 +16,8 @@ const capitalizeWords = (str: string) =>
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(" ")
 
+const createHtmlImage = () => (typeof window !== "undefined" ? createHtmlImage()! : null)
+
 export type ChecklistVariant = "full" | "under1000"
 
 type PhotoUploadStatus = "queued" | "uploading" | "done" | "error"
@@ -1673,7 +1675,7 @@ useEffect(() => {
   const ctx = canvas.getContext("2d")
   if (!ctx) return
 
-  const img = new Image()
+  const img = createHtmlImage()!
   img.onload = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = "#fff"
@@ -1691,7 +1693,7 @@ useEffect(() => {
   const ctx = canvas.getContext("2d")
   if (!ctx) return
 
-  const img = new Image()
+  const img = createHtmlImage()!
   img.onload = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = "#fff"
