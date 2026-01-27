@@ -1,132 +1,130 @@
 import { type NextRequest, NextResponse } from "next/server"
-import nodemailer from "nodemailer"
-import { createClient } from "@supabase/supabase-js"
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin"
 
 export const runtime = "nodejs"
 
-type Meta = Record<string, any>
+const inspectorEmails: Record<string, string[]> = {
+  "Eduard Tudose": ["eduard.tudose@alblas.nl"],
+  "Angela Ilis": ["angela.ilis@alblas.nl"],
+  "Lucian Sistac": ["lucian.sistac@alblas.nl"],
+  "Robert Kerekes": ["robert.kerekes@alblas.nl"],
+  "Alexandru Dogariu": ["alexandru.dogariu@alblas.nl"],
+  "Martian Gherasim": ["martian-george.gherasim@alblas.nl"],
+  "Alexandru Florea": [
+    "eduard.tudose@alblas.nl",
+    "angela.ilis@alblas.nl",
+    "lucian.sistac@alblas.nl",
+    "robert.kerekes@alblas.nl",
+    "alexandru.dogariu@alblas.nl",
+    "martian-george.gherasim@alblas.nl",
+  ],
+}
 
-const escapeHtml = (v: any) =>
-  String(v ?? "")
+type Body = {
+  inspectorName: string
+  driverName: string
+  truckPlate: string
+  trailerPlate: string
+  inspectionDate: string
+  remarks?: string
+  variant: "full" | "under1000" | "reduced"
+  checklistHash: string
+  meta?: Record<string, unknown> | null
+}
+
+const mapVariant = (v: Body["variant"]): "full" | "reduced" => (v === "full" ? "full" : "reduced")
+
+const escapeHtml = (s: string) =>
+  (s ?? "")
+    .toString()
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;")
 
-const safeMeta = (meta: any): Meta => {
-  if (!meta) return {}
-  if (typeof meta === "object") return meta
-  if (typeof meta === "string") {
-    try {
-      const parsed = JSON.parse(meta)
-      return parsed && typeof parsed === "object" ? parsed : {}
-    } catch {
-      return {}
-    }
-  }
-  return {}
-}
-
-const pick = (meta: Meta, keys: string[], fallback?: any) => {
-  for (const k of keys) {
-    if (meta[k] !== undefined && meta[k] !== null && String(meta[k]).trim() !== "") return meta[k]
-  }
-  return fallback
-}
-
-const formatDDMMYYYY = (iso: string) => {
-  const d = new Date(iso)
-  const dd = String(d.getDate()).padStart(2, "0")
-  const mm = String(d.getMonth() + 1).padStart(2, "0")
-  const yyyy = String(d.getFullYear())
-  return `${dd}-${mm}-${yyyy}`
-}
-
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}))
+    const body = (await req.json()) as Partial<Body>
 
-    // We accept both the new small payload and the legacy fields (for backward compatibility)
-    const to = String(body?.to || body?.email || "").trim()
-    const id = String(body?.id || "").trim()
+    const inspectorName = (body.inspectorName || "").trim()
+    const driverName = (body.driverName || "").trim()
+    const truckPlate = (body.truckPlate || "").trim()
+    const trailerPlate = (body.trailerPlate || "").trim()
+    const inspectionDate = (body.inspectionDate || "").trim()
+    const remarks = (body.remarks || "").toString()
+    const variant = (body.variant || "reduced") as Body["variant"]
+    const checklistHash = (body.checklistHash || "").trim()
+    const meta = (body.meta ?? null) as Record<string, unknown> | null
 
-    if (!to) {
-      return NextResponse.json({ success: false, message: "Missing recipient email (to)." }, { status: 400 })
+    if (!inspectorName) {
+      return NextResponse.json({ success: false, message: "Missing inspectorName" }, { status: 400 })
     }
-    if (!id) {
-      return NextResponse.json({ success: false, message: "Missing checklist id." }, { status: 400 })
+    if (!driverName) {
+      return NextResponse.json({ success: false, message: "Missing driverName" }, { status: 400 })
+    }
+    if (!inspectionDate) {
+      return NextResponse.json({ success: false, message: "Missing inspectionDate" }, { status: 400 })
+    }
+    if (!checklistHash) {
+      return NextResponse.json({ success: false, message: "Missing checklistHash" }, { status: 400 })
     }
 
-    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
-    const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-    if (!supabaseUrl || !serviceRole) {
+    const recipients = inspectorEmails[inspectorName]
+    if (!recipients || recipients.length === 0) {
       return NextResponse.json(
-        { success: false, message: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY on server." },
-        { status: 500 },
+        { success: false, message: `No email found for inspector: ${inspectorName}` },
+        { status: 400 },
       )
     }
 
-    const supabase = createClient(supabaseUrl, serviceRole, {
-      auth: { persistSession: false },
-    })
-
-    const { data: row, error } = await supabase
-      .from("adr_checklists")
-      .select("id, file_path, created_at, meta")
-      .eq("id", id)
-      .single()
-
-    if (error || !row?.file_path) {
-      return NextResponse.json(
-        { success: false, message: error?.message || "Checklist not found." },
-        { status: 404 },
-      )
-    }
-
-    const meta = safeMeta(row.meta)
-
-    const driverName = String(pick(meta, ["driverName", "driver_name"], body?.driverName || "")).trim()
-    const inspectorName = String(pick(meta, ["inspectorName", "inspector_name"], body?.inspectorName || "")).trim()
-    const truckPlate = String(pick(meta, ["truckPlate", "truck_plate"], body?.truckPlate || "")).trim()
-    const trailerPlate = String(pick(meta, ["trailerPlate", "trailer_plate"], body?.trailerPlate || "")).trim()
-    const inspectionDateRaw = String(
-      pick(meta, ["inspectionDate", "inspection_date"], body?.inspectionDate || ""),
-    ).trim()
-    const inspectionDate = inspectionDateRaw || (row.created_at ? formatDDMMYYYY(row.created_at) : "")
-    const remarks = String(pick(meta, ["remarks"], body?.remarks || "-") ?? "-")
-    const photosCount = Number(pick(meta, ["photosCount", "photos_count"], body?.photosCount || body?.photos?.length || 0))
-
+    // Download ZIP from Supabase Storage (avoid sending large payload through Vercel)
+    const checklistType = mapVariant(variant)
     const bucket = "adr-checklists"
-    const filePath = String(row.file_path)
+    const objectPath = `${checklistType}/${checklistHash}.zip`
 
-    // Signed URL valid 1 hour (also used in email "Online Access")
-    const { data: signed, error: signErr } = await supabase.storage.from(bucket).createSignedUrl(filePath, 60 * 60)
-    if (signErr || !signed?.signedUrl) {
+    const supabase = getSupabaseAdmin()
+
+    // Keep DB in sync: mark emailed + refresh retention
+    try {
+      const expiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString()
+      const updatePayload: Record<string, unknown> = { email_sent: true, expires_at: expiresAt }
+      if (meta) updatePayload.meta = meta
+      await supabase.from("adr_checklists").update(updatePayload).eq("checklist_hash", checklistHash)
+    } catch (e: any) {
+      console.warn("DB update (email_sent) failed:", e?.message)
+    }
+
+    const dl = await supabase.storage.from(bucket).download(objectPath)
+    if (dl.error || !dl.data) {
       return NextResponse.json(
-        { success: false, message: signErr?.message || "Failed to create signed URL." },
+        { success: false, message: dl.error?.message || "Failed to download ZIP from storage" },
         { status: 500 },
       )
     }
 
-    // Download ZIP bytes server-side (avoids Vercel payload limit 413)
-    const dlRes = await fetch(signed.signedUrl)
-    if (!dlRes.ok) {
-      return NextResponse.json(
-        { success: false, message: `Failed to download ZIP from storage (${dlRes.status}).` },
-        { status: 500 },
-      )
-    }
-    const ab = await dlRes.arrayBuffer()
-    const zipBuffer = Buffer.from(ab)
+    const arrBuf = await dl.data.arrayBuffer()
+    const zipBuffer = Buffer.from(arrBuf)
 
-    // Mail transport (Gmail App Password)
+    // Optional: generate a 1 hour signed URL for online access (same as old email)
+    let signedUrl: string | null = null
+    try {
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(objectPath, 60 * 60)
+      if (!error && data?.signedUrl) signedUrl = data.signedUrl
+    } catch {
+      signedUrl = null
+    }
+
+    // Dynamic import for nodemailer (interop safe)
+    const nodemailerMod: any = await import("nodemailer")
+    const nodemailer = nodemailerMod?.default ?? nodemailerMod
+
     const gmailUser = process.env.GMAIL_USER
     const gmailPass = process.env.GMAIL_APP_PASSWORD
+
     if (!gmailUser || !gmailPass) {
       return NextResponse.json(
-        { success: false, message: "Missing GMAIL_USER or GMAIL_APP_PASSWORD on server." },
+        { success: false, message: "Missing GMAIL_USER or GMAIL_APP_PASSWORD env vars on server" },
         { status: 500 },
       )
     }
@@ -136,88 +134,97 @@ export async function POST(req: NextRequest) {
       auth: { user: gmailUser, pass: gmailPass },
     })
 
-    // Match the previous sender display name
-    const from = `"ADR Check system" <${gmailUser}>`
+    const safe = (s: string) => (s || "").replace(/\s+/g, "_").replace(/[^a-zA-Z0-9._-]/g, "_")
+    const zipFilename = `ADR-Checklist_${safe(driverName)}_${safe(inspectionDate).replace(/-/g, ".")}.zip`
 
+    // Keep subject similar to old
     const subject = "ADR Checklist Report"
 
-    // Match the previous HTML structure (table layout + online access line)
     const html = `
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8"><div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-  <h2 style="color: #333;">ADR Checklist Report</h2>
-  <p>Please find attached the ADR Checklist with the following details:</p>
+      <div style="font-family: Arial, sans-serif; max-width: 780px; margin: 0 auto; color: #111827;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:16px;">
+          <div>
+            <div style="font-size: 18px; font-weight: 700; margin: 0;">ADR Checklist Report</div>
+            <div style="font-size: 12px; color:#6b7280; margin-top:4px;">
+              Generated by ADR Check system
+            </div>
+          </div>
+        </div>
 
-  <table style="border-collapse: collapse; width: 100%; margin: 20px 0;">
-    <tr>
-      <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Driver:</td>
-      <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(driverName)}</td>
-    </tr>
-    <tr>
-      <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Truck:</td>
-      <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(truckPlate)}</td>
-    </tr>
-    <tr>
-      <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Trailer:</td>
-      <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(trailerPlate)}</td>
-    </tr>
-    <tr>
-      <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Inspection Date:</td>
-      <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(inspectionDate)}</td>
-    </tr>
-    <tr>
-      <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Inspector:</td>
-      <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(inspectorName)}</td>
-    </tr>
-    <tr>
-      <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Remarks:</td>
-      <td style="padding: 8px; border: 1px solid #ddd; white-space: pre-wrap;">${escapeHtml(remarks || "-")}</td>
-    </tr>
-    <tr>
-      <td style="padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;">Photos:</td>
-      <td style="padding: 8px; border: 1px solid #ddd;">${Number.isFinite(photosCount) ? photosCount : 0}</td>
-    </tr>
-  </table>
+        <div style="margin-top:16px; border:1px solid #e5e7eb; border-radius:12px; overflow:hidden;">
+          <table style="width:100%; border-collapse:collapse;">
+            <tbody>
+              <tr>
+                <td style="padding:10px 12px; background:#f9fafb; width:200px; font-weight:600; border-bottom:1px solid #e5e7eb;">Driver</td>
+                <td style="padding:10px 12px; border-bottom:1px solid #e5e7eb;">${escapeHtml(driverName)}</td>
+              </tr>
+              <tr>
+                <td style="padding:10px 12px; background:#f9fafb; font-weight:600; border-bottom:1px solid #e5e7eb;">Inspector</td>
+                <td style="padding:10px 12px; border-bottom:1px solid #e5e7eb;">${escapeHtml(inspectorName)}</td>
+              </tr>
+              <tr>
+                <td style="padding:10px 12px; background:#f9fafb; font-weight:600; border-bottom:1px solid #e5e7eb;">Date</td>
+                <td style="padding:10px 12px; border-bottom:1px solid #e5e7eb;">${escapeHtml(inspectionDate)}</td>
+              </tr>
+              <tr>
+                <td style="padding:10px 12px; background:#f9fafb; font-weight:600; border-bottom:1px solid #e5e7eb;">Truck plate</td>
+                <td style="padding:10px 12px; border-bottom:1px solid #e5e7eb;">${escapeHtml(truckPlate || "-")}</td>
+              </tr>
+              <tr>
+                <td style="padding:10px 12px; background:#f9fafb; font-weight:600; border-bottom:1px solid #e5e7eb;">Trailer plate</td>
+                <td style="padding:10px 12px; border-bottom:1px solid #e5e7eb;">${escapeHtml(trailerPlate || "-")}</td>
+              </tr>
+              ${
+                remarks
+                  ? `<tr>
+                      <td style="padding:10px 12px; background:#f9fafb; font-weight:600; border-bottom:1px solid #e5e7eb;">Remarks</td>
+                      <td style="padding:10px 12px; border-bottom:1px solid #e5e7eb;">${escapeHtml(remarks)}</td>
+                    </tr>`
+                  : ""
+              }
+            </tbody>
+          </table>
+        </div>
 
-  <p><strong>Online Access (valid 1 hour):</strong> <a href="${escapeHtml(signed.signedUrl)}">${escapeHtml(
-    signed.signedUrl,
-  )}</a></p>
+        <div style="margin-top:14px; font-size:13px; color:#111827;">
+          The ZIP file (PDF + photos) is attached to this email.
+        </div>
 
-  <p style="margin-top: 18px;">The ZIP file (PDF + photos) is attached to this email.</p>
+        ${
+          signedUrl
+            ? `<div style="margin-top:10px; padding:12px; border:1px dashed #e5e7eb; border-radius:12px; background:#fafafa;">
+                 <div style="font-size: 13px; font-weight:700; margin-bottom:6px;">Online Access (valid 1 hour)</div>
+                 <a href="${signedUrl}" style="color:#2563eb; text-decoration:none; word-break:break-all;">${signedUrl}</a>
+               </div>`
+            : ""
+        }
 
-  <p style="color: #666; font-size: 12px; margin-top: 30px;">
-    This email was generated automatically by ADR Check system.
-  </p>
-</div>
-`
+        <div style="margin-top:18px; font-size:12px; color:#6b7280;">
+          This email was generated automatically by the ADR Check system.
+        </div>
+      </div>
+    `
 
-    // Attachment name similar to previous
-    const niceNameParts = [
-      "ADR Checklist",
-      driverName ? `- ${driverName}` : "",
-      inspectionDate ? `- ${inspectionDate}` : "",
-    ].filter(Boolean)
-    const attachmentName = `${niceNameParts.join(" ").replace(/\s+/g, " ").trim()}.zip`
-
-    await transporter.sendMail({
-      from,
-      to,
+    const mailOptions = {
+      // Display name as before; mailbox is Gmail
+      from: `"ADR Check system" <${gmailUser}>`,
+      to: recipients.join(", "),
       subject,
       html,
-      text: `ADR Checklist Report\nDriver: ${driverName}\nInspector: ${inspectorName}\nDate: ${inspectionDate}\nTruck: ${truckPlate}\nTrailer: ${trailerPlate}\nRemarks: ${remarks}\nPhotos: ${photosCount}\n\nOnline Access (valid 1 hour): ${signed.signedUrl}\n\nThe ZIP file (PDF + photos) is attached.`,
       attachments: [
         {
-          filename: attachmentName,
+          filename: zipFilename,
           content: zipBuffer,
           contentType: "application/zip",
         },
       ],
-    })
+    }
 
-    // Mark emailed (best-effort)
-    await supabase.from("adr_checklists").update({ email_sent: true }).eq("id", id)
+    await transporter.sendMail(mailOptions)
 
-    return NextResponse.json({ success: true })
-  } catch (e: any) {
-    return NextResponse.json({ success: false, message: e?.message || "Failed to send email" }, { status: 500 })
+    return NextResponse.json({ success: true, message: "Email sent successfully" })
+  } catch (error: any) {
+    console.error("Email API error:", error)
+    return NextResponse.json({ success: false, message: error?.message || "Failed to send email" }, { status: 500 })
   }
 }
