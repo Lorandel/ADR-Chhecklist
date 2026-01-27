@@ -191,13 +191,16 @@ export async function POST(req: NextRequest) {
         </div>
 
         ${
-          signedUrl
-            ? `<div style="margin-top:10px; padding:12px; border:1px dashed #e5e7eb; border-radius:12px; background:#fafafa;">
-                 <div style="font-size: 13px; font-weight:700; margin-bottom:6px;">Online Access (valid 1 hour)</div>
-                 <a href="${signedUrl}" style="color:#2563eb; text-decoration:none; word-break:break-all;">${signedUrl}</a>
-               </div>`
-            : ""
-        }
+  signedUrl
+    ? `<div style="margin-top:10px; padding:12px; border:1px dashed #e5e7eb; border-radius:12px; background:#fafafa;">
+         <div style="font-size: 13px; font-weight:700; margin-bottom:6px;">Online Access (valid 1 hour)</div>
+         <a href="${signedUrl}" style="display:inline-block; padding:10px 14px; border-radius:10px; background:#111827; color:#ffffff; text-decoration:none; font-weight:700;">
+           Download ZIP
+         </a>
+       </div>`
+    : ""
+}
+
 
         <div style="margin-top:18px; font-size:12px; color:#6b7280;">
           This email was generated automatically by the ADR Check system.
