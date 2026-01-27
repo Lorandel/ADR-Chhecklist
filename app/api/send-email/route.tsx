@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
     const zipFilename = `ADR-Checklist_${safe(driverName)}_${safe(inspectionDate).replace(/-/g, ".")}.zip`
 
     // Keep subject similar to old
-    const subject = "ADR Checklist Report"
+    const subject = 'ADR Checklist - ${drivername} (${truckPlate || "-" / ${trailerPlate || "-"})' 
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 780px; margin: 0 auto; color: #111827;">
