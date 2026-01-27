@@ -1906,6 +1906,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
   // Find the handleSendEmail function and replace it with this improved version:
 
+  
   const handleSendEmail = async () => {
     if (!isMounted || typeof window === "undefined") return
 
@@ -1913,29 +1914,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setEmailStatus("Preparing email...")
 
     try {
-      setEmailStatus("Generating PDF...")
-
-      const pdf = await buildAdrPdf()
-
-      // Convert PDF to base64
-      let pdfBase64 = ""
-      try {
-        const pdfBuffer = pdf.output("arraybuffer")
-        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
-        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
-        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
-      } catch (convError: any) {
-        console.error("Error processing PDF:", convError)
-        throw new Error(`PDF processing error: ${convError.message}`)
-      }
-
-      setEmailStatus("Sending email...")
-
+      // Build identity hash (same as Download ZIP) so we dedupe/update the same DB row.
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
         .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
-      // Compute the same hash used by Download ZIP (so email updates the same DB entry).
       const identity = {
         variant,
         driverName,
@@ -1956,20 +1939,92 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         inspectorSignatureData,
         photos: uploadedPhotos,
       }
+
       const checklistHash = await sha256Hex(stableStringify(identity))
 
+      // Ask server to prepare/update the DB row and (if needed) return a signed upload URL.
+      setEmailStatus("Preparing storage...")
+      const prepRes = await fetch("/api/adr-store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          variant,
+          checklistHash,
+          emailSent: true,
+          meta: {
+            variant,
+            driverName,
+            truckPlate,
+            trailerPlate,
+            inspectionDate: checkDate,
+            inspectorName: selectedInspector,
+          },
+        }),
+      })
+
+      const prep = await prepRes.json().catch(() => ({}))
+      if (!prepRes.ok || !prep?.success) {
+        throw new Error(prep?.message || `Storage prep failed (${prepRes.status})`)
+      }
+
+      // If this is a new checklist (or not yet uploaded), upload the ZIP directly to Supabase Storage.
+      if (prep.upload && prep.path && prep.token) {
+        setEmailStatus("Generating ZIP...")
+
+        const pdf = await buildAdrPdf()
+
+        const { default: JSZip } = await import("jszip")
+        const zip = new JSZip()
+
+        const pdfBuffer = pdf.output("arraybuffer")
+        const pdfName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
+        zip.file(pdfName, pdfBuffer)
+
+        const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
+        for (let i = 0; i < uploadedPhotos.length; i++) {
+          const ph = uploadedPhotos[i]
+          try {
+            const resp = await fetch(ph.url)
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+            const arrBuf = await resp.arrayBuffer()
+            const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
+            zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
+          } catch (e) {
+            console.warn("Failed to add photo to ZIP", e)
+          }
+        }
+
+        const zipBlob = await zip.generateAsync({
+          type: "blob",
+          compression: "DEFLATE",
+          compressionOptions: { level: 6 },
+        })
+
+        setEmailStatus("Uploading ZIP...")
+        const supabase = getSupabaseClient()
+        const up = await supabase.storage
+          .from("adr-checklists")
+          .uploadToSignedUrl(prep.path as string, prep.token as string, zipBlob, {
+            contentType: "application/zip",
+          })
+
+        if (up.error) {
+          throw new Error(up.error.message)
+        }
+      }
+
+      // Now send email with ZIP as attachment (server downloads ZIP from Supabase Storage).
+      setEmailStatus("Sending email...")
       const response = await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inspectorName: selectedInspector,
-          pdfBase64,
           driverName,
           truckPlate,
           trailerPlate,
           inspectionDate: checkDate,
           remarks,
-          photos: uploadedPhotos,
           variant,
           checklistHash,
           meta: {
@@ -1984,17 +2039,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       })
 
       const data = await response.json().catch(() => ({}))
-
-      if (!response.ok) {
-        throw new Error(data.message || `Server responded with status ${response.status}`)
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.message || `Server responded with status ${response.status}`)
       }
 
-      if (data.success) {
-        setEmailStatus("Email sent successfully!")
-        resetForm()
-      } else {
-        setEmailStatus(data.message || "Email sent successfully!")
-      }
+      setEmailStatus("Email sent successfully!")
+      resetForm()
     } catch (err: any) {
       console.error("Email sending error:", err)
       setEmailStatus(`Failed to send email: ${err.message}. Please try again.`)
@@ -2003,7 +2053,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }
 
-  return (
+
+return (
     <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
       <div className="text-center mb-6">
         <h1 id="adr-title" className="text-2xl font-bold">
