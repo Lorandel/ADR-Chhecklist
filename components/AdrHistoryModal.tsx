@@ -32,6 +32,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<HistoryItem[]>([])
   const [refreshTick, setRefreshTick] = useState(0)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
+  const [previewTitle, setPreviewTitle] = useState<string | null>(null)
 
   const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced"), [items])
   const full = useMemo(() => items.filter((i) => i.checklist_type === "full"), [items])
@@ -43,6 +46,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setPass("")
       setError(null)
       setItems([])
+      setPreviewOpen(false)
+      setPreviewSrc(null)
+      setPreviewTitle(null)
       return
     }
   }, [open])
@@ -89,6 +95,21 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const seeAsGuest = () => {
     setError(null)
     setRole("guest")
+  }
+
+
+  const openPreview = (it: HistoryItem) => {
+    // Render PDF inside the stored ZIP via a server route (no big payload on client).
+    const url = `/api/adr-history/preview?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`
+    setPreviewTitle(itemLabel(it))
+    setPreviewSrc(url)
+    setPreviewOpen(true)
+  }
+
+  const closePreview = () => {
+    setPreviewOpen(false)
+    setPreviewSrc(null)
+    setPreviewTitle(null)
   }
 
   const safeMeta = (meta: any): Record<string, any> => {
@@ -244,6 +265,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
+                          <Button variant="outline" className="bg-transparent" onClick={() => openPreview(it)}>
+                              Preview
+                            </Button>
                           <a href={it.downloadUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex">
                             <Button variant="outline" className="bg-transparent" disabled={!it.downloadUrl}>
                               Download ZIP
@@ -283,6 +307,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
+                          <Button variant="outline" className="bg-transparent" onClick={() => openPreview(it)}>
+                              Preview
+                            </Button>
                           <a href={it.downloadUrl || "#"} target="_blank" rel="noreferrer" className="inline-flex">
                             <Button variant="outline" className="bg-transparent" disabled={!it.downloadUrl}>
                               Download ZIP
@@ -303,6 +330,33 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
           )}
         </div>
       </div>
-    </div>
+    
+      {previewOpen && previewSrc && (
+        <div className="absolute inset-0 z-[10000] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={closePreview} />
+          <div className="relative w-[min(94vw,960px)] h-[min(86vh,720px)] overflow-hidden rounded-3xl bg-white shadow-2xl border border-gray-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div className="font-semibold truncate">Preview: {previewTitle || "ADR PDF"}</div>
+              <button
+                type="button"
+                onClick={closePreview}
+                className="rounded-full px-3 py-1 text-sm text-gray-600 hover:bg-gray-100"
+                aria-label="Close preview"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="h-[calc(100%-64px)] bg-gray-50">
+              <iframe
+                title="ADR PDF Preview"
+                src={previewSrc}
+                className="w-full h-full"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+</div>
   )
 }
