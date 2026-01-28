@@ -33,6 +33,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [items, setItems] = useState<HistoryItem[]>([])
   const [refreshTick, setRefreshTick] = useState(0)
 
+  const [search, setSearch] = useState("")
   // Preview (render PDF inside the app, not relying on the device PDF viewer)
   const [previewItem, setPreviewItem] = useState<HistoryItem | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -44,8 +45,8 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const canvasWrapRef = useRef<HTMLDivElement | null>(null)
 
-  const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced"), [items])
-  const full = useMemo(() => items.filter((i) => i.checklist_type === "full"), [items])
+  const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search)), [items, search])
+  const full = useMemo(() => items.filter((i) => i.checklist_type === "full").filter((i) => matchesSearch(i, search)), [items, search])
 
   useEffect(() => {
     if (!open) {
@@ -130,7 +131,26 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     return `${dd}-${mm}-${yyyy}`
   }
 
-  const itemLabel = (it: HistoryItem) => {
+  
+  const matchesSearch = (it: HistoryItem, qRaw: string) => {
+    const q = (qRaw || "").trim().toLowerCase()
+    if (!q) return true
+    const m = safeMeta(it.meta)
+    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
+    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
+    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
+    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
+    const hash = String(it.checklist_hash ?? "").toLowerCase()
+    return (
+      driver.includes(q) ||
+      truck.includes(q) ||
+      trailer.includes(q) ||
+      inspector.includes(q) ||
+      hash.includes(q)
+    )
+  }
+
+const itemLabel = (it: HistoryItem) => {
     const m = safeMeta(it.meta)
     const driver = String(m.driverName ?? m.driver_name ?? "").trim()
     const inspector = String(m.inspectorName ?? m.inspector_name ?? "").trim()
@@ -372,6 +392,26 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                 <div className="text-sm text-gray-600">
                   Viewing as <span className="font-semibold">{role}</span>
                 </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="flex-1">
+                  <Label>Search</Label>
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search by driver, truck or trailer"
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  className="bg-transparent self-start sm:self-end"
+                  onClick={() => setSearch("")}
+                  disabled={!search.trim()}
+                >
+                  Clear
+                </Button>
+              </div>
+
                 <Button
                   variant="outline"
                   className="bg-transparent"
