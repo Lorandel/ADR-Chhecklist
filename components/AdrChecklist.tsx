@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
+import { stableStringify } from "@/lib/stableStringify"
+import { sha256Hex } from "@/lib/hash"
 
 const capitalizeWords = (str: string) =>
   str
@@ -900,7 +902,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
 
 
-  // Build a single-page, stylized ADR PDF (used for both Download and Send Email)
+  // Build a single-page, stylized ADR PDF (used for both Download ZIP and Send Email)
   const buildAdrPdf = async () => {
     const { jsPDF } = await import("jspdf")
 
@@ -1037,36 +1039,35 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       // ignore
     }
 
-    // Watermark (slightly more visible than the sample)
-    try {
-      const watermark = await getImage("/images/albias-watermark.png")
-      // @ts-ignore - GState exists at runtime
-      const GState = (pdf as any).GState
-      if (GState) {
-        // @ts-ignore
-        const gs = new (pdf as any).GState({ opacity: 0.18 })
-        // @ts-ignore
-        ;(pdf as any).setGState(gs)
-      }
+    // Watermark (drawn LAST so it stays visible over boxes)
+    const addWatermark = async () => {
+      try {
+        const watermark = await getImage("/images/albias-watermark.png")
+        // @ts-ignore - GState exists at runtime
+        const GState = (pdf as any).GState
+        if (GState) {
+          // @ts-ignore
+          const gs = new (pdf as any).GState({ opacity: 0.18 })
+          // @ts-ignore
+          ;(pdf as any).setGState(gs)
+        }
 
-      pdf.addImage(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
+        pdf.addImage(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
 
-      // reset opacity
-      // @ts-ignore
-      if ((pdf as any).setGState && (pdf as any).GState) {
+        // reset opacity
         // @ts-ignore
-        ;(pdf as any).setGState(new (pdf as any).GState({ opacity: 1 }))
+        if ((pdf as any).setGState && (pdf as any).GState) {
+          // @ts-ignore
+          ;(pdf as any).setGState(new (pdf as any).GState({ opacity: 1 }))
+        }
+      } catch {
+        // Continue without watermark
       }
-    } catch {
-      // Continue without watermark
     }
-
     // Header (red)
-    pdf.setFillColor(186, 0, 0)
-    pdf.rect(0, 0, pageW, headerH, "F")
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(18)
-    pdf.setTextColor(255, 255, 255)
+    pdf.setTextColor(0, 0, 0)
     pdf.text("ADR Checklist", pageW / 2, 12, { align: "center" })
 
     if (variant === "under1000") {
@@ -1119,17 +1120,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const truckDoc = formatExpiry(truckDocDate, truckDocExpired)
     const trailerDoc = formatExpiry(trailerDocDate, trailerDocExpired)
 
-    drawField(leftX, rowStartY + 0 * rowStep, "Driver: ", safeVal(driverName), "#111827")
+    drawField(leftX, rowStartY + 0 * rowStep, "Driver's name: ", safeVal(driverName), "#111827")
     drawField(rightX, rowStartY + 0 * rowStep, "Truck plate: ", safeVal(truckPlate), "#111827")
 
     drawField(leftX, rowStartY + 1 * rowStep, "Trailer plate: ", safeVal(trailerPlate), "#111827")
     drawField(rightX, rowStartY + 1 * rowStep, "Inspection date: ", safeVal(checkDate), "#111827")
 
-    drawField(leftX, rowStartY + 2 * rowStep, "DL expiry: ", dl.text, dl.color)
-    drawField(rightX, rowStartY + 2 * rowStep, "ADR expiry: ", adr.text, adr.color)
+    drawField(leftX, rowStartY + 2 * rowStep, "Driving Licence expiry: ", dl.text, dl.color)
+    drawField(rightX, rowStartY + 2 * rowStep, "ADR certificate expiry: ", adr.text, adr.color)
 
-    drawField(leftX, rowStartY + 3 * rowStep, "Truck doc: ", truckDoc.text, truckDoc.color)
-    drawField(rightX, rowStartY + 3 * rowStep, "Trailer doc: ", trailerDoc.text, trailerDoc.color)
+    drawField(leftX, rowStartY + 3 * rowStep, "Truck tehnical insp.: ", truckDoc.text, truckDoc.color)
+    drawField(rightX, rowStartY + 3 * rowStep, "Trailer tehnical insp.: ", trailerDoc.text, trailerDoc.color)
 
     // Remarks (always show label; content optional)
     const remarksBoxX = cardX + 6
@@ -1151,15 +1152,47 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (trimmedRemarks) {
       pdf.setTextColor(17, 24, 39)
       pdf.setFont("helvetica", "normal")
+
+      const textX = remarksBoxX + 20
+      const textY = remarksBoxY + 4.0
       const maxTextW = remarksBoxW - 22
-      const wrapped = pdf.splitTextToSize(trimmedRemarks, maxTextW)
-      const limited = wrapped.slice(0, 2)
-      if (wrapped.length > 2) {
-        // add ellipsis to last visible line
-        limited[1] = truncateToWidth(limited[1], maxTextW - 1)
-        if (!limited[1].endsWith("…")) limited[1] += "…"
+
+      // Available height for remarks text inside the box (in mm)
+      const textTop = textY
+      const textBottom = remarksBoxY + remarksBoxH - 1.2
+      const availableH = Math.max(0, textBottom - textTop)
+
+      const baseFont = 8
+      const minFont = 5
+      const step = 0.25
+      const ptToMm = 0.3527777778
+      const defaultLhf =
+        // @ts-ignore - exists at runtime
+        typeof (pdf as any).getLineHeightFactor === "function" ? (pdf as any).getLineHeightFactor() : 1.15
+
+      let fs = baseFont
+      let lines: string[] = []
+      let lhf = defaultLhf
+
+      while (fs >= minFont) {
+        pdf.setFontSize(fs)
+        lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
+        const lineH = fs * lhf * ptToMm
+        const textH = lines.length * lineH
+        if (textH <= availableH) break
+        fs -= step
       }
-      pdf.text(limited, remarksBoxX + 20, remarksBoxY + 4.0)
+
+      // If it's still too tall at min font, tighten line height a bit (keeps all text visible)
+      if (fs < minFont) fs = minFont
+      pdf.setFontSize(fs)
+      lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
+      const finalLineH = fs * lhf * ptToMm
+      if (lines.length * finalLineH > availableH) {
+        lhf = 1.0
+      }
+
+      pdf.text(lines, textX, textY, { lineHeightFactor: lhf })
     }
 
     // ---- Equipment checklist box ----
@@ -1368,21 +1401,117 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
     drawSignatureArea(rightSigX, "", inspectorSignatureData, { inspector: true })
 
+    await addWatermark()
+
+
     return pdf
   }
-  // Generate PDF report
-
-  // Generate PDF report
-  const generatePDF = async () => {
+  // Generate ZIP (PDF + photos) and store in Supabase (60-day retention)
+  const generateZIP = async () => {
     if (!isMounted || typeof window === "undefined") return
 
     setIsPdfGenerating(true)
 
     try {
       const pdf = await buildAdrPdf()
-      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
+
+      // Build identity hash (used to dedupe between Download and Email)
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
+
+      const identity = {
+        variant,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+        selectedInspector,
+        remarks,
+        drivingLicenseDate,
+        adrCertificateDate,
+        truckDocDate,
+        trailerDocDate,
+        checkedItems,
+        beforeLoadingChecked,
+        afterLoadingChecked,
+        expiryDates,
+        signatureData,
+        inspectorSignatureData,
+        photos: uploadedPhotos,
+      }
+
+      const checklistHash = await sha256Hex(stableStringify(identity))
+
+      const { default: JSZip } = await import("jszip")
+      const zip = new JSZip()
+
+      // PDF in ZIP
+      const pdfBuffer = pdf.output("arraybuffer")
+      const pdfName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
+      zip.file(pdfName, pdfBuffer)
+
+      // Photos in ZIP
+      const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
+      for (let i = 0; i < uploadedPhotos.length; i++) {
+        const ph = uploadedPhotos[i]
+        try {
+          const resp = await fetch(ph.url)
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const arrBuf = await resp.arrayBuffer()
+          const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
+          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
+        } catch (e) {
+          console.warn("Failed to add photo to ZIP", e)
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      })
+
+      // Store ZIP in Supabase (best-effort; app continues even if store fails)
+      try {
+        const zipArr = await zipBlob.arrayBuffer()
+        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
+        const zipBase64 = Buffer.from(zipArr).toString("base64")
+
+        await fetch("/api/adr-store", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            variant,
+            checklistHash,
+            zipBase64,
+            emailSent: false,
+            meta: {
+              variant,
+              driverName,
+              truckPlate,
+              trailerPlate,
+              inspectionDate: checkDate,
+              inspectorName: selectedInspector,
+            },
+          }),
+        })
+      } catch (e) {
+        console.warn("Supabase store failed (download)", e)
+      }
+
+      // Download ZIP
+      const zipName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.zip`
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = zipName
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
     } catch (error) {
-      console.error("Error generating PDF:", error)
+      console.error("Error generating ZIP:", error)
     } finally {
       setIsPdfGenerating(false)
     }
@@ -1580,6 +1709,31 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
+        // Restore signatures
+        if (typeof parsedData.signatureData === "string") setSignatureData(parsedData.signatureData)
+        if (typeof parsedData.inspectorSignatureData === "string") setInspectorSignatureData(parsedData.inspectorSignatureData)
+
+        // Restore photos (we persist only uploaded photos with URLs)
+        if (Array.isArray(parsedData.photos)) {
+          const restored: UploadedPhoto[] = parsedData.photos
+            .filter((p: any) => p && typeof p === "object" && typeof p.url === "string" && p.url.length > 0)
+            .map((p: any) => ({
+              id:
+                typeof p.id === "string" && p.id.length > 0
+                  ? p.id
+                  : typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `${Date.now()}_${Math.random()}`,
+              name: typeof p.name === "string" ? p.name : "photo.jpg",
+              previewUrl: p.url,
+              status: "done" as const,
+              progress: 100,
+              url: p.url,
+              contentType: typeof p.contentType === "string" ? p.contentType : undefined,
+            }))
+          setPhotos(restored)
+        }
+
         // Validate dates after loading
         if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
           setTimeout(() => validateLicenseDate("drivingLicense"), 0)
@@ -1606,6 +1760,44 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [isMounted])
 
+
+  // Restore signature drawings on the canvases after a refresh
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (!signatureData) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const img = new window.Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#fff"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.src = signatureData
+  }, [isMounted, signatureData])
+
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (!inspectorSignatureData) return
+    const canvas = inspectorCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const img = new window.Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#fff"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.src = inspectorSignatureData
+  }, [isMounted, inspectorSignatureData])
+
   // Add an effect to save data to localStorage whenever relevant state changes
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
@@ -1624,6 +1816,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       expiryDates,
       selectedInspector,
       remarks,
+      signatureData,
+      inspectorSignatureData,
+      photos: photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ id: p.id, name: p.name, url: p.url, contentType: p.contentType })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
@@ -1642,6 +1839,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     expiryDates,
     selectedInspector,
     remarks,
+    signatureData,
+    inspectorSignatureData,
+    photos,
   ])
 
   // Add this right after the return statement
@@ -1723,6 +1923,29 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         .filter((p) => p.status === "done" && !!p.url)
         .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
+      // Compute the same hash used by Download ZIP (so email updates the same DB entry).
+      const identity = {
+        variant,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+        selectedInspector,
+        remarks,
+        drivingLicenseDate,
+        adrCertificateDate,
+        truckDocDate,
+        trailerDocDate,
+        checkedItems,
+        beforeLoadingChecked,
+        afterLoadingChecked,
+        expiryDates,
+        signatureData,
+        inspectorSignatureData,
+        photos: uploadedPhotos,
+      }
+      const checklistHash = await sha256Hex(stableStringify(identity))
+
       const response = await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1735,6 +1958,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           inspectionDate: checkDate,
           remarks,
           photos: uploadedPhotos,
+          variant,
+          checklistHash,
+          meta: {
+            variant,
+            driverName,
+            truckPlate,
+            trailerPlate,
+            inspectionDate: checkDate,
+            inspectorName: selectedInspector,
+          },
         }),
       })
 
@@ -2376,8 +2609,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
-          {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
+        <Button onClick={generateZIP} disabled={isPdfGenerating} className="w-full">
+          {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
         </Button>
         <Button
           onClick={handleSendEmail}
