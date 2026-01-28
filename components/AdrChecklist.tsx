@@ -1039,8 +1039,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           }
         }
 
-        }
-
         renderItem(leftColumnItems[i], leftX)
         renderItem(rightColumnItems[i], rightX)
       }
