@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -32,7 +32,17 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<HistoryItem[]>([])
   const [refreshTick, setRefreshTick] = useState(0)
-  const [previewId, setPreviewId] = useState<string | null>(null)
+
+  // Preview (render PDF inside the app, not relying on the device PDF viewer)
+  const [previewItem, setPreviewItem] = useState<HistoryItem | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const pdfArrayBufferRef = useRef<ArrayBuffer | null>(null)
+  const renderSeq = useRef(0)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const canvasWrapRef = useRef<HTMLDivElement | null>(null)
 
   const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced"), [items])
   const full = useMemo(() => items.filter((i) => i.checklist_type === "full"), [items])
@@ -44,7 +54,14 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setPass("")
       setError(null)
       setItems([])
-      setPreviewId(null)
+
+      // close preview if modal closes
+      setPreviewOpen(false)
+      setPreviewItem(null)
+      setPreviewError(null)
+      setPreviewLoading(false)
+      pdfArrayBufferRef.current = null
+      setZoom(1)
       return
     }
   }, [open])
@@ -75,9 +92,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     }
   }, [open, role, refreshTick])
 
-  const close = () => {
-    onClose()
-  }
+  const close = () => onClose()
 
   const doLogin = () => {
     setError(null)
@@ -117,7 +132,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
   const itemLabel = (it: HistoryItem) => {
     const m = safeMeta(it.meta)
-
     const driver = String(m.driverName ?? m.driver_name ?? "").trim()
     const inspector = String(m.inspectorName ?? m.inspector_name ?? "").trim()
 
@@ -126,7 +140,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
     const base = driver || it.checklist_hash.slice(0, 10)
     const withInspector = inspector ? `${base} (inspector: ${inspector})` : base
-
     return date ? `${withInspector} • ${date}` : withInspector
   }
 
@@ -154,13 +167,159 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     }
   }
 
+  const onDownloadZip = useCallback((it: HistoryItem) => {
+    if (!it.downloadUrl) return
+    window.open(it.downloadUrl, "_blank", "noopener,noreferrer")
+  }, [])
+
+  const renderPdf = useCallback(async () => {
+    const buf = pdfArrayBufferRef.current
+    const canvas = canvasRef.current
+    const wrap = canvasWrapRef.current
+    if (!buf || !canvas || !wrap) return
+
+    const seq = ++renderSeq.current
+
+    try {
+      const pdfjsLib: any = await import("pdfjs-dist/build/pdf")
+      // Use bundled worker (works across devices; no external viewer needed)
+      try {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+          "pdfjs-dist/build/pdf.worker.min.mjs",
+          import.meta.url,
+        ).toString()
+      } catch {
+        // fallback (some bundlers)
+        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+          "pdfjs-dist/build/pdf.worker.min.js",
+          import.meta.url,
+        ).toString()
+      }
+
+      const loadingTask = pdfjsLib.getDocument({ data: buf })
+      const pdf = await loadingTask.promise
+      const page = await pdf.getPage(1)
+
+      const containerW = Math.max(260, wrap.clientWidth - 2) // avoid 0-width
+      const unscaled = page.getViewport({ scale: 1 })
+      const fitScale = containerW / unscaled.width
+      const scale = fitScale * zoom
+
+      const viewport = page.getViewport({ scale })
+      const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
+
+      canvas.width = Math.floor(viewport.width * dpr)
+      canvas.height = Math.floor(viewport.height * dpr)
+      canvas.style.width = `${Math.floor(viewport.width)}px`
+      canvas.style.height = `${Math.floor(viewport.height)}px`
+
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+      const renderTask = page.render({ canvasContext: ctx, viewport })
+      await renderTask.promise
+
+      if (seq !== renderSeq.current) return
+    } catch (e: any) {
+      setPreviewError(e?.message || "Failed to render preview")
+    }
+  }, [zoom])
+
+  const openPreview = useCallback(async (it: HistoryItem) => {
+    setPreviewItem(it)
+    setPreviewOpen(true)
+    setPreviewError(null)
+    setPreviewLoading(true)
+    setZoom(1)
+    pdfArrayBufferRef.current = null
+
+    try {
+      const res = await fetch(`/api/adr-history/preview?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`, {
+        cache: "no-store",
+      })
+      if (!res.ok) {
+        const t = await res.text().catch(() => "")
+        throw new Error(t || `Preview failed (${res.status})`)
+      }
+      const buf = await res.arrayBuffer()
+      pdfArrayBufferRef.current = buf
+    } catch (e: any) {
+      setPreviewError(e?.message || "Preview failed")
+    } finally {
+      setPreviewLoading(false)
+    }
+  }, [])
+
+  // Render when preview opens / zoom changes / container resizes
+  useEffect(() => {
+    if (!previewOpen) return
+    if (!pdfArrayBufferRef.current) return
+    renderPdf()
+  }, [previewOpen, zoom, renderPdf])
+
+  useEffect(() => {
+    if (!previewOpen) return
+    const wrap = canvasWrapRef.current
+    if (!wrap) return
+
+    const ro = new ResizeObserver(() => {
+      if (!pdfArrayBufferRef.current) return
+      renderPdf()
+    })
+    ro.observe(wrap)
+    return () => ro.disconnect()
+  }, [previewOpen, renderPdf])
+
+  const closePreview = () => {
+    setPreviewOpen(false)
+    setPreviewItem(null)
+    setPreviewError(null)
+    setPreviewLoading(false)
+    pdfArrayBufferRef.current = null
+    setZoom(1)
+  }
+
   if (!open) return null
+
+  const Row = ({ it }: { it: HistoryItem }) => (
+    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-gray-100 p-3">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium break-words sm:truncate">{itemLabel(it)}</div>
+        <div className="text-xs text-gray-600 break-words sm:truncate">
+          {new Date(it.created_at).toLocaleString()} • expires {new Date(it.expires_at).toLocaleDateString()}
+          {it.email_sent ? " • emailed" : ""}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0 w-full sm:w-auto">
+        <Button variant="outline" className="bg-transparent w-full sm:w-auto" onClick={() => openPreview(it)}>
+          Preview
+        </Button>
+
+        <Button
+          variant="outline"
+          className="bg-transparent w-full sm:w-auto"
+          onClick={() => onDownloadZip(it)}
+          disabled={!it.downloadUrl}
+        >
+          Download ZIP
+        </Button>
+
+        {role === "admin" && (
+          <Button variant="outline" className="bg-transparent w-full sm:w-auto" onClick={() => onDelete(it)}>
+            Delete
+          </Button>
+        )}
+      </div>
+    </div>
+  )
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={close} />
 
-      <div className="relative w-[min(92vw,820px)] max-h-[84vh] overflow-hidden rounded-3xl bg-white shadow-2xl border border-gray-200">
+      <div className="relative w-[min(96vw,900px)] max-h-[84vh] overflow-hidden rounded-3xl bg-white shadow-2xl border border-gray-200">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <div className="font-semibold">ADR Checklists History</div>
           <button
@@ -173,7 +332,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
           </button>
         </div>
 
-        <div className="p-6 overflow-auto max-h-[calc(84vh-64px)]">
+        <div className="p-4 sm:p-6 overflow-auto max-h-[calc(84vh-64px)]">
           {!role ? (
             <div className="max-w-sm mx-auto">
               <div className="text-center mb-6">
@@ -233,29 +392,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                 ) : (
                   <div className="space-y-2">
                     {reduced.map((it) => (
-                      <div
-                        key={it.id}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 p-3"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium truncate">{itemLabel(it)}</div>
-                          <div className="text-xs text-gray-600 truncate">
-                            {new Date(it.created_at).toLocaleString()} • expires{" "}
-                            {new Date(it.expires_at).toLocaleDateString()}
-                            {it.email_sent ? " • emailed" : ""}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <Button variant="outline" className="bg-transparent"  disabled={!it.downloadUrl} onClick={() => { if (it.downloadUrl) window.open(it.downloadUrl, "_blank", "noopener,noreferrer") }}>
-                              Download ZIP
-                            </Button>
-                          {role === "admin" && (
-                            <Button variant="outline" className="bg-transparent" onClick={() => onDelete(it)}>
-                              Delete
-                            </Button>
-                          )}
-                        </div>
-                      </div>
+                      <Row key={it.id} it={it} />
                     ))}
                   </div>
                 )}
@@ -270,29 +407,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                 ) : (
                   <div className="space-y-2">
                     {full.map((it) => (
-                      <div
-                        key={it.id}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 p-3"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium truncate">{itemLabel(it)}</div>
-                          <div className="text-xs text-gray-600 truncate">
-                            {new Date(it.created_at).toLocaleString()} • expires{" "}
-                            {new Date(it.expires_at).toLocaleDateString()}
-                            {it.email_sent ? " • emailed" : ""}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <Button variant="outline" className="bg-transparent"  disabled={!it.downloadUrl} onClick={() => { if (it.downloadUrl) window.open(it.downloadUrl, "_blank", "noopener,noreferrer") }}>
-                              Download ZIP
-                            </Button>
-                          {role === "admin" && (
-                            <Button variant="outline" className="bg-transparent" onClick={() => onDelete(it)}>
-                              Delete
-                            </Button>
-                          )}
-                        </div>
-                      </div>
+                      <Row key={it.id} it={it} />
                     ))}
                   </div>
                 )}
@@ -300,32 +415,62 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
             </div>
           )}
         </div>
+      </div>
 
-      {previewId && (
-        <div className="absolute inset-0 z-[10000] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setPreviewId(null)} />
-          <div className="relative w-[min(94vw,980px)] h-[min(86vh,720px)] rounded-2xl bg-white shadow-2xl border border-gray-200 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-              <div className="font-semibold text-sm">PDF Preview</div>
-              <button
-                type="button"
-                onClick={() => setPreviewId(null)}
-                className="rounded-full px-3 py-1 text-sm text-gray-600 hover:bg-gray-100"
-                aria-label="Close preview"
-              >
-                ✕
-              </button>
+      {/* Preview modal */}
+      {previewOpen && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={closePreview} />
+
+          <div className="relative w-[min(98vw,980px)] h-[min(92vh,860px)] rounded-3xl bg-white shadow-2xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-gray-200">
+              <div className="min-w-0">
+                <div className="font-semibold truncate">Preview</div>
+                <div className="text-xs text-gray-600 truncate">{previewItem ? itemLabel(previewItem) : ""}</div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="bg-transparent"
+                  onClick={() => setZoom((z) => Math.max(0.6, Math.round((z - 0.1) * 10) / 10))}
+                >
+                  −
+                </Button>
+                <div className="text-sm text-gray-600 w-14 text-center">{Math.round(zoom * 100)}%</div>
+                <Button
+                  variant="outline"
+                  className="bg-transparent"
+                  onClick={() => setZoom((z) => Math.min(2.2, Math.round((z + 0.1) * 10) / 10))}
+                >
+                  +
+                </Button>
+
+                <button
+                  type="button"
+                  onClick={closePreview}
+                  className="rounded-full px-3 py-1 text-sm text-gray-600 hover:bg-gray-100"
+                  aria-label="Close preview"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
-            <iframe
-              title="ADR PDF Preview"
-              src={`/api/adr-history/preview?id=${previewId}&ts=${Date.now()}`}
-              className="w-full h-[calc(100%-48px)]"
-            />
+
+            <div className="p-3 sm:p-4 h-[calc(100%-56px)] overflow-auto bg-gray-50">
+              {previewLoading ? (
+                <div className="text-sm text-gray-600">Loading preview...</div>
+              ) : previewError ? (
+                <div className="text-sm text-red-600">{previewError}</div>
+              ) : (
+                <div ref={canvasWrapRef} className="w-full flex justify-center">
+                  <canvas ref={canvasRef} className="rounded-xl bg-white shadow-sm border border-gray-200" />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
-
-      </div>
     </div>
   )
 }
