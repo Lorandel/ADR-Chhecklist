@@ -853,8 +853,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         pdf.addImage(dataUrl, fmt, dx, dy, w, h)
       }
 
-      }
-
       const drawCheckbox = (x: number, y: number, checked: boolean) => {
         pdf.setDrawColor(0)
         pdf.setLineWidth(0.5)
