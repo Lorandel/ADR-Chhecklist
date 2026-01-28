@@ -34,6 +34,39 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [refreshTick, setRefreshTick] = useState(0)
 
   const [search, setSearch] = useState("")
+
+  const safeMeta = (meta: any): Record<string, any> => {
+    if (!meta) return {}
+    if (typeof meta === "object") return meta as Record<string, any>
+    if (typeof meta === "string") {
+      try {
+        const parsed = JSON.parse(meta)
+        return parsed && typeof parsed === "object" ? (parsed as Record<string, any>) : {}
+      } catch {
+        return {}
+      }
+    }
+    return {}
+  }
+
+  function matchesSearch(it: HistoryItem, qRaw: string) {
+    const q = (qRaw || "").trim().toLowerCase()
+    if (!q) return true
+    const m = safeMeta((it as any).meta)
+    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
+    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? m.truck_number ?? "").toLowerCase()
+    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? m.trailer_number ?? "").toLowerCase()
+    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
+    const hash = String((it as any).checklist_hash ?? (it as any).checklistHash ?? "").toLowerCase()
+    return (
+      driver.includes(q) ||
+      truck.includes(q) ||
+      trailer.includes(q) ||
+      inspector.includes(q) ||
+      hash.includes(q)
+    )
+  }
+
   // Preview (render PDF inside the app, not relying on the device PDF viewer)
   const [previewItem, setPreviewItem] = useState<HistoryItem | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -45,8 +78,8 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const canvasWrapRef = useRef<HTMLDivElement | null>(null)
 
-  const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search)), [items, search])
-  const full = useMemo(() => items.filter((i) => i.checklist_type === "full").filter((i) => matchesSearch(i, search)), [items, search])
+  const reduced = useMemo(() => (items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search))).filter((i) => matchesSearch(i as any, search)), [items, search, search])
+  const full = useMemo(() => (items.filter((i) => i.checklist_type === "full").filter((i) => matchesSearch(i, search))).filter((i) => matchesSearch(i as any, search)), [items, search, search])
 
   useEffect(() => {
     if (!open) {
@@ -107,35 +140,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const seeAsGuest = () => {
     setError(null)
     setRole("guest")
-  }
-
-  const safeMeta = (meta: any): Record<string, any> => {
-    if (!meta) return {}
-    if (typeof meta === "object") return meta
-    if (typeof meta === "string") {
-      try {
-        const parsed = JSON.parse(meta)
-        return parsed && typeof parsed === "object" ? parsed : {}
-      } catch {
-        return {}
-      }
-
-  const matchesSearch = (it: HistoryItem, qRaw: string) => {
-    const q = (qRaw || "").trim().toLowerCase()
-    if (!q) return true
-    const m = safeMeta(it.meta)
-    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
-    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
-    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
-    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
-    const hash = String(it.checklist_hash ?? "").toLowerCase()
-    return (
-      driver.includes(q) ||
-      truck.includes(q) ||
-      trailer.includes(q) ||
-      inspector.includes(q) ||
-      hash.includes(q)
-    )
   }
 
     }
