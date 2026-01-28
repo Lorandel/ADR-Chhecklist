@@ -32,7 +32,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<HistoryItem[]>([])
   const [refreshTick, setRefreshTick] = useState(0)
-
   const [previewId, setPreviewId] = useState<string | null>(null)
 
   const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced"), [items])
@@ -78,19 +77,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
   const close = () => {
     onClose()
-  }
-
-  const closePreview = () => setPreviewId(null)
-
-  const openPreview = (it: HistoryItem) => {
-    setError(null)
-    setPreviewId(it.id)
-  }
-
-  const onDownloadZip = (it: HistoryItem) => {
-    if (!it.downloadUrl) return
-    // Open the signed URL directly. (We avoid wrapping in <a> so a missing URL can't navigate.)
-    window.open(it.downloadUrl, "_blank", "noopener,noreferrer")
   }
 
   const doLogin = () => {
@@ -169,8 +155,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   }
 
   if (!open) return null
-
-  const previewUrl = previewId ? `/api/adr-history/preview?id=${encodeURIComponent(previewId)}&ts=${Date.now()}` : null
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center">
@@ -262,17 +246,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <Button variant="outline" className="bg-transparent" onClick={() => openPreview(it)}>
-                            Preview
-                          </Button>
-                          <Button
-                            variant="outline"
-                            className="bg-transparent"
-                            disabled={!it.downloadUrl}
-                            onClick={() => onDownloadZip(it)}
-                          >
-                            Download ZIP
-                          </Button>
+                          <Button variant="outline" className="bg-transparent"  disabled={!it.downloadUrl} onClick={() => { if (it.downloadUrl) window.open(it.downloadUrl, "_blank", "noopener,noreferrer") }}>
+                              Download ZIP
+                            </Button>
                           {role === "admin" && (
                             <Button variant="outline" className="bg-transparent" onClick={() => onDelete(it)}>
                               Delete
@@ -307,17 +283,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <Button variant="outline" className="bg-transparent" onClick={() => openPreview(it)}>
-                            Preview
-                          </Button>
-                          <Button
-                            variant="outline"
-                            className="bg-transparent"
-                            disabled={!it.downloadUrl}
-                            onClick={() => onDownloadZip(it)}
-                          >
-                            Download ZIP
-                          </Button>
+                          <Button variant="outline" className="bg-transparent"  disabled={!it.downloadUrl} onClick={() => { if (it.downloadUrl) window.open(it.downloadUrl, "_blank", "noopener,noreferrer") }}>
+                              Download ZIP
+                            </Button>
                           {role === "admin" && (
                             <Button variant="outline" className="bg-transparent" onClick={() => onDelete(it)}>
                               Delete
@@ -332,33 +300,32 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
             </div>
           )}
         </div>
-      </div>
 
       {previewId && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={closePreview} />
-          <div className="relative w-[min(94vw,980px)] h-[min(88vh,920px)] rounded-3xl bg-white shadow-2xl border border-gray-200 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+        <div className="absolute inset-0 z-[10000] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setPreviewId(null)} />
+          <div className="relative w-[min(94vw,980px)] h-[min(86vh,720px)] rounded-2xl bg-white shadow-2xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
               <div className="font-semibold text-sm">PDF Preview</div>
               <button
                 type="button"
-                onClick={closePreview}
+                onClick={() => setPreviewId(null)}
                 className="rounded-full px-3 py-1 text-sm text-gray-600 hover:bg-gray-100"
                 aria-label="Close preview"
               >
                 ✕
               </button>
             </div>
-            <div className="w-full h-[calc(100%-52px)] bg-gray-50">
-              <iframe
-                title="ADR Checklist PDF Preview"
-                src={previewUrl || ""}
-                className="w-full h-full"
-              />
-            </div>
+            <iframe
+              title="ADR PDF Preview"
+              src={`/api/adr-history/preview?id=${previewId}&ts=${Date.now()}`}
+              className="w-full h-[calc(100%-48px)]"
+            />
           </div>
         </div>
       )}
+
+      </div>
     </div>
   )
 }
