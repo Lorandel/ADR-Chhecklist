@@ -11,7 +11,6 @@ import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
 import { sha256Hex } from "@/lib/hash"
-import { deleteOfflinePhoto, getOfflinePhoto, putOfflinePhoto } from "@/lib/offlinePhotos"
 
 const capitalizeWords = (str: string) =>
   str
@@ -42,7 +41,6 @@ type ADRChecklistProps = {
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
   const storageKey = `adrChecklistData_${variant}`
-  const offlinePhotoKey = (photoId: string) => `offlinePhoto_${storageKey}_${photoId}`
 
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
@@ -868,35 +866,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         }
 
         try {
-          // Persist locally first so it survives refresh/offline
-          try {
-            await putOfflinePhoto({
-              key: offlinePhotoKey(p.id),
-              blob: fileToUpload,
-              name: fileToUpload.name,
-              contentType: fileToUpload.type || originalFile.type || "image/jpeg",
-              createdAt: Date.now(),
-            })
-          } catch {
-            // ignore
-          }
-
-          // If offline, keep queued; will upload automatically when back online
-          if (typeof navigator !== "undefined" && !navigator.onLine) {
-            setPhotos((prev) => prev.map((ph) => (ph.id === p.id ? { ...ph, status: "queued", progress: 0 } : ph)))
-            return
-          }
-
           await uploadPhoto(fileToUpload, p.id)
-
-          // Clean up offline cache after successful upload
-          try {
-            await deleteOfflinePhoto(offlinePhotoKey(p.id))
-          } catch {
-            // ignore
-          }
         } catch {
-          // Keep blob in offline store so we can retry later
+          // State already updated in uploadPhoto
         }
       }),
     )
@@ -906,14 +878,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   }
 
   const removePhoto = (photoId: string) => {
-    ;(async () => {
-      try {
-        await deleteOfflinePhoto(offlinePhotoKey(photoId))
-      } catch {
-        // ignore
-      }
-    })()
-
     const xhr = uploadXhrRefs.current[photoId]
     if (xhr && xhr.readyState !== XMLHttpRequest.DONE) {
       try {
@@ -935,21 +899,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       return prev.filter((p) => p.id !== photoId)
     })
   }
-
-
-  // Auto-upload pending photos when connection comes back
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const onOnline = () => {
-      tryUploadPendingPhotos()
-    }
-    window.addEventListener("online", onOnline)
-    // also try once on mount if already online
-    tryUploadPendingPhotos()
-    return () => window.removeEventListener("online", onOnline)
-  }, [tryUploadPendingPhotos])
-
-
 
 
 
@@ -1785,43 +1734,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           setPhotos(restored)
         }
 
-        // Restore pending photos (offline/queued/error) from IndexedDB
-        if (Array.isArray((parsedData as any).pendingPhotos) && (parsedData as any).pendingPhotos.length > 0) {
-          const pendingMeta = (parsedData as any).pendingPhotos as any[]
-          ;(async () => {
-            try {
-              const pending: UploadedPhoto[] = []
-              for (const pm of pendingMeta) {
-                if (!pm || typeof pm !== "object") continue
-                const id = typeof pm.id === "string" ? pm.id : ""
-                if (!id) continue
-                const rec = await getOfflinePhoto(offlinePhotoKey(id))
-                if (!rec?.blob) continue
-                const previewUrl = URL.createObjectURL(rec.blob)
-                pending.push({
-                  id,
-                  name: typeof pm.name === "string" ? pm.name : rec.name || "photo.jpg",
-                  previewUrl,
-                  status: (pm.status as PhotoUploadStatus) || "queued",
-                  progress: typeof pm.progress === "number" ? pm.progress : 0,
-                  contentType: typeof pm.contentType === "string" ? pm.contentType : rec.contentType,
-                  error: typeof pm.error === "string" ? pm.error : undefined,
-                })
-              }
-              if (pending.length > 0) {
-                setPhotos((prev) => {
-                  const ids = new Set(prev.map((p) => p.id))
-                  const merged = [...prev]
-                  for (const p of pending) if (!ids.has(p.id)) merged.push(p)
-                  return merged
-                })
-              }
-            } catch {
-              // ignore restore errors
-            }
-          })()
-        }
-
         // Validate dates after loading
         if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
           setTimeout(() => validateLicenseDate("drivingLicense"), 0)
@@ -1909,9 +1821,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       photos: photos
         .filter((p) => p.status === "done" && !!p.url)
         .map((p) => ({ id: p.id, name: p.name, url: p.url, contentType: p.contentType })),
-      pendingPhotos: photos
-        .filter((p) => p.status !== "done")
-        .map((p) => ({ id: p.id, name: p.name, status: p.status, progress: p.progress, contentType: p.contentType, error: p.error })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
