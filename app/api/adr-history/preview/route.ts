@@ -6,32 +6,40 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export const revalidate = 0
 
+const normalizePath = (p: any): string => {
+  const s = (p || "").toString().trim()
+  if (!s) return ""
+  const noLeading = s.replace(/^\//, "")
+  return noLeading.replace(/^adr-checklists\//i, "")
+}
+
 export async function GET(req: NextRequest) {
   try {
     const supabase = getSupabaseAdmin()
     const { searchParams } = new URL(req.url)
     const id = (searchParams.get("id") || "").trim()
-    const hash = (searchParams.get("hash") || "").trim()
 
-    if (!id && !hash) {
-      return NextResponse.json({ success: false, message: "Missing id or hash" }, { status: 400 })
+    if (!id) {
+      return NextResponse.json({ success: false, message: "Missing id" }, { status: 400 })
     }
 
-    const q = supabase
+    const rowRes = await supabase
       .from("adr_checklists")
-      .select("id, checklist_hash, file_path")
-      .limit(1)
+      .select("id, file_path")
+      .eq("id", id)
+      .maybeSingle()
 
-    const res = id ? await q.eq("id", id).maybeSingle() : await q.eq("checklist_hash", hash).maybeSingle()
-    if (res.error) {
-      return NextResponse.json({ success: false, message: res.error.message }, { status: 500 })
+    if (rowRes.error) {
+      return NextResponse.json({ success: false, message: rowRes.error.message }, { status: 500 })
     }
-    if (!res.data?.file_path) {
+    if (!rowRes.data?.file_path) {
       return NextResponse.json({ success: false, message: "Checklist not found" }, { status: 404 })
     }
 
     const bucket = "adr-checklists"
-    const dl = await supabase.storage.from(bucket).download(res.data.file_path)
+    const fp = normalizePath(rowRes.data.file_path)
+
+    const dl = await supabase.storage.from(bucket).download(fp)
     if (dl.error || !dl.data) {
       return NextResponse.json(
         { success: false, message: dl.error?.message || "Failed to download ZIP from storage" },
@@ -39,33 +47,28 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    const zipBuf = Buffer.from(await dl.data.arrayBuffer())
-    const zip = await JSZip.loadAsync(zipBuf)
+    const zipBuffer = Buffer.from(await dl.data.arrayBuffer())
 
-    // Find first PDF in ZIP
-    const pdfEntryName = Object.keys(zip.files).find((name) => name.toLowerCase().endsWith(".pdf"))
-    if (!pdfEntryName) {
-      return NextResponse.json({ success: false, message: "No PDF found inside ZIP" }, { status: 404 })
+    // Extract PDF from ZIP
+    const zip = await JSZip.loadAsync(zipBuffer)
+    const pdfEntry = Object.values(zip.files).find((f) => !f.dir && f.name.toLowerCase().endsWith(".pdf"))
+
+    if (!pdfEntry) {
+      return NextResponse.json({ success: false, message: "No PDF found in ZIP" }, { status: 500 })
     }
 
-    const pdfBuf = await zip.files[pdfEntryName]!.async("nodebuffer")
-
-    const safeName = (res.data.checklist_hash || "adr").replace(/[^a-zA-Z0-9._-]/g, "_")
-    const filename = `${safeName}.pdf`
+    const pdfBuf = Buffer.from(await pdfEntry.async("arraybuffer"))
 
     return new NextResponse(pdfBuf, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        // inline so it renders in iframe/object
-        "Content-Disposition": `inline; filename="${filename}"`,
+        "Content-Disposition": "inline; filename=ADR-Checklist.pdf",
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
       },
     })
-  } catch (error: any) {
-    return NextResponse.json(
-      { success: false, message: error?.message || "Failed to preview PDF" },
-      { status: 500 },
-    )
+  } catch (e: any) {
+    const msg = typeof e?.message === "string" && e.message.trim() ? e.message : "Failed to preview PDF"
+    return NextResponse.json({ success: false, message: msg }, { status: 500 })
   }
 }

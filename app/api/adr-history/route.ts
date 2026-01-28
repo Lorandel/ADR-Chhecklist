@@ -30,15 +30,23 @@ export async function GET(req: NextRequest) {
     const bucket = "adr-checklists"
     const rows = Array.isArray(res.data) ? res.data : []
 
+    const normalizePath = (p: any): string => {
+      const s = (p || "").toString().trim()
+      if (!s) return ""
+      const noLeading = s.replace(/^\//, "")
+      return noLeading.replace(/^adr-checklists\//i, "")
+    }
+
     // Create signed URLs (valid 1 hour) for each item.
     const items = await Promise.all(
       rows.map(async (row) => {
         let downloadUrl: string | null = null
-        if (row.file_path) {
-          const signed = await supabase.storage.from(bucket).createSignedUrl(row.file_path, 60 * 60)
+        const fp = normalizePath(row.file_path)
+        if (fp) {
+          const signed = await supabase.storage.from(bucket).createSignedUrl(fp, 60 * 60)
           if (!signed.error) downloadUrl = signed.data.signedUrl
         }
-        return { ...row, downloadUrl }
+        return { ...row, file_path: fp || row.file_path, downloadUrl }
       }),
     )
 
