@@ -800,6 +800,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "Martian Gherasim": "#008000",
         "Alexandru Florea": "#DAA520",
 
+      } as Record<string, string>;
+
       // ---- Image helpers (keep aspect ratio; no stretch) ----
       const imageCache = new Map<string, { dataUrl: string; w: number; h: number }>()
       const blobToDataUrl = (blob: Blob) =>
