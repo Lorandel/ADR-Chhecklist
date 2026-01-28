@@ -119,19 +119,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       } catch {
         return {}
       }
-    }
-    return {}
-  }
 
-  const formatDDMMYYYY = (iso: string) => {
-    const d = new Date(iso)
-    const dd = String(d.getDate()).padStart(2, "0")
-    const mm = String(d.getMonth() + 1).padStart(2, "0")
-    const yyyy = String(d.getFullYear())
-    return `${dd}-${mm}-${yyyy}`
-  }
-
-  
   const matchesSearch = (it: HistoryItem, qRaw: string) => {
     const q = (qRaw || "").trim().toLowerCase()
     if (!q) return true
@@ -150,7 +138,19 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     )
   }
 
-const itemLabel = (it: HistoryItem) => {
+    }
+    return {}
+  }
+
+  const formatDDMMYYYY = (iso: string) => {
+    const d = new Date(iso)
+    const dd = String(d.getDate()).padStart(2, "0")
+    const mm = String(d.getMonth() + 1).padStart(2, "0")
+    const yyyy = String(d.getFullYear())
+    return `${dd}-${mm}-${yyyy}`
+  }
+
+  const itemLabel = (it: HistoryItem) => {
     const m = safeMeta(it.meta)
     const driver = String(m.driverName ?? m.driver_name ?? "").trim()
     const inspector = String(m.inspectorName ?? m.inspector_name ?? "").trim()
@@ -201,20 +201,9 @@ const itemLabel = (it: HistoryItem) => {
     const seq = ++renderSeq.current
 
     try {
-      const pdfjsLib: any = await import("pdfjs-dist/build/pdf")
-      // Use bundled worker (works across devices; no external viewer needed)
-      try {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-          "pdfjs-dist/build/pdf.worker.min.mjs",
-          import.meta.url,
-        ).toString()
-      } catch {
-        // fallback (some bundlers)
-        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-          "pdfjs-dist/build/pdf.worker.min.js",
-          import.meta.url,
-        ).toString()
-      }
+      const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf")
+      // Use CDN worker to avoid bundler issues on Vercel/Next
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
 
       const loadingTask = pdfjsLib.getDocument({ data: buf })
       const pdf = await loadingTask.promise
@@ -392,8 +381,16 @@ const itemLabel = (it: HistoryItem) => {
                 <div className="text-sm text-gray-600">
                   Viewing as <span className="font-semibold">{role}</span>
                 </div>
+                <Button
+                  variant="outline"
+                  className="bg-transparent"
+                  onClick={() => setRefreshTick((x) => x + 1)}
+                >
+                  Refresh
+                </Button>
+              </div>
 
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-end gap-3">
                 <div className="flex-1">
                   <Label>Search</Label>
                   <Input
@@ -404,20 +401,11 @@ const itemLabel = (it: HistoryItem) => {
                 </div>
                 <Button
                   variant="outline"
-                  className="bg-transparent self-start sm:self-end"
+                  className="bg-transparent"
                   onClick={() => setSearch("")}
                   disabled={!search.trim()}
                 >
                   Clear
-                </Button>
-              </div>
-
-                <Button
-                  variant="outline"
-                  className="bg-transparent"
-                  onClick={() => setRefreshTick((x) => x + 1)}
-                >
-                  Refresh
                 </Button>
               </div>
 
