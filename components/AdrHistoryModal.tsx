@@ -108,7 +108,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     setRole("guest")
   }
 
-  const safeMeta = (meta: any): Record<string, any> => {
+  // NOTE: Use function declarations (hoisted) to avoid "Cannot access X before initialization"
+  // errors caused by helpers referenced inside useMemo/useCallback before their const initialization.
+  function safeMeta(meta: any): Record<string, any> {
     if (!meta) return {}
     if (typeof meta === "object") return meta
     if (typeof meta === "string") {
@@ -122,7 +124,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     return {}
   }
 
-  const matchesSearch = (it: HistoryItem, qRaw: string) => {
+  function matchesSearch(it: HistoryItem, qRaw: string): boolean {
     const q = (qRaw || "").trim().toLowerCase()
     if (!q) return true
     const m = safeMeta(it.meta)
