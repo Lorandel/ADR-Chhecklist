@@ -1,25 +1,36 @@
 import { NextResponse } from "next/server"
-import { createRequire } from "module"
+import { readFile } from "fs/promises"
+import path from "path"
 
 export const runtime = "nodejs"
 
-// Serve pdf.js worker from node_modules (no CDN, no bundling issues).
+// Serves the PDF.js legacy worker as a classic script (no CDN, no bundling/terser issues).
 export async function GET() {
   try {
-    const require = createRequire(import.meta.url)
-    const fs = require("fs") as typeof import("fs")
-    const workerPath = require.resolve("pdfjs-dist/build/pdf.worker.min.mjs")
-    const code = fs.readFileSync(workerPath, "utf8")
+    const cwd = process.cwd()
+    const candidates = [
+      path.join(cwd, "node_modules", "pdfjs-dist", "legacy", "build", "pdf.worker.min.js"),
+      path.join(cwd, "node_modules", "pdfjs-dist", "build", "pdf.worker.min.js"),
+    ]
 
-    return new NextResponse(code, {
+    let buf: Buffer | null = null
+    for (const p of candidates) {
+      try {
+        buf = await readFile(p)
+        break
+      } catch {}
+    }
+
+    if (!buf) return new NextResponse("pdfjs worker not found", { status: 404 })
+
+    return new NextResponse(buf, {
       status: 200,
       headers: {
-        // IMPORTANT: module scripts/workers require a JS MIME type.
-        "Content-Type": "text/javascript; charset=utf-8",
+        "Content-Type": "application/javascript; charset=utf-8",
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     })
   } catch (e: any) {
-    return NextResponse.json({ success: false, message: e?.message || "worker not found" }, { status: 500 })
+    return new NextResponse(e?.message || "worker error", { status: 500 })
   }
 }

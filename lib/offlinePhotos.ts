@@ -1,23 +1,24 @@
-export type PendingPhotoRecord = {
+// Minimal IndexedDB helper for storing photos offline (no external deps)
+
+export type OfflinePhotoRecord = {
   id: string
-  checklistKey: string
+  blob: Blob
   name: string
   contentType: string
-  blob: Blob
   createdAt: number
 }
 
-const DB_NAME = "adr_offline_photos_v1"
+const DB_NAME = "adr_offline_photos_db"
 const STORE = "photos"
+const DB_VERSION = 1
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1)
+    const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) {
-        const os = db.createObjectStore(STORE, { keyPath: "id" })
-        os.createIndex("checklistKey", "checklistKey", { unique: false })
+        db.createObjectStore(STORE, { keyPath: "id" })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -25,49 +26,36 @@ function openDb(): Promise<IDBDatabase> {
   })
 }
 
-export async function putPendingPhoto(rec: PendingPhotoRecord): Promise<void> {
+export async function idbPutPhoto(rec: OfflinePhotoRecord): Promise<void> {
   const db = await openDb()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite")
+    tx.objectStore(STORE).put(rec)
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
-    tx.objectStore(STORE).put(rec)
   })
   db.close()
 }
 
-export async function getPendingPhoto(id: string): Promise<PendingPhotoRecord | null> {
+export async function idbGetPhoto(id: string): Promise<OfflinePhotoRecord | null> {
   const db = await openDb()
-  const out = await new Promise<PendingPhotoRecord | null>((resolve, reject) => {
+  const out = await new Promise<OfflinePhotoRecord | null>((resolve, reject) => {
     const tx = db.transaction(STORE, "readonly")
     const req = tx.objectStore(STORE).get(id)
-    req.onsuccess = () => resolve((req.result as PendingPhotoRecord) || null)
+    req.onsuccess = () => resolve((req.result as OfflinePhotoRecord) || null)
     req.onerror = () => reject(req.error)
   })
   db.close()
   return out
 }
 
-export async function deletePendingPhoto(id: string): Promise<void> {
+export async function idbDeletePhoto(id: string): Promise<void> {
   const db = await openDb()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite")
+    tx.objectStore(STORE).delete(id)
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
-    tx.objectStore(STORE).delete(id)
   })
   db.close()
-}
-
-export async function listPendingPhotos(checklistKey: string): Promise<PendingPhotoRecord[]> {
-  const db = await openDb()
-  const out = await new Promise<PendingPhotoRecord[]>((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly")
-    const idx = tx.objectStore(STORE).index("checklistKey")
-    const req = idx.getAll(checklistKey)
-    req.onsuccess = () => resolve((req.result as PendingPhotoRecord[]) || [])
-    req.onerror = () => reject(req.error)
-  })
-  db.close()
-  return out
 }

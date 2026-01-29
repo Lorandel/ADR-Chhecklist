@@ -6,11 +6,11 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { deletePendingPhoto, getPendingPhoto, listPendingPhotos, putPendingPhoto } from "@/lib/offlinePhotos"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
+import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
 
 const capitalizeWords = (str: string) =>
@@ -79,10 +79,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const photoInputRef = useRef<HTMLInputElement>(null)
   const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
 
-  const hasPendingUploads = useMemo(() => hasPendingUploads, [photos])
+  // Throttle progress updates + prevent UI jitter
+  const lastProgRef = useRef<Record<string, { t: number; p: number }>>({})
+  const uploadingRunnerRef = useRef(false)
+  const lastAttemptRef = useRef<Record<string, number>>({})
 
-  const progressThrottleRef = useRef<Record<string, number>>({})
-  const lastProgressRef = useRef<Record<string, number>>({})
+
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [signatureData, setSignatureData] = useState<string | null>(null)
@@ -793,28 +795,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         xhr.upload.onprogress = (evt) => {
           if (!evt.lengthComputable) return
-          const raw = Math.round((evt.loaded / evt.total) * 100)
-          const prevProgress = lastProgressRef.current[photoId] ?? 0
-          const progress = Math.max(prevProgress, raw) // never go backwards
-
-          const now = typeof performance !== "undefined" ? performance.now() : Date.now()
-          const lastTs = progressThrottleRef.current[photoId] || 0
-
-          // Throttle UI updates for smoother progress (and avoid button flicker).
-          // Always allow 100% to render immediately.
-          if (progress !== 100 && now - lastTs < 250) return
-
-          // Only update if meaningful change
-          if (progress !== 100 && Math.abs(progress - prevProgress) < 2) return
-
-          progressThrottleRef.current[photoId] = now
-          lastProgressRef.current[photoId] = progress
-
-          setPhotos((prev) =>
-            prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)),
-          )
+          const progress = Math.round((evt.loaded / evt.total) * 100)
+          const now = Date.now()
+          const last = lastProgRef.current[photoId] || { t: 0, p: -1 }
+          // update at most ~8 times/sec OR when progress jumps significantly
+          if (progress === last.p) return
+          if (now - last.t < 120 && progress - last.p < 2) return
+          lastProgRef.current[photoId] = { t: now, p: progress }
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
         }
-xhr.onload = () => {
+
+        xhr.onload = () => {
           const res = xhr.response
           if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
             setPhotos((prev) =>
@@ -828,13 +819,22 @@ xhr.onload = () => {
             return
           }
           const message = res?.message || res?.error || `Upload failed (${xhr.status})`
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: (typeof navigator !== "undefined" && !navigator.onLine) ? "queued" : "error", error: message } : p)))
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
           reject(new Error(message))
         }
 
         xhr.onerror = () => {
-          const message = (typeof navigator !== "undefined" && !navigator.onLine) ? "Waiting for internet…" : "Upload failed (network error)"
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: (typeof navigator !== "undefined" && !navigator.onLine) ? "queued" : "error", error: message } : p)))
+          const message = "Upload failed (network error)"
+          const offline = typeof navigator !== "undefined" ? !navigator.onLine : false
+          setPhotos((prev) =>
+            prev.map((p) =>
+              p.id === photoId
+                ? offline
+                  ? { ...p, status: "queued", progress: 0, error: message }
+                  : { ...p, status: "error", error: message }
+                : p,
+            ),
+          )
           reject(new Error(message))
         }
 
@@ -849,26 +849,7 @@ xhr.onload = () => {
     [setPhotos],
   )
 
-  const tryUploadPendingPhotos = useCallback(async () => {
-  if (typeof navigator !== "undefined" && !navigator.onLine) return
-  // Only try for photos that are not uploaded yet
-  const pendingInState = photos.filter((p) => p.status !== "done" && !p.url)
-  if (pendingInState.length === 0) return
-
-  for (const p of pendingInState) {
-    try {
-      const rec = await getPendingPhoto(p.id)
-      if (!rec?.blob) continue
-      const file = new File([rec.blob], rec.name || p.name, { type: rec.contentType || p.contentType || "image/jpeg" })
-      await uploadPhoto(file, p.id)
-      await deletePendingPhoto(p.id)
-    } catch {
-      // keep as queued/error; we'll retry on next "online"
-    }
-  }
-}, [photos, uploadPhoto])
-
-const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
     if (files.length === 0) return
 
@@ -886,67 +867,101 @@ const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
 
     setPhotos((prev) => [...prev, ...newPhotos])
 
-    
-// Start uploads (sequential for smoother progress UI)
-for (let idx = 0; idx < newPhotos.length; idx++) {
-  const p = newPhotos[idx]
-  const originalFile = files[idx]
-  if (!p || !originalFile) continue
+    // Persist photos offline (so they survive refresh) and upload sequentially (less UI jitter)
+    for (let idx = 0; idx < newPhotos.length; idx++) {
+      const p = newPhotos[idx]
+      const originalFile = files[idx]
 
-  // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
-  let fileToUpload: File = originalFile
-  try {
-    fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
-  } catch {
-    fileToUpload = originalFile
-  }
+      // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
+      let fileToUpload: File = originalFile
+      try {
+        fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
+      } catch {
+        fileToUpload = originalFile
+      }
 
-  // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
-  if (fileToUpload !== originalFile) {
-    setPhotos((prev) =>
-      prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
-    )
-  }
+      // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
+      if (fileToUpload !== originalFile) {
+        setPhotos((prev) =>
+          prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
+        )
+      }
 
-  // Save to IndexedDB so photos survive refresh/offline.
-  try {
-    await putPendingPhoto({
-      id: p.id,
-      checklistKey: storageKey,
-      name: fileToUpload.name,
-      contentType: fileToUpload.type,
-      blob: fileToUpload,
-      createdAt: Date.now(),
-    })
-  } catch {
-    // ignore
-  }
+      // Save blob in IndexedDB (offline support)
+      try {
+        await idbPutPhoto({
+          id: p.id,
+          blob: fileToUpload,
+          name: fileToUpload.name,
+          contentType: fileToUpload.type,
+          createdAt: Date.now(),
+        })
+      } catch {
+        // IndexedDB can be unavailable in some private modes; ignore
+      }
 
-  // If offline, keep queued and upload automatically when back online.
-  if (typeof navigator !== "undefined" && !navigator.onLine) {
-    setPhotos((prev) =>
-      prev.map((ph) =>
-        ph.id === p.id ? { ...ph, status: "queued", progress: 0, error: "Waiting for internet…" } : ph,
-      ),
-    )
-    continue
-  }
+      // If offline, keep queued; upload will resume automatically when online
+      if (typeof navigator !== "undefined" && !navigator.onLine) continue
 
-  try {
-    await uploadPhoto(fileToUpload, p.id)
-    try {
-      await deletePendingPhoto(p.id)
-    } catch {
-      // ignore
+      try {
+        await uploadPhoto(fileToUpload, p.id)
+        try {
+          await idbDeletePhoto(p.id)
+        } catch {}
+      } catch {
+        // State already updated in uploadPhoto
+      }
     }
-  } catch {
-    // State already updated in uploadPhoto
-  }
-}
 
     // Allow selecting the same file again
     e.target.value = ""
   }
+
+  // Retry queued photos automatically when the connection comes back.
+  const tryUploadPendingPhotos = useCallback(async () => {
+    if (uploadingRunnerRef.current) return
+    if (typeof navigator !== "undefined" && !navigator.onLine) return
+
+    const pending = photos.filter((p) => p.status === "queued")
+    if (pending.length === 0) return
+
+    uploadingRunnerRef.current = true
+    try {
+      for (const p of pending) {
+        const last = lastAttemptRef.current[p.id] || 0
+        if (Date.now() - last < 8000) continue // avoid rapid retry jitter
+        lastAttemptRef.current[p.id] = Date.now()
+
+        const rec = await idbGetPhoto(p.id).catch(() => null)
+        if (!rec?.blob) continue
+
+        const file = new File([rec.blob], rec.name || p.name, {
+          type: rec.contentType || p.contentType || "image/jpeg",
+        })
+
+        try {
+          await uploadPhoto(file, p.id)
+          try {
+            await idbDeletePhoto(p.id)
+          } catch {}
+        } catch {
+          // keep queued/error as set by uploadPhoto
+        }
+      }
+    } finally {
+      uploadingRunnerRef.current = false
+    }
+  }, [photos, uploadPhoto])
+
+  useEffect(() => {
+    const onOnline = () => {
+      void tryUploadPendingPhotos()
+    }
+    window.addEventListener("online", onOnline)
+    // attempt once on mount (if there are queued photos restored)
+    void tryUploadPendingPhotos()
+    return () => window.removeEventListener("online", onOnline)
+  }, [tryUploadPendingPhotos])
 
   const removePhoto = (photoId: string) => {
     const xhr = uploadXhrRefs.current[photoId]
@@ -967,7 +982,6 @@ for (let idx = 0; idx < newPhotos.length; idx++) {
           // ignore
         }
       }
-      try { deletePendingPhoto(photoId) } catch {}
       return prev.filter((p) => p.id !== photoId)
     })
   }
@@ -1756,30 +1770,9 @@ for (let idx = 0; idx < newPhotos.length; idx++) {
     }
   }, [isMounted])
 
-// Auto-upload any queued photos when the device goes back online (and also once on mount).
-useEffect(() => {
-  if (!isMounted || typeof window === "undefined") return
-
-  const onOnline = () => {
-    tryUploadPendingPhotos()
-  }
-  window.addEventListener("online", onOnline)
-  // Try once on mount as well (in case photos were queued previously)
-  tryUploadPendingPhotos()
-
-  return () => {
-    window.removeEventListener("online", onOnline)
-  }
-}, [isMounted, tryUploadPendingPhotos])
-
-
   // Separate useEffect for localStorage operations
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
-
-
-    // Do not overwrite current runtime state (uploads/progress) if user already interacted.
-    if (photos.length > 0) return
 
     // Try to load saved data from localStorage
     const savedData = localStorage.getItem(storageKey)
@@ -1914,9 +1907,6 @@ useEffect(() => {
       photos: photos
         .filter((p) => p.status === "done" && !!p.url)
         .map((p) => ({ id: p.id, name: p.name, url: p.url, contentType: p.contentType })),
-      pendingPhotos: photos
-        .filter((p) => p.status !== "done" && !p.url)
-        .map((p) => ({ id: p.id, name: p.name, contentType: p.contentType, status: p.status, error: p.error })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
@@ -2642,7 +2632,7 @@ useEffect(() => {
                     {/* Progress bar overlay */}
                     {(p.status === "uploading" || p.status === "queued") && (
                       <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
-                        <div className="h-full bg-black/70 transition-[width] duration-200 ease-out" style={{ width: `${p.progress}%` }} />
+                        <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
                       </div>
                     )}
 
@@ -2714,7 +2704,7 @@ useEffect(() => {
             isSendingEmail ||
             isPdfGenerating ||
             !selectedInspector ||
-            hasPendingUploads
+            photos.some((p) => p.status === "uploading" || p.status === "queued")
           }
           style={{ backgroundColor: "#0099d0" }}
           className="w-full hover:brightness-90"
