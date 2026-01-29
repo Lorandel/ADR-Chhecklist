@@ -42,6 +42,14 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null)
+
+  // Platform detection (client-only component)
+  const ua = useMemo(() => (typeof navigator === "undefined" ? "" : navigator.userAgent || ""), [])
+  const isIOS = useMemo(() => /iPad|iPhone|iPod/i.test(ua), [ua])
+  const isAndroid = useMemo(() => /Android/i.test(ua), [ua])
+  const isMobile = useMemo(() => /Mobi|Android|iPhone|iPad|iPod/i.test(ua), [ua])
+  const isDesktop = useMemo(() => !!ua && !isMobile, [ua, isMobile])
 
   const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search)), [items, search])
   const full = useMemo(() => items.filter((i) => i.checklist_type === "full").filter((i) => matchesSearch(i, search)), [items, search])
@@ -197,6 +205,13 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
   const openPreview = useCallback(
     async (it: HistoryItem) => {
+      // Android + Desktop: open PDF in a new tab using the browser's native PDF handling.
+      // iOS: keep in-app preview (with pinch zoom).
+      if (isAndroid || isDesktop) {
+        window.open(`/api/adr-history/preview?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`, "_blank", "noopener,noreferrer")
+        return
+      }
+
       setPreviewItem(it)
       setPreviewOpen(true)
       setPreviewError(null)
@@ -227,7 +242,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
         setPreviewLoading(false)
       }
     },
-    [revokePreviewUrl]
+    [revokePreviewUrl, isIOS]
   )
 
   const closePreview = useCallback(() => {
@@ -238,6 +253,41 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     setZoom(1)
     revokePreviewUrl()
   }, [revokePreviewUrl])
+
+  // iOS pinch-to-zoom support for the embedded preview
+  const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
+  const touchDist = (t1: Touch, t2: Touch) => {
+    const dx = t1.clientX - t2.clientX
+    const dy = t1.clientY - t2.clientY
+    return Math.hypot(dx, dy)
+  }
+
+  const onPreviewTouchStart = (e: React.TouchEvent) => {
+    if (!isIOS) return
+    if (e.touches.length === 2) {
+      const d = touchDist(e.touches[0], e.touches[1])
+      pinchRef.current = { dist: d, zoom }
+    }
+  }
+
+  const onPreviewTouchMove = (e: React.TouchEvent) => {
+    if (!isIOS) return
+    if (e.touches.length === 2 && pinchRef.current) {
+      // Prevent page zoom/scroll while pinching
+      e.preventDefault()
+      const d = touchDist(e.touches[0], e.touches[1])
+      const scale = d / pinchRef.current.dist
+      const next = clamp(pinchRef.current.zoom * scale, 0.5, 3)
+      setZoom(+next.toFixed(2))
+    }
+  }
+
+  const onPreviewTouchEnd = (e: React.TouchEvent) => {
+    if (!isIOS) return
+    if (e.touches.length < 2) {
+      pinchRef.current = null
+    }
+  }
 
   if (!open) return null
 
@@ -435,7 +485,13 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
               </div>
             </div>
 
-	            <div className="p-3 sm:p-4 h-[calc(100%-56px)] overflow-auto bg-gray-50">
+	            <div
+	              className="p-3 sm:p-4 h-[calc(100%-56px)] overflow-auto bg-gray-50"
+	              onTouchStart={handlePreviewTouchStart}
+	              onTouchMove={handlePreviewTouchMove}
+	              onTouchEnd={handlePreviewTouchEnd}
+	              onTouchCancel={handlePreviewTouchEnd}
+	            >
 	              {previewLoading ? (
 	                <div className="text-sm text-gray-600">Loading preview...</div>
 	              ) : previewError ? (
@@ -456,7 +512,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 	                <div className="w-full flex justify-center">
 	                  <div
 	                    className="rounded-xl bg-white shadow-sm border border-gray-200 overflow-hidden"
-	                    style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
+	                    style={{ transform: `scale(${zoom})`, transformOrigin: "top center", touchAction: "none" }}
 	                  >
 	                    <iframe
 	                      ref={iframeRef}
