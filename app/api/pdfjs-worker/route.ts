@@ -1,29 +1,18 @@
 import { NextResponse } from "next/server"
-import { readFile } from "fs/promises"
-import path from "path"
 
 export const runtime = "nodejs"
 
-// Serves the PDF.js legacy worker as a classic script (no CDN, no bundling/terser issues).
+// Serve pdf.js classic worker (legacy build) from node_modules.
+// This avoids CDN, avoids bundling/terser issues, and works as a classic WebWorker.
 export async function GET() {
   try {
-    const cwd = process.cwd()
-    const candidates = [
-      path.join(cwd, "node_modules", "pdfjs-dist", "legacy", "build", "pdf.worker.min.js"),
-      path.join(cwd, "node_modules", "pdfjs-dist", "build", "pdf.worker.min.js"),
-    ]
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require("fs")
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require.resolve("pdfjs-dist/legacy/build/pdf.worker.min.js")
+    const code = fs.readFileSync(path, "utf8")
 
-    let buf: Buffer | null = null
-    for (const p of candidates) {
-      try {
-        buf = await readFile(p)
-        break
-      } catch {}
-    }
-
-    if (!buf) return new NextResponse("pdfjs worker not found", { status: 404 })
-
-    return new NextResponse(buf, {
+    return new NextResponse(code, {
       status: 200,
       headers: {
         "Content-Type": "application/javascript; charset=utf-8",
@@ -31,6 +20,6 @@ export async function GET() {
       },
     })
   } catch (e: any) {
-    return new NextResponse(e?.message || "worker error", { status: 500 })
+    return NextResponse.json({ success: false, message: e?.message || "worker not found" }, { status: 500 })
   }
 }

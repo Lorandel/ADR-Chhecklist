@@ -203,18 +203,22 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setPreviewLoading(true)
       setPreviewError(null)
 
+      let worker: Worker | null = null
+
       try {
         const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf")
-        
-        // Provide a local (no-network) workerSrc to satisfy pdf.js, but we keep disableWorker:true.
-        if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-          const workerBlob = new Blob(["export {};"], { type: "text/javascript" })
-          const workerUrl = URL.createObjectURL(workerBlob)
-          pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
-        }
-// Use CDN worker to avoid bundling issues on Next/Vercel
-        const loadingTask = pdfjs.getDocument({ data: buf, disableWorker: true })
-        const pdf = await loadingTask.promise
+
+        // Create a classic worker explicitly (no CDN, no dynamic-import fake worker).
+        // pdf.js will use this worker via workerPort.
+        worker = new Worker("/api/pdfjs-worker")
+        pdfjs.GlobalWorkerOptions.workerPort = worker
+
+        const loadingTask = pdfjs.getDocument({ data: buf })
+        const TIMEOUT_MS = 20000
+        const pdf = await Promise.race([
+          loadingTask.promise,
+          new Promise((_, rej) => setTimeout(() => rej(new Error("Preview timed out")), TIMEOUT_MS)),
+        ]) as any
         // Keep single page (your PDF is single page)
         const page = await pdf.getPage(1)
 
@@ -231,10 +235,16 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
         canvas.width = Math.floor(viewport.width)
         canvas.height = Math.floor(viewport.height)
 
-        await page.render({ canvasContext: ctx, viewport }).promise
+        await Promise.race([
+          page.render({ canvasContext: ctx, viewport }).promise,
+          new Promise((_, rej) => setTimeout(() => rej(new Error("Render timed out")), TIMEOUT_MS)),
+        ])
       } catch (e: any) {
         setPreviewError(e?.message || "Failed to render PDF")
       } finally {
+        try {
+          worker?.terminate()
+        } catch {}
         setPreviewLoading(false)
       }
     },
