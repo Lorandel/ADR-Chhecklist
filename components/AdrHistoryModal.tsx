@@ -41,12 +41,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
-  const [previewMode, setPreviewMode] = useState<"canvas" | "iframe">("canvas")
-  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
   const pdfArrayBufferRef = useRef<ArrayBuffer | null>(null)
   const renderSeq = useRef(0)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const DUMMY_WORKER_SRC = "data:application/javascript;base64,Ly8gZHVtbXktd29ya2Vy" // "// dummy-worker"
 
   const safeMeta = (meta: any): Record<string, any> => {
     if (!meta) return {}
@@ -62,7 +59,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     return {}
   }
 
-  function matchesSearch(it: HistoryItem, qRaw: string) {
+  const matchesSearch = (it: HistoryItem, qRaw: string) => {
     const q = (qRaw || "").trim().toLowerCase()
     if (!q) return true
     const m = safeMeta(it.meta)
@@ -122,9 +119,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setPreviewItem(null)
       setPreviewError(null)
       setZoom(1)
-      setPreviewMode("canvas")
-      if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl)
-      setPreviewBlobUrl(null)
       pdfArrayBufferRef.current = null
       return
     }
@@ -211,11 +205,10 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
       try {
         const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf");
-        const loadingTask = pdfjs.getDocument({ data: buf, disableWorker: true });
-        const pdf = await Promise.race([
-          loadingTask.promise,
-          new Promise((_, rej) => setTimeout(() => rej(new Error("Preview timed out")), 8000)),
-        ]) as any
+        
+        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";// Use CDN worker to avoid bundling issues on Next/Vercel
+        const loadingTask = pdfjs.getDocument({ data: buf, disableWorker: true })
+        const pdf = await loadingTask.promise
         // Keep single page (your PDF is single page)
         const page = await pdf.getPage(1)
 
@@ -234,13 +227,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
         await page.render({ canvasContext: ctx, viewport }).promise
       } catch (e: any) {
-        // If canvas render fails, fall back to the built-in PDF viewer (iframe)
-        if (previewBlobUrl) {
-          setPreviewMode("iframe")
-          setPreviewError(null)
-        } else {
-          setPreviewError(e?.message || "Failed to render PDF")
-        }
+        setPreviewError(e?.message || "Failed to render PDF")
       } finally {
         setPreviewLoading(false)
       }
@@ -266,19 +253,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       }
       const buf = await res.arrayBuffer()
       pdfArrayBufferRef.current = buf
-      // Prepare in-app fallback viewer
-      try {
-        const url = URL.createObjectURL(new Blob([buf], { type: "application/pdf" }))
-        setPreviewBlobUrl(url)
-      } catch {}
-
-      try {
-        setPreviewMode("canvas")
-        await renderPdfToCanvas(buf, 1)
-      } catch {
-        // Fallback to iframe viewer if canvas rendering fails
-        setPreviewMode("iframe")
-      }
+      await renderPdfToCanvas(buf, 1)
     } catch (e: any) {
       setPreviewError(e?.message || "Failed to load preview")
       setPreviewLoading(false)
@@ -540,18 +515,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                     <div className="p-4 overflow-auto max-h-[calc(92vh-140px)] bg-gray-50">
                       {previewError ? (
                         <div className="text-sm text-red-600">{previewError}</div>
-                      ) : previewMode === "iframe" ? (
-                        previewBlobUrl ? (
-                          <div className="w-full h-[70vh] sm:h-[76vh] bg-white shadow rounded-xl overflow-hidden">
-                            <iframe
-                              title="ADR PDF Preview"
-                              src={previewBlobUrl}
-                              className="w-full h-full"
-                            />
-                          </div>
-                        ) : (
-                          <div className="text-sm text-gray-600">Preview unavailable.</div>
-                        )
                       ) : (
                         <div className="flex justify-center">
                           <canvas ref={canvasRef} className="bg-white shadow rounded-xl" />
