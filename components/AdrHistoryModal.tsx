@@ -45,6 +45,37 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const canvasWrapRef = useRef<HTMLDivElement | null>(null)
 
+  // --- Helpers ---
+  // NOTE: These must be defined before the useMemo filters.
+  const safeMeta = (meta: any): Record<string, any> => {
+    if (!meta) return {}
+    if (typeof meta === "object") return meta as any
+    try {
+      const parsed = JSON.parse(String(meta))
+      return parsed && typeof parsed === "object" ? (parsed as any) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  const matchesSearch = (it: HistoryItem, qRaw: string) => {
+    const q = (qRaw || "").trim().toLowerCase()
+    if (!q) return true
+    const m = safeMeta(it.meta)
+    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
+    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
+    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
+    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
+    const hash = String(it.checklist_hash ?? "").toLowerCase()
+    return (
+      driver.includes(q) ||
+      truck.includes(q) ||
+      trailer.includes(q) ||
+      inspector.includes(q) ||
+      hash.includes(q)
+    )
+  }
+
   const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search)), [items, search])
   const full = useMemo(() => items.filter((i) => i.checklist_type === "full").filter((i) => matchesSearch(i, search)), [items, search])
 
@@ -107,39 +138,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const seeAsGuest = () => {
     setError(null)
     setRole("guest")
-  }
-
-  const safeMeta = (meta: any): Record<string, any> => {
-    if (!meta) return {}
-    if (typeof meta === "object") return meta
-    if (typeof meta === "string") {
-      try {
-        const parsed = JSON.parse(meta)
-        return parsed && typeof parsed === "object" ? parsed : {}
-      } catch {
-        return {}
-      }
-
-  const matchesSearch = (it: HistoryItem, qRaw: string) => {
-    const q = (qRaw || "").trim().toLowerCase()
-    if (!q) return true
-    const m = safeMeta(it.meta)
-    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
-    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
-    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
-    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
-    const hash = String(it.checklist_hash ?? "").toLowerCase()
-    return (
-      driver.includes(q) ||
-      truck.includes(q) ||
-      trailer.includes(q) ||
-      inspector.includes(q) ||
-      hash.includes(q)
-    )
-  }
-
-    }
-    return {}
   }
 
   const formatDDMMYYYY = (iso: string) => {
