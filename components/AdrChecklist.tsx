@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { deletePendingPhoto, getPendingPhoto, listPendingPhotos, putPendingPhoto } from "@/lib/offlinePhotos"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
@@ -806,13 +807,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             return
           }
           const message = res?.message || res?.error || `Upload failed (${xhr.status})`
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: (typeof navigator !== "undefined" && !navigator.onLine) ? "queued" : "error", error: message } : p)))
           reject(new Error(message))
         }
 
         xhr.onerror = () => {
-          const message = "Upload failed (network error)"
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          const message = (typeof navigator !== "undefined" && !navigator.onLine) ? "Waiting for internet…" : "Upload failed (network error)"
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: (typeof navigator !== "undefined" && !navigator.onLine) ? "queued" : "error", error: message } : p)))
           reject(new Error(message))
         }
 
@@ -827,7 +828,26 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     [setPhotos],
   )
 
-  const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+  const tryUploadPendingPhotos = useCallback(async () => {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return
+  // Only try for photos that are not uploaded yet
+  const pendingInState = photos.filter((p) => p.status !== "done" && !p.url)
+  if (pendingInState.length === 0) return
+
+  for (const p of pendingInState) {
+    try {
+      const rec = await getPendingPhoto(p.id)
+      if (!rec?.blob) continue
+      const file = new File([rec.blob], rec.name || p.name, { type: rec.contentType || p.contentType || "image/jpeg" })
+      await uploadPhoto(file, p.id)
+      await deletePendingPhoto(p.id)
+    } catch {
+      // keep as queued/error; we'll retry on next "online"
+    }
+  }
+}, [photos, uploadPhoto])
+
+const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
     if (files.length === 0) return
 
@@ -865,8 +885,39 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           )
         }
 
-        try {
-          await uploadPhoto(fileToUpload, p.id)
+        
+// Save to IndexedDB so photos survive refresh/offline.
+try {
+  await putPendingPhoto({
+    id: p.id,
+    checklistKey: storageKey,
+    name: fileToUpload.name,
+    contentType: fileToUpload.type,
+    blob: fileToUpload,
+    createdAt: Date.now(),
+  })
+} catch {
+  // ignore
+}
+
+// If offline, keep queued and upload automatically when back online.
+if (typeof navigator !== "undefined" && !navigator.onLine) {
+  setPhotos((prev) =>
+    prev.map((ph) => (ph.id === p.id ? { ...ph, status: "queued", progress: 0, error: "Waiting for internet…" } : ph)),
+  )
+  return
+}
+
+try {
+  await uploadPhoto(fileToUpload, p.id)
+  try {
+    await deletePendingPhoto(p.id)
+  } catch {
+    // ignore
+  }
+} catch {
+  // State already updated in uploadPhoto
+}
         } catch {
           // State already updated in uploadPhoto
         }
@@ -896,6 +947,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           // ignore
         }
       }
+      try { deletePendingPhoto(photoId) } catch {}
       return prev.filter((p) => p.id !== photoId)
     })
   }
@@ -1684,6 +1736,23 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [isMounted])
 
+// Auto-upload any queued photos when the device goes back online (and also once on mount).
+useEffect(() => {
+  if (!isMounted || typeof window === "undefined") return
+
+  const onOnline = () => {
+    tryUploadPendingPhotos()
+  }
+  window.addEventListener("online", onOnline)
+  // Try once on mount as well (in case photos were queued previously)
+  tryUploadPendingPhotos()
+
+  return () => {
+    window.removeEventListener("online", onOnline)
+  }
+}, [isMounted, tryUploadPendingPhotos])
+
+
   // Separate useEffect for localStorage operations
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
@@ -1821,6 +1890,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       photos: photos
         .filter((p) => p.status === "done" && !!p.url)
         .map((p) => ({ id: p.id, name: p.name, url: p.url, contentType: p.contentType })),
+      pendingPhotos: photos
+        .filter((p) => p.status !== "done" && !p.url)
+        .map((p) => ({ id: p.id, name: p.name, contentType: p.contentType, status: p.status, error: p.error })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
