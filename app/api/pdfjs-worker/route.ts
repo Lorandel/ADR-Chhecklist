@@ -1,20 +1,21 @@
 import { NextResponse } from "next/server"
+import { createRequire } from "module"
 
 export const runtime = "nodejs"
 
-// Serve pdf.js worker from node_modules to avoid CDN and bundling/terser issues.
+// Serve pdf.js worker from node_modules (no CDN, no bundling issues).
 export async function GET() {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require("fs")
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const path = require.resolve("pdfjs-dist/build/pdf.worker.min.mjs")
-    const code = fs.readFileSync(path, "utf8")
+    const require = createRequire(import.meta.url)
+    const fs = require("fs") as typeof import("fs")
+    const workerPath = require.resolve("pdfjs-dist/build/pdf.worker.min.mjs")
+    const code = fs.readFileSync(workerPath, "utf8")
 
     return new NextResponse(code, {
       status: 200,
       headers: {
-        "Content-Type": "application/javascript; charset=utf-8",
+        // IMPORTANT: module scripts/workers require a JS MIME type.
+        "Content-Type": "text/javascript; charset=utf-8",
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     })

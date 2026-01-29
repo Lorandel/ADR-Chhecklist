@@ -79,7 +79,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const photoInputRef = useRef<HTMLInputElement>(null)
   const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
 
+  const hasPendingUploads = useMemo(() => hasPendingUploads, [photos])
+
   const progressThrottleRef = useRef<Record<string, number>>({})
+  const lastProgressRef = useRef<Record<string, number>>({})
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [signatureData, setSignatureData] = useState<string | null>(null)
@@ -789,16 +792,28 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         xhr.responseType = "json"
 
         xhr.upload.onprogress = (evt) => {
-  if (!evt.lengthComputable) return
-  const progress = Math.round((evt.loaded / evt.total) * 100)
+          if (!evt.lengthComputable) return
+          const raw = Math.round((evt.loaded / evt.total) * 100)
+          const prevProgress = lastProgressRef.current[photoId] ?? 0
+          const progress = Math.max(prevProgress, raw) // never go backwards
 
-  const now = typeof performance !== "undefined" ? performance.now() : Date.now()
-  const last = progressThrottleRef.current[photoId] || 0
-  if (progress !== 100 && now - last < 120) return
-  progressThrottleRef.current[photoId] = now
+          const now = typeof performance !== "undefined" ? performance.now() : Date.now()
+          const lastTs = progressThrottleRef.current[photoId] || 0
 
-  setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
-}
+          // Throttle UI updates for smoother progress (and avoid button flicker).
+          // Always allow 100% to render immediately.
+          if (progress !== 100 && now - lastTs < 250) return
+
+          // Only update if meaningful change
+          if (progress !== 100 && Math.abs(progress - prevProgress) < 2) return
+
+          progressThrottleRef.current[photoId] = now
+          lastProgressRef.current[photoId] = progress
+
+          setPhotos((prev) =>
+            prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)),
+          )
+        }
 xhr.onload = () => {
           const res = xhr.response
           if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
@@ -1762,6 +1777,10 @@ useEffect(() => {
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
 
+
+    // Do not overwrite current runtime state (uploads/progress) if user already interacted.
+    if (photos.length > 0) return
+
     // Try to load saved data from localStorage
     const savedData = localStorage.getItem(storageKey)
     if (savedData) {
@@ -2623,7 +2642,7 @@ useEffect(() => {
                     {/* Progress bar overlay */}
                     {(p.status === "uploading" || p.status === "queued") && (
                       <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
-                        <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
+                        <div className="h-full bg-black/70 transition-[width] duration-200 ease-out" style={{ width: `${p.progress}%` }} />
                       </div>
                     )}
 
@@ -2695,7 +2714,7 @@ useEffect(() => {
             isSendingEmail ||
             isPdfGenerating ||
             !selectedInspector ||
-            photos.some((p) => p.status === "uploading" || p.status === "queued")
+            hasPendingUploads
           }
           style={{ backgroundColor: "#0099d0" }}
           className="w-full hover:brightness-90"
