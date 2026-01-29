@@ -210,7 +210,8 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setPreviewError(null)
 
       try {
-        const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf")        const loadingTask = pdfjs.getDocument({ data: buf, disableWorker: true })
+        const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf");
+        const loadingTask = pdfjs.getDocument({ data: buf, disableWorker: true });
         const pdf = await Promise.race([
           loadingTask.promise,
           new Promise((_, rej) => setTimeout(() => rej(new Error("Preview timed out")), 8000)),
