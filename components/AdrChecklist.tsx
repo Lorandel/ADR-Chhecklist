@@ -79,6 +79,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const photoInputRef = useRef<HTMLInputElement>(null)
   const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
 
+  const progressThrottleRef = useRef<Record<string, number>>({})
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [signatureData, setSignatureData] = useState<string | null>(null)
@@ -788,12 +789,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         xhr.responseType = "json"
 
         xhr.upload.onprogress = (evt) => {
-          if (!evt.lengthComputable) return
-          const progress = Math.round((evt.loaded / evt.total) * 100)
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
-        }
+  if (!evt.lengthComputable) return
+  const progress = Math.round((evt.loaded / evt.total) * 100)
 
-        xhr.onload = () => {
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now()
+  const last = progressThrottleRef.current[photoId] || 0
+  if (progress !== 100 && now - last < 120) return
+  progressThrottleRef.current[photoId] = now
+
+  setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
+}
+xhr.onload = () => {
           const res = xhr.response
           if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
             setPhotos((prev) =>
@@ -865,61 +871,63 @@ const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
 
     setPhotos((prev) => [...prev, ...newPhotos])
 
-    // Start uploads
-    await Promise.all(
-      newPhotos.map(async (p, idx) => {
-        const originalFile = files[idx]
+    
+// Start uploads (sequential for smoother progress UI)
+for (let idx = 0; idx < newPhotos.length; idx++) {
+  const p = newPhotos[idx]
+  const originalFile = files[idx]
+  if (!p || !originalFile) continue
 
-        // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
-        let fileToUpload: File = originalFile
-        try {
-          fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
-        } catch {
-          fileToUpload = originalFile
-        }
-
-        // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
-        if (fileToUpload !== originalFile) {
-          setPhotos((prev) =>
-            prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
-          )
-        }
-
-        
-// Save to IndexedDB so photos survive refresh/offline.
-try {
-  await putPendingPhoto({
-    id: p.id,
-    checklistKey: storageKey,
-    name: fileToUpload.name,
-    contentType: fileToUpload.type,
-    blob: fileToUpload,
-    createdAt: Date.now(),
-  })
-} catch {
-  // ignore
-}
-
-// If offline, keep queued and upload automatically when back online.
-if (typeof navigator !== "undefined" && !navigator.onLine) {
-  setPhotos((prev) =>
-    prev.map((ph) => (ph.id === p.id ? { ...ph, status: "queued", progress: 0, error: "Waiting for internet…" } : ph)),
-  )
-  return
-}
-
-try {
-  await uploadPhoto(fileToUpload, p.id)
+  // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
+  let fileToUpload: File = originalFile
   try {
-    await deletePendingPhoto(p.id)
+    fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
+  } catch {
+    fileToUpload = originalFile
+  }
+
+  // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
+  if (fileToUpload !== originalFile) {
+    setPhotos((prev) =>
+      prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
+    )
+  }
+
+  // Save to IndexedDB so photos survive refresh/offline.
+  try {
+    await putPendingPhoto({
+      id: p.id,
+      checklistKey: storageKey,
+      name: fileToUpload.name,
+      contentType: fileToUpload.type,
+      blob: fileToUpload,
+      createdAt: Date.now(),
+    })
   } catch {
     // ignore
   }
-} catch {
-  // State already updated in uploadPhoto
-}
-      }),
+
+  // If offline, keep queued and upload automatically when back online.
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    setPhotos((prev) =>
+      prev.map((ph) =>
+        ph.id === p.id ? { ...ph, status: "queued", progress: 0, error: "Waiting for internet…" } : ph,
+      ),
     )
+    continue
+  }
+
+  try {
+    await uploadPhoto(fileToUpload, p.id)
+    try {
+      await deletePendingPhoto(p.id)
+    } catch {
+      // ignore
+    }
+  } catch {
+    // State already updated in uploadPhoto
+  }
+}
 
     // Allow selecting the same file again
     e.target.value = ""

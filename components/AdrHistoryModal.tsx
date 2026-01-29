@@ -205,11 +205,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
       try {
         const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf")
-        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js"
+        
+        pdfjs.GlobalWorkerOptions.workerSrc = "/api/pdfjs-worker"
 // Use CDN worker to avoid bundling issues on Next/Vercel
-        pdfjs.GlobalWorkerOptions.workerSrc =
-          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js"
-
         const loadingTask = pdfjs.getDocument({ data: buf, disableWorker: true })
         const pdf = await loadingTask.promise
         // Keep single page (your PDF is single page)
