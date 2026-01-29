@@ -51,7 +51,33 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const isMobile = useMemo(() => /Mobi|Android|iPhone|iPad|iPod/i.test(ua), [ua])
   const isDesktop = useMemo(() => !!ua && !isMobile, [ua, isMobile])
 
-  const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search)), [items, search])
+  function safeMeta(meta: any): Record<string, any> {
+    if (!meta) return {}
+    if (typeof meta === "object") return meta
+    if (typeof meta === "string") {
+      try {
+        const parsed = JSON.parse(meta)
+        return parsed && typeof parsed === "object" ? parsed : {}
+      } catch {
+        return {}
+      }
+    }
+    return {}
+  }
+
+function matchesSearch(it: HistoryItem, qRaw: string): boolean {
+    const q = (qRaw || "").trim().toLowerCase()
+    if (!q) return true
+    const m = safeMeta(it.meta)
+    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
+    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
+    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
+    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
+    const hash = String(it.checklist_hash ?? "").toLowerCase()
+    return driver.includes(q) || truck.includes(q) || trailer.includes(q) || inspector.includes(q) || hash.includes(q)
+  }
+
+const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search)), [items, search])
   const full = useMemo(() => items.filter((i) => i.checklist_type === "full").filter((i) => matchesSearch(i, search)), [items, search])
 
   useEffect(() => {
@@ -118,33 +144,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
   // NOTE: Use function declarations (hoisted) to avoid "Cannot access X before initialization"
   // errors caused by helpers referenced inside useMemo/useCallback before their const initialization.
-  function safeMeta(meta: any): Record<string, any> {
-    if (!meta) return {}
-    if (typeof meta === "object") return meta
-    if (typeof meta === "string") {
-      try {
-        const parsed = JSON.parse(meta)
-        return parsed && typeof parsed === "object" ? parsed : {}
-      } catch {
-        return {}
-      }
-    }
-    return {}
-  }
-
-  function matchesSearch(it: HistoryItem, qRaw: string): boolean {
-    const q = (qRaw || "").trim().toLowerCase()
-    if (!q) return true
-    const m = safeMeta(it.meta)
-    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
-    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
-    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
-    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
-    const hash = String(it.checklist_hash ?? "").toLowerCase()
-    return driver.includes(q) || truck.includes(q) || trailer.includes(q) || inspector.includes(q) || hash.includes(q)
-  }
-
-  const formatDDMMYYYY = (iso: string) => {
+      const formatDDMMYYYY = (iso: string) => {
     const d = new Date(iso)
     const dd = String(d.getDate()).padStart(2, "0")
     const mm = String(d.getMonth() + 1).padStart(2, "0")
@@ -205,10 +205,10 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
   const openPreview = useCallback(
     async (it: HistoryItem) => {
-      // Android + Desktop: open PDF in a new tab using the browser's native PDF handling.
-      // iOS: keep in-app preview (with pinch zoom).
-      if (isAndroid || isDesktop) {
-        window.open(`/api/adr-history/preview?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`, "_blank", "noopener,noreferrer")
+      // Android/Tablet: open a dedicated viewer page (avoids forced downloads on devices without native PDF viewer).
+      // iOS + Desktop: keep in-app preview (iOS gets pinch zoom).
+      if (isAndroid) {
+        window.open(`/preview?id=${encodeURIComponent(it.id)}`, "_blank", "noopener,noreferrer")
         return
       }
 
@@ -232,17 +232,21 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
           throw new Error(txt || `Preview failed (${res.status})`)
         }
         const buf = await res.arrayBuffer()
-        const blob = new Blob([buf], { type: "application/pdf" })
+        const blob = new Blob([buf], {
+          type: "application/pdf",
+        })
         const url = URL.createObjectURL(blob)
-        setPreviewBlobUrl(url)
+        if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+        previewUrlRef.current = url
+        setPreviewUrl(url)
       } catch (e: any) {
-        setPreviewError(e?.name === "AbortError" ? "Preview timed out" : e?.message || "Preview failed")
+        setPreviewError(e?.message || "Failed to render preview")
       } finally {
         clearTimeout(t)
         setPreviewLoading(false)
       }
     },
-    [revokePreviewUrl, isIOS]
+    [isAndroid, revokePreviewUrl],
   )
 
   const closePreview = useCallback(() => {
@@ -487,10 +491,10 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
 	            <div
 	              className="p-3 sm:p-4 h-[calc(100%-56px)] overflow-auto bg-gray-50"
-	              onTouchStart={handlePreviewTouchStart}
-	              onTouchMove={handlePreviewTouchMove}
-	              onTouchEnd={handlePreviewTouchEnd}
-	              onTouchCancel={handlePreviewTouchEnd}
+	              onTouchStart={onPreviewTouchStart}
+	              onTouchMove={onPreviewTouchMove}
+	              onTouchEnd={onPreviewTouchEnd}
+	              onTouchCancel={onPreviewTouchEnd}
 	            >
 	              {previewLoading ? (
 	                <div className="text-sm text-gray-600">Loading preview...</div>
