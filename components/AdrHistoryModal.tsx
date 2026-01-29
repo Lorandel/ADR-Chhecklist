@@ -218,13 +218,17 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 }, [])
 
   const closePreview = () => {
-    setPreviewOpen(false)
-    setPreviewItem(null)
-    setPreviewError(null)
-    setPreviewLoading(false)
-    null = null
-    setZoom(1)
-  }
+  setPreviewOpen(false)
+  setPreviewItem(null)
+  setPreviewError(null)
+  setPreviewLoading(false)
+  setZoom(1)
+  setPreviewBlobUrl((prev) => {
+    if (prev) URL.revokeObjectURL(prev)
+    return null
+  })
+}
+
 
   if (!open) return null
 
