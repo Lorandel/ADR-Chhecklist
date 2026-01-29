@@ -39,42 +39,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
-  const pdfArrayBufferRef = useRef<ArrayBuffer | null>(null)
-  const renderSeq = useRef(0)
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const canvasWrapRef = useRef<HTMLDivElement | null>(null)
-
-  // --- Helpers ---
-  // NOTE: These must be defined before the useMemo filters.
-  const safeMeta = (meta: any): Record<string, any> => {
-    if (!meta) return {}
-    if (typeof meta === "object") return meta as any
-    try {
-      const parsed = JSON.parse(String(meta))
-      return parsed && typeof parsed === "object" ? (parsed as any) : {}
-    } catch {
-      return {}
-    }
-  }
-
-  const matchesSearch = (it: HistoryItem, qRaw: string) => {
-    const q = (qRaw || "").trim().toLowerCase()
-    if (!q) return true
-    const m = safeMeta(it.meta)
-    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
-    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
-    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
-    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
-    const hash = String(it.checklist_hash ?? "").toLowerCase()
-    return (
-      driver.includes(q) ||
-      truck.includes(q) ||
-      trailer.includes(q) ||
-      inspector.includes(q) ||
-      hash.includes(q)
-    )
-  }
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
   const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search)), [items, search])
   const full = useMemo(() => items.filter((i) => i.checklist_type === "full").filter((i) => matchesSearch(i, search)), [items, search])
@@ -92,11 +59,12 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setPreviewItem(null)
       setPreviewError(null)
       setPreviewLoading(false)
-      pdfArrayBufferRef.current = null
+      if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl)
+      setPreviewBlobUrl(null)
       setZoom(1)
       return
     }
-  }, [open])
+  }, [open, previewBlobUrl])
 
   useEffect(() => {
     if (!open || !role) return
@@ -138,6 +106,32 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const seeAsGuest = () => {
     setError(null)
     setRole("guest")
+  }
+
+  const safeMeta = (meta: any): Record<string, any> => {
+    if (!meta) return {}
+    if (typeof meta === "object") return meta
+    if (typeof meta === "string") {
+      try {
+        const parsed = JSON.parse(meta)
+        return parsed && typeof parsed === "object" ? parsed : {}
+      } catch {
+        return {}
+      }
+    }
+    return {}
+  }
+
+  const matchesSearch = (it: HistoryItem, qRaw: string) => {
+    const q = (qRaw || "").trim().toLowerCase()
+    if (!q) return true
+    const m = safeMeta(it.meta)
+    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
+    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
+    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
+    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
+    const hash = String(it.checklist_hash ?? "").toLowerCase()
+    return driver.includes(q) || truck.includes(q) || trailer.includes(q) || inspector.includes(q) || hash.includes(q)
   }
 
   const formatDDMMYYYY = (iso: string) => {
@@ -190,100 +184,58 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     window.open(it.downloadUrl, "_blank", "noopener,noreferrer")
   }, [])
 
-  const renderPdf = useCallback(async () => {
-    const buf = pdfArrayBufferRef.current
-    const canvas = canvasRef.current
-    const wrap = canvasWrapRef.current
-    if (!buf || !canvas || !wrap) return
-
-    const seq = ++renderSeq.current
-
-    try {
-      const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf")
-      // Render in main thread (disableWorker) to avoid worker loading issues on Vercel/offline.
-      const loadingTask = pdfjsLib.getDocument({ data: buf, disableWorker: true })
-      const pdf = await loadingTask.promise
-      const page = await pdf.getPage(1)
-
-      const containerW = Math.max(260, wrap.clientWidth - 2) // avoid 0-width
-      const unscaled = page.getViewport({ scale: 1 })
-      const fitScale = containerW / unscaled.width
-      const scale = fitScale * zoom
-
-      const viewport = page.getViewport({ scale })
-      const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
-
-      canvas.width = Math.floor(viewport.width * dpr)
-      canvas.height = Math.floor(viewport.height * dpr)
-      canvas.style.width = `${Math.floor(viewport.width)}px`
-      canvas.style.height = `${Math.floor(viewport.height)}px`
-
-      const ctx = canvas.getContext("2d")
-      if (!ctx) return
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-
-      const renderTask = page.render({ canvasContext: ctx, viewport })
-      await renderTask.promise
-
-      if (seq !== renderSeq.current) return
-    } catch (e: any) {
-      setPreviewError(e?.message || "Failed to render preview")
+  const revokePreviewUrl = useCallback(() => {
+    if (previewBlobUrl) {
+      try {
+        URL.revokeObjectURL(previewBlobUrl)
+      } catch {}
     }
-  }, [zoom])
+    setPreviewBlobUrl(null)
+  }, [previewBlobUrl])
 
-  const openPreview = useCallback(async (it: HistoryItem) => {
-    setPreviewItem(it)
-    setPreviewOpen(true)
-    setPreviewError(null)
-    setPreviewLoading(true)
-    setZoom(1)
-    pdfArrayBufferRef.current = null
+  const openPreview = useCallback(
+    async (it: HistoryItem) => {
+      setPreviewItem(it)
+      setPreviewOpen(true)
+      setPreviewError(null)
+      setPreviewLoading(true)
+      setZoom(1)
+      revokePreviewUrl()
 
-    try {
-      const res = await fetch(`/api/adr-history/preview?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`, {
-        cache: "no-store",
-      })
-      if (!res.ok) {
-        const t = await res.text().catch(() => "")
-        throw new Error(t || `Preview failed (${res.status})`)
+      const controller = new AbortController()
+      const t = setTimeout(() => controller.abort(), 20000)
+
+      try {
+        const res = await fetch(`/api/adr-history/preview?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        })
+        if (!res.ok) {
+          const txt = await res.text().catch(() => "")
+          throw new Error(txt || `Preview failed (${res.status})`)
+        }
+        const buf = await res.arrayBuffer()
+        const blob = new Blob([buf], { type: "application/pdf" })
+        const url = URL.createObjectURL(blob)
+        setPreviewBlobUrl(url)
+      } catch (e: any) {
+        setPreviewError(e?.name === "AbortError" ? "Preview timed out" : e?.message || "Preview failed")
+      } finally {
+        clearTimeout(t)
+        setPreviewLoading(false)
       }
-      const buf = await res.arrayBuffer()
-      pdfArrayBufferRef.current = buf
-    } catch (e: any) {
-      setPreviewError(e?.message || "Preview failed")
-    } finally {
-      setPreviewLoading(false)
-    }
-  }, [])
+    },
+    [revokePreviewUrl]
+  )
 
-  // Render when preview opens / zoom changes / container resizes
-  useEffect(() => {
-    if (!previewOpen) return
-    if (!pdfArrayBufferRef.current) return
-    renderPdf()
-  }, [previewOpen, zoom, renderPdf])
-
-  useEffect(() => {
-    if (!previewOpen) return
-    const wrap = canvasWrapRef.current
-    if (!wrap) return
-
-    const ro = new ResizeObserver(() => {
-      if (!pdfArrayBufferRef.current) return
-      renderPdf()
-    })
-    ro.observe(wrap)
-    return () => ro.disconnect()
-  }, [previewOpen, renderPdf])
-
-  const closePreview = () => {
+  const closePreview = useCallback(() => {
     setPreviewOpen(false)
     setPreviewItem(null)
     setPreviewError(null)
     setPreviewLoading(false)
-    pdfArrayBufferRef.current = null
     setZoom(1)
-  }
+    revokePreviewUrl()
+  }, [revokePreviewUrl])
 
   if (!open) return null
 
@@ -481,17 +433,42 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
               </div>
             </div>
 
-            <div className="p-3 sm:p-4 h-[calc(100%-56px)] overflow-auto bg-gray-50">
-              {previewLoading ? (
-                <div className="text-sm text-gray-600">Loading preview...</div>
-              ) : previewError ? (
-                <div className="text-sm text-red-600">{previewError}</div>
-              ) : (
-                <div ref={canvasWrapRef} className="w-full flex justify-center">
-                  <canvas ref={canvasRef} className="rounded-xl bg-white shadow-sm border border-gray-200" />
-                </div>
-              )}
-            </div>
+	            <div className="p-3 sm:p-4 h-[calc(100%-56px)] overflow-auto bg-gray-50">
+	              {previewLoading ? (
+	                <div className="text-sm text-gray-600">Loading preview...</div>
+	              ) : previewError ? (
+	                <div className="space-y-2">
+	                  <div className="text-sm text-red-600">{previewError}</div>
+	                  {previewBlobUrl ? (
+	                    <a
+	                      className="inline-flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+	                      href={previewBlobUrl}
+	                      target="_blank"
+	                      rel="noreferrer"
+	                    >
+	                      Open full screen
+	                    </a>
+	                  ) : null}
+	                </div>
+	              ) : previewBlobUrl ? (
+	                <div className="w-full flex justify-center">
+	                  <div
+	                    className="rounded-xl bg-white shadow-sm border border-gray-200 overflow-hidden"
+	                    style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
+	                  >
+	                    <iframe
+	                      ref={iframeRef}
+	                      title="ADR Preview"
+	                      src={previewBlobUrl}
+	                      className="w-[900px] max-w-[96vw]"
+	                      style={{ height: "calc(92vh - 160px)", border: 0 }}
+	                    />
+	                  </div>
+	                </div>
+	              ) : (
+	                <div className="text-sm text-gray-600">No preview available.</div>
+	              )}
+	            </div>
           </div>
         </div>
       )}
