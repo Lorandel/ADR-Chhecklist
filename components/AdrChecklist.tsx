@@ -918,9 +918,6 @@ try {
 } catch {
   // State already updated in uploadPhoto
 }
-        } catch {
-          // State already updated in uploadPhoto
-        }
       }),
     )
 
