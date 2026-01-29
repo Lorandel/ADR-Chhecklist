@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -33,16 +33,20 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   const [items, setItems] = useState<HistoryItem[]>([])
   const [refreshTick, setRefreshTick] = useState(0)
 
+  const [search, setSearch] = useState("")
   // Preview (render PDF inside the app, not relying on the device PDF viewer)
   const [previewItem, setPreviewItem] = useState<HistoryItem | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
-  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
+  const pdfArrayBufferRef = useRef<ArrayBuffer | null>(null)
+  const renderSeq = useRef(0)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const canvasWrapRef = useRef<HTMLDivElement | null>(null)
 
-  const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced"), [items])
-  const full = useMemo(() => items.filter((i) => i.checklist_type === "full"), [items])
+  const reduced = useMemo(() => items.filter((i) => i.checklist_type === "reduced").filter((i) => matchesSearch(i, search)), [items, search])
+  const full = useMemo(() => items.filter((i) => i.checklist_type === "full").filter((i) => matchesSearch(i, search)), [items, search])
 
   useEffect(() => {
     if (!open) {
@@ -57,7 +61,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setPreviewItem(null)
       setPreviewError(null)
       setPreviewLoading(false)
-      setPreviewBlobUrl(null)
+      pdfArrayBufferRef.current = null
       setZoom(1)
       return
     }
@@ -115,6 +119,25 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       } catch {
         return {}
       }
+
+  const matchesSearch = (it: HistoryItem, qRaw: string) => {
+    const q = (qRaw || "").trim().toLowerCase()
+    if (!q) return true
+    const m = safeMeta(it.meta)
+    const driver = String(m.driverName ?? m.driver_name ?? "").toLowerCase()
+    const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? "").toLowerCase()
+    const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? "").toLowerCase()
+    const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
+    const hash = String(it.checklist_hash ?? "").toLowerCase()
+    return (
+      driver.includes(q) ||
+      truck.includes(q) ||
+      trailer.includes(q) ||
+      inspector.includes(q) ||
+      hash.includes(q)
+    )
+  }
+
     }
     return {}
   }
@@ -169,66 +192,100 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     window.open(it.downloadUrl, "_blank", "noopener,noreferrer")
   }, [])
 
+  const renderPdf = useCallback(async () => {
+    const buf = pdfArrayBufferRef.current
+    const canvas = canvasRef.current
+    const wrap = canvasWrapRef.current
+    if (!buf || !canvas || !wrap) return
+
+    const seq = ++renderSeq.current
+
+    try {
+      const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf")
+      // Render in main thread (disableWorker) to avoid worker loading issues on Vercel/offline.
+      const loadingTask = pdfjsLib.getDocument({ data: buf, disableWorker: true })
+      const pdf = await loadingTask.promise
+      const page = await pdf.getPage(1)
+
+      const containerW = Math.max(260, wrap.clientWidth - 2) // avoid 0-width
+      const unscaled = page.getViewport({ scale: 1 })
+      const fitScale = containerW / unscaled.width
+      const scale = fitScale * zoom
+
+      const viewport = page.getViewport({ scale })
+      const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
+
+      canvas.width = Math.floor(viewport.width * dpr)
+      canvas.height = Math.floor(viewport.height * dpr)
+      canvas.style.width = `${Math.floor(viewport.width)}px`
+      canvas.style.height = `${Math.floor(viewport.height)}px`
+
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+      const renderTask = page.render({ canvasContext: ctx, viewport })
+      await renderTask.promise
+
+      if (seq !== renderSeq.current) return
+    } catch (e: any) {
+      setPreviewError(e?.message || "Failed to render preview")
+    }
+  }, [zoom])
+
   const openPreview = useCallback(async (it: HistoryItem) => {
-  setPreviewItem(it)
-  setPreviewOpen(true)
-  setPreviewError(null)
-  setPreviewLoading(true)
-  setZoom(1)
+    setPreviewItem(it)
+    setPreviewOpen(true)
+    setPreviewError(null)
+    setPreviewLoading(true)
+    setZoom(1)
+    pdfArrayBufferRef.current = null
 
-  // clean previous blob url
-  setPreviewBlobUrl((prev) => {
-    if (prev) URL.revokeObjectURL(prev)
-    return null
-  })
-
-  try {
-    const url = `/api/adr-history/preview?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`
-    const res = await fetch(url, { cache: "no-store" })
-    const ct = (res.headers.get("content-type") || "").toLowerCase()
-
-    if (!res.ok) {
-      // try to read json error
-      let msg = `Preview failed (${res.status})`
-      try {
-        const j = await res.json()
-        if (j?.message) msg = j.message
-      } catch {
+    try {
+      const res = await fetch(`/api/adr-history/preview?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`, {
+        cache: "no-store",
+      })
+      if (!res.ok) {
         const t = await res.text().catch(() => "")
-        if (t) msg = t
+        throw new Error(t || `Preview failed (${res.status})`)
       }
-      throw new Error(msg)
+      const buf = await res.arrayBuffer()
+      pdfArrayBufferRef.current = buf
+    } catch (e: any) {
+      setPreviewError(e?.message || "Preview failed")
+    } finally {
+      setPreviewLoading(false)
     }
+  }, [])
 
-    // Ensure we received a PDF
-    if (!ct.includes("application/pdf")) {
-      const t = await res.text().catch(() => "")
-      throw new Error(t || "Preview failed: server did not return a PDF")
-    }
+  // Render when preview opens / zoom changes / container resizes
+  useEffect(() => {
+    if (!previewOpen) return
+    if (!pdfArrayBufferRef.current) return
+    renderPdf()
+  }, [previewOpen, zoom, renderPdf])
 
-    const buf = await res.arrayBuffer()
-    const blob = new Blob([buf], { type: "application/pdf" })
-    const blobUrl = URL.createObjectURL(blob)
-    setPreviewBlobUrl(blobUrl)
-  } catch (e: any) {
-    setPreviewError(e?.message || "Preview failed")
-  } finally {
-    setPreviewLoading(false)
-  }
-}, [])
+  useEffect(() => {
+    if (!previewOpen) return
+    const wrap = canvasWrapRef.current
+    if (!wrap) return
+
+    const ro = new ResizeObserver(() => {
+      if (!pdfArrayBufferRef.current) return
+      renderPdf()
+    })
+    ro.observe(wrap)
+    return () => ro.disconnect()
+  }, [previewOpen, renderPdf])
 
   const closePreview = () => {
-  setPreviewOpen(false)
-  setPreviewItem(null)
-  setPreviewError(null)
-  setPreviewLoading(false)
-  setZoom(1)
-  setPreviewBlobUrl((prev) => {
-    if (prev) URL.revokeObjectURL(prev)
-    return null
-  })
-}
-
+    setPreviewOpen(false)
+    setPreviewItem(null)
+    setPreviewError(null)
+    setPreviewLoading(false)
+    pdfArrayBufferRef.current = null
+    setZoom(1)
+  }
 
   if (!open) return null
 
@@ -331,6 +388,25 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                 </Button>
               </div>
 
+              <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                <div className="flex-1">
+                  <Label>Search</Label>
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search by driver, truck or trailer"
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  className="bg-transparent"
+                  onClick={() => setSearch("")}
+                  disabled={!search.trim()}
+                >
+                  Clear
+                </Button>
+              </div>
+
               {error && <div className="text-sm text-red-600">{error}</div>}
 
               <div className="rounded-2xl border border-gray-200 p-4">
@@ -413,21 +489,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
               ) : previewError ? (
                 <div className="text-sm text-red-600">{previewError}</div>
               ) : (
-                <div className="relative w-full overflow-auto rounded-2xl border border-gray-200 bg-gray-50" style={{ maxHeight: "70vh" }}>
-  {!previewBlobUrl ? (
-    <div className="p-6 text-sm text-gray-600">{previewLoading ? "Loading preview..." : previewError ? previewError : "No preview"}</div>
-  ) : (
-    <div className="w-full" style={{ transform: `scale(${zoom})`, transformOrigin: "top left" }}>
-      <iframe
-        title="ADR Preview"
-        src={previewBlobUrl}
-        className="w-full"
-        style={{ height: "70vh", border: "0" }}
-        onLoad={() => setPreviewLoading(false)}
-      />
-    </div>
-  )}
-</div>
+                <div ref={canvasWrapRef} className="w-full flex justify-center">
+                  <canvas ref={canvasRef} className="rounded-xl bg-white shadow-sm border border-gray-200" />
+                </div>
               )}
             </div>
           </div>
