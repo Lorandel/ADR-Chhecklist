@@ -162,7 +162,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
   const doLogin = () => {
     setError(null)
-    if (user.trim() === "admin" && pass.trim() === "admin") {
+    if (user.trim() === "admin" && pass.trim() === "admin12!") {
       setRole("admin")
       return
     }
@@ -184,7 +184,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       const res = await fetch("/api/adr-history/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: it.id, user: "admin", password: "admin" }),
+        body: JSON.stringify({ id: it.id, user: "admin", password: "admin12!" }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data?.success) {
