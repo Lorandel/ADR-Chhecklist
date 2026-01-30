@@ -1014,7 +1014,30 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       const imgData = imgPath ? imageMap.get(imgPath) : null
       if (imgData) {
         try {
-          pdf.addImage(imgData, "PNG", ix + 0.6, iy + 0.6, icon - 1.2, icon - 1.2)
+          const padding = 0.6
+          const inner = icon - padding * 2
+          // Keep aspect ratio (no stretch) and center inside the icon box
+          try {
+            // @ts-ignore - available in jsPDF at runtime
+            const props = pdf.getImageProperties(imgData)
+            const iw = props?.width || inner
+            const ih = props?.height || inner
+            const ratio = iw / ih
+
+            let w = inner
+            let h = inner
+            if (ratio > 1) {
+              h = inner / ratio
+            } else if (ratio < 1) {
+              w = inner * ratio
+            }
+
+            const xImg = ix + padding + (inner - w) / 2
+            const yImg = iy + padding + (inner - h) / 2
+            pdf.addImage(imgData, "PNG", xImg, yImg, w, h)
+          } catch {
+            pdf.addImage(imgData, "PNG", ix + padding, iy + padding, inner, inner)
+          }
         } catch {
           // ignore
         }

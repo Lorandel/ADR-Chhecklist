@@ -1102,8 +1102,31 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.roundedRect(x, y, size, size, 1.2, 1.2, "FD")
 
       const padding = 0.6
+      const inner = size - padding * 2
       const imgType = isJpeg(imgUrl) ? "JPEG" : "PNG"
-      pdf.addImage(img, imgType, x + padding, y + padding, size - padding * 2, size - padding * 2)
+
+      // Keep aspect ratio (no stretch) and center the image in the square
+      try {
+        // @ts-ignore - available in jsPDF at runtime
+        const props = pdf.getImageProperties(img)
+        const iw = props?.width || inner
+        const ih = props?.height || inner
+        const ratio = iw / ih
+
+        let w = inner
+        let h = inner
+        if (ratio > 1) {
+          h = inner / ratio
+        } else if (ratio < 1) {
+          w = inner * ratio
+        }
+
+        const ix = x + padding + (inner - w) / 2
+        const iy = y + padding + (inner - h) / 2
+        pdf.addImage(img, imgType, ix, iy, w, h)
+      } catch {
+        pdf.addImage(img, imgType, x + padding, y + padding, inner, inner)
+      }
     }
 
     // Preload all icons + watermark (faster and consistent)
@@ -1341,12 +1364,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         const ok = item.hasDate ? isChecked && !expired : isChecked
 
         // Row container (tighter framing, slightly larger controls)
-        const rowTop = rowY - 8
+        const rowTop = rowY - 6
+        const rowH = 10.8
         pdf.setDrawColor(226, 232, 240)
         pdf.setFillColor(248, 250, 252)
         pdf.setLineWidth(0.25)
         // @ts-ignore
-        pdf.roundedRect(x0, rowTop, equipColW, 10, 2, 2, "FD")
+        pdf.roundedRect(x0, rowTop, equipColW, rowH, 2, 2, "FD")
 
         const statusX = x0 + 1.4
         drawStatus(statusX, rowY - 4.4, ok)
@@ -1354,7 +1378,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         const iconX = statusX + 5.4 + 2.2
         // icon box
         try {
-          await drawIconBox(iconX, rowTop + 1, 8, item.image)
+          await drawIconBox(iconX, rowTop + 1.1, 8, item.image)
         } catch {
           // ignore missing icon
         }
@@ -1433,30 +1457,21 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         let lines: string[] = []
         if (it.startsWith("Goods correctly secured:")) {
           const parts = it.split(":")
-          const head = (parts[0] || "").trim() + ":"
+          const head = ((parts[0] || "").trim() + ":").trim()
           const tail = parts.slice(1).join(":").trim()
-          lines = [head, ...(pdf.splitTextToSize(tail, maxW) as string[])]
+          const headLines = pdf.splitTextToSize(head, maxW) as string[]
+          const tailLines = tail ? (pdf.splitTextToSize(tail, maxW) as string[]) : []
+          lines = [...headLines, ...tailLines]
         } else {
           lines = pdf.splitTextToSize(it, maxW) as string[]
         }
         if (!lines.length) lines = [truncateToWidth(it, maxW)]
 
-        pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(7.8)
-        pdf.setTextColor(17, 24, 39)
-        pdf.text(lines[0], textX, yy)
-
-        if (lines.length > 1) {
-          pdf.setFont("helvetica", "normal")
-          pdf.setFontSize(7.6)
-          pdf.setTextColor(51, 65, 85)
-          for (let li = 1; li < lines.length; li++) {
-            pdf.text(lines[li], textX, yy + li * 5.2)
-          }
-          pdf.setTextColor(17, 24, 39)
+        for (let li = 0; li < lines.length; li++) {
+          pdf.text(lines[li], textX, yy + li * 7)
         }
 
-        yy += Math.max(1, lines.length) * 6.2
+        yy += Math.max(1, lines.length) * 7
       }
     }
 
