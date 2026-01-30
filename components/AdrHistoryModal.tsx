@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { useAuth } from "@/components/auth/AuthProvider"
 
 type HistoryItem = {
   id: string
@@ -22,12 +23,10 @@ type Props = {
   onClose: () => void
 }
 
-type Role = "guest" | "admin" | null
 
 export default function AdrHistoryModal({ open, onClose }: Props) {
-  const [role, setRole] = useState<Role>(null)
-  const [user, setUser] = useState("")
-  const [pass, setPass] = useState("")
+  const { role, session } = useAuth()
+  const token = session?.access_token || ""
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<HistoryItem[]>([])
@@ -108,9 +107,6 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) {
-      setRole(null)
-      setUser("")
-      setPass("")
       setError(null)
       setItems([])
       setSearch("")
@@ -131,7 +127,8 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   }, [open])
 
   useEffect(() => {
-    if (!open || !role) return
+    if (!open) return
+    if (!session) return
     let cancelled = false
 
     ;(async () => {
@@ -154,25 +151,12 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     return () => {
       cancelled = true
     }
-  }, [open, role, refreshTick])
+  }, [open, session, refreshTick])
 
   const close = () => {
     onClose()
   }
 
-  const doLogin = () => {
-    setError(null)
-    if (user.trim() === "admin" && pass.trim() === "admin12!") {
-      setRole("admin")
-      return
-    }
-    setError("Invalid credentials")
-  }
-
-  const seeAsGuest = () => {
-    setError(null)
-    setRole("guest")
-  }
 
   const onDelete = async (it: HistoryItem) => {
     if (role !== "admin") return
@@ -183,8 +167,8 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
       setLoading(true)
       const res = await fetch("/api/adr-history/delete", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: it.id, user: "admin", password: "admin12!" }),
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ id: it.id }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data?.success) {
@@ -290,37 +274,11 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
         </div>
 
         <div className="p-6 overflow-auto max-h-[calc(86vh-64px)]">
-          {!role ? (
+          {!session ? (
             <div className="max-w-sm mx-auto">
               <div className="text-center mb-6">
-                <div className="text-lg font-semibold">Login</div>
-                <div className="text-sm text-gray-600">Admin can delete history items.</div>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <Label>User</Label>
-                  <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="Enter user" />
-                </div>
-                <div>
-                  <Label>Password</Label>
-                  <Input
-                    value={pass}
-                    onChange={(e) => setPass(e.target.value)}
-                    placeholder="Enter password"
-                    type="password"
-                  />
-                </div>
-
-                {error && <div className="text-sm text-red-600">{error}</div>}
-
-                <Button className="w-full" onClick={doLogin}>
-                  Log in
-                </Button>
-
-                <Button variant="outline" className="w-full bg-transparent" onClick={seeAsGuest}>
-                  See as guest
-                </Button>
+                <div className="text-lg font-semibold">Not connected</div>
+                <div className="text-sm text-gray-600">Please login to view history.</div>
               </div>
             </div>
           ) : (

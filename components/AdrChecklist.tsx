@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useAuth } from "@/components/auth/AuthProvider"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
@@ -40,6 +40,7 @@ type ADRChecklistProps = {
 }
 
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
+  const { inspectorName: authInspectorName, inspectorColor: authInspectorColor, inspectorEmail: authInspectorEmail } = useAuth()
   const includeAdrCertificate = variant === "full"
   const storageKey = `adrChecklistData_${variant}`
 
@@ -60,6 +61,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [allChecked, setAllChecked] = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
   const [selectedInspector, setSelectedInspector] = useState("")
+
+  // sync inspector from logged user (admin sets this per account)
+  useEffect(() => {
+    if (authInspectorName && authInspectorName.trim()) {
+      setSelectedInspector(authInspectorName.trim())
+    }
+  }, [authInspectorName])
   const [dateValid, setDateValid] = useState({
     drivingLicense: false,
     adrCertificate: false,
@@ -1623,7 +1631,9 @@ const formData = new FormData()
               pdf.setFontSize(7.5)
               pdf.text("Inspector name", cx, sigY + 28.5, { align: "center" })
 
-              const inspectorColor = inspectorColors[selectedInspector] || "#111827"
+              const inspectorColor = (typeof authInspectorColor === "string" && authInspectorColor.trim().match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)
+                ? authInspectorColor.trim()
+                : inspectorColors[selectedInspector]) || "#111827"
               pdf.setFont("helvetica", "bold")
               pdf.setFontSize(8.2)
               pdf.setTextColor(inspectorColor)
@@ -1825,7 +1835,7 @@ pdf.setTextColor(17, 24, 39)
     clearInspectorSignature()
 
     // Reset inspector
-    setSelectedInspector("")
+    setSelectedInspector(authInspectorName || "")
 
     // Reset remarks + photos
     setRemarks("")
@@ -1975,7 +1985,6 @@ pdf.setTextColor(17, 24, 39)
         if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
-        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
         // Restore signatures
@@ -2251,6 +2260,7 @@ pdf.setTextColor(17, 24, 39)
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inspectorName: selectedInspector,
+          inspectorEmail: authInspectorEmail,
           pdfBase64,
           driverName,
           truckPlate,
@@ -2781,18 +2791,9 @@ pdf.setTextColor(17, 24, 39)
 
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-4">Inspector:</h2>
-        <Select value={selectedInspector} onValueChange={setSelectedInspector}>
-          <SelectTrigger className="bg-black text-white border-gray-700">
-            <SelectValue placeholder="Select inspector" className="text-white" />
-          </SelectTrigger>
-          <SelectContent className="bg-black text-white border-gray-700">
-            {inspectors.map((name) => (
-              <SelectItem key={name} value={name} className="hover:bg-gray-700">
-                {name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+          {selectedInspector || "Not selected"}
+        </div>
 
         {/* Remarks + Photos (below inspector select, above signatures) */}
         <div className="mt-4">
