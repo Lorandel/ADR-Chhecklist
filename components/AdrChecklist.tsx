@@ -1501,7 +1501,7 @@ const formData = new FormData()
 
           pdf.setTextColor(17, 24, 39)
         } else {
-          const nameFit = truncateToWidth(displayName), maxTextW)
+          const nameFit = truncateToWidth(displayName, maxTextW)
           pdf.text(nameFit, textX, rowY)
         }
 
