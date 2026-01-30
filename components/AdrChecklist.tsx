@@ -790,6 +790,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         const xhr = new XMLHttpRequest()
         uploadXhrRefs.current[photoId] = xhr
 
+        const cleanupRefs = () => {
+          try { delete uploadXhrRefs.current[photoId] } catch {}
+          try { delete lastProgRef.current[photoId] } catch {}
+        }
+
         xhr.open("POST", "/api/upload-photo")
         xhr.responseType = "json"
         xhr.timeout = 45000 // important on mobile; prevents "hanging" uploads on flaky networks
@@ -833,6 +838,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
                 }
               }),
             )
+            cleanupRefs()
             resolve({ url: res.url, contentType: res.contentType || file.type })
             return
           }
@@ -849,6 +855,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
                 : p,
             ),
           )
+          cleanupRefs()
           reject(new Error(message))
         }
 
@@ -861,16 +868,19 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         xhr.onerror = () => {
           queueRetry("Upload failed (network error)")
+          cleanupRefs()
           reject(new Error("Upload failed (network error)"))
         }
 
         xhr.ontimeout = () => {
           queueRetry("Upload failed (timeout)")
+          cleanupRefs()
           reject(new Error("Upload failed (timeout)"))
         }
 
         xhr.onabort = () => {
           queueRetry("Upload aborted")
+          cleanupRefs()
           reject(new Error("Upload aborted"))
         }
 
@@ -924,6 +934,7 @@ const formData = new FormData()
       }
 
       // Save blob in IndexedDB (offline support)
+      let savedOffline = true
       try {
         await idbPutPhoto({
           id: p.id,
@@ -933,17 +944,31 @@ const formData = new FormData()
           createdAt: Date.now(),
         })
       } catch {
-        // IndexedDB can be unavailable in some private modes; ignore
+        savedOffline = false
       }
 
-      // If offline, keep queued; upload will resume automatically when online
-      if (typeof navigator !== "undefined" && !navigator.onLine) continue
+      // If offline, we MUST have an offline copy; otherwise the photo can never be uploaded later.
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        if (!savedOffline) {
+          setPhotos((prev) =>
+            prev.map((ph) =>
+              ph.id === p.id
+                ? {
+                    ...ph,
+                    status: "error",
+                    progress: 0,
+                    error: "Offline storage unavailable. Please keep the app open and retry when online.",
+                  }
+                : ph,
+            ),
+          )
+        }
+        continue
+      }
 
       try {
         await uploadPhoto(fileToUpload, p.id)
-        try {
-          await idbDeletePhoto(p.id)
-        } catch {}
+        // Keep offline copy until ZIP/email/reset (prevents missing photos when offline later)
       } catch {
         // State already updated in uploadPhoto
       }
@@ -969,7 +994,16 @@ const formData = new FormData()
         lastAttemptRef.current[p.id] = Date.now()
 
         const rec = await idbGetPhoto(p.id).catch(() => null)
-        if (!rec?.blob) continue
+        if (!rec?.blob) {
+          setPhotos((prev) =>
+            prev.map((ph) =>
+              ph.id === p.id
+                ? { ...ph, status: "error", progress: 0, error: "Missing offline copy. Please re-add the photo." }
+                : ph,
+            ),
+          )
+          continue
+        }
 
         const file = new File([rec.blob], rec.name || p.name, {
           type: rec.contentType || p.contentType || "image/jpeg",
@@ -977,9 +1011,7 @@ const formData = new FormData()
 
         try {
           await uploadPhoto(file, p.id)
-          try {
-            await idbDeletePhoto(p.id)
-          } catch {}
+          // Keep offline copy until ZIP/email/reset (supports offline ZIP later)
         } catch {
           // keep queued/error as set by uploadPhoto
         }
@@ -1409,6 +1441,7 @@ const formData = new FormData()
       const col = eqCols[c]
       for (let i = 0; i < col.length; i++) {
         const item = col[i]
+        const displayName = item.name.replace(" (ADR class 6.1/2.3)", "")
         const rowY = equipInnerY + i * eqRowH
         const x0 = colXs[c]
 
@@ -1454,7 +1487,7 @@ const formData = new FormData()
         pdf.setTextColor(17, 24, 39)
 
         if (item.hasDate && date?.month && date?.year) {
-          const namePart = `${item.name} - `
+          const namePart = `${displayName} - `
           const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
 
           const nameFit = truncateToWidth(namePart, maxTextW * 0.65)
@@ -1468,7 +1501,7 @@ const formData = new FormData()
 
           pdf.setTextColor(17, 24, 39)
         } else {
-          const nameFit = truncateToWidth(item.name, maxTextW)
+          const nameFit = truncateToWidth(displayName), maxTextW)
           pdf.text(nameFit, textX, rowY)
         }
 
@@ -1627,7 +1660,7 @@ pdf.setTextColor(17, 24, 39)
       // Build identity hash (used to dedupe between Download and Email)
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
-        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
+        .map((p) => ({ id: p.id, url: p.url as string, name: p.name, contentType: p.contentType }))
 
       const identity = {
         variant,
@@ -1665,9 +1698,18 @@ pdf.setTextColor(17, 24, 39)
       for (let i = 0; i < uploadedPhotos.length; i++) {
         const ph = uploadedPhotos[i]
         try {
-          const resp = await fetch(ph.url)
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-          const arrBuf = await resp.arrayBuffer()
+          // Prefer offline copy (supports ZIP generation even without internet after upload)
+          const rec = await idbGetPhoto(ph.id).catch(() => null)
+
+          let arrBuf: ArrayBuffer
+          if (rec?.blob) {
+            arrBuf = await rec.blob.arrayBuffer()
+          } else {
+            const resp = await fetch(ph.url)
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+            arrBuf = await resp.arrayBuffer()
+          }
+
           const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
           zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
         } catch (e) {
@@ -1799,6 +1841,24 @@ pdf.setTextColor(17, 24, 39)
       })
       return []
     })
+
+    // Clear offline photo cache (prevents stale queued/done photos and frees storage)
+    void (async () => {
+      try {
+        const recs = await idbListPhotos()
+        for (const r of recs) {
+          if (r?.id) {
+            try {
+              await idbDeletePhoto(r.id)
+            } catch {
+              // ignore
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    })()
 
     // Reset other states
     setShowResult(false)
@@ -2161,7 +2221,7 @@ pdf.setTextColor(17, 24, 39)
 
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
-        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
+        .map((p) => ({ id: p.id, url: p.url as string, name: p.name, contentType: p.contentType }))
 
       // Compute the same hash used by Download ZIP (so email updates the same DB entry).
       const identity = {
