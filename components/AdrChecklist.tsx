@@ -1061,8 +1061,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
 
     const drawStatus = (x: number, y: number, ok: boolean) => {
-      const w = 5
-      const h = 5
+      const w = 5.4
+      const h = 5.4
 
       pdf.setLineWidth(0.2)
       pdf.setDrawColor(203, 213, 225) // slate-300
@@ -1296,12 +1296,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(11)
     pdf.setTextColor(17, 24, 39)
-    pdf.text("Equipment Checklist", equipX + 6, equipY + 8)
+    pdf.text("Equipment Checklist", equipX + equipW / 2, equipY + 8, { align: "center" })
 
-    const equipInnerY = equipY + 14
-    const equipInnerX = equipX + 6
-    const equipInnerW = equipW - 12
-    const equipColGap = 10
+    const equipInnerY = equipY + 18
+    const equipInnerX = equipX + 5
+    const equipInnerW = equipW - 10
+    const equipColGap = 8
     const equipColW = (equipInnerW - equipColGap) / 2
 
     const allEq = equipmentItems
@@ -1340,20 +1340,30 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         const ok = item.hasDate ? isChecked && !expired : isChecked
 
-        drawStatus(x0, rowY - 4, ok)
+        // Row container (tighter framing, slightly larger controls)
+        const rowTop = rowY - 8
+        pdf.setDrawColor(226, 232, 240)
+        pdf.setFillColor(248, 250, 252)
+        pdf.setLineWidth(0.25)
+        // @ts-ignore
+        pdf.roundedRect(x0, rowTop, equipColW, 10, 2, 2, "FD")
 
+        const statusX = x0 + 1.4
+        drawStatus(statusX, rowY - 4.4, ok)
+
+        const iconX = statusX + 5.4 + 2.2
         // icon box
         try {
-          await drawIconBox(x0 + 6.2, rowY - 5.2, 7, item.image)
+          await drawIconBox(iconX, rowTop + 1, 8, item.image)
         } catch {
           // ignore missing icon
         }
 
-        const textX = x0 + 6.2 + 8.5
-        const maxTextW = equipColW - (textX - x0) - 2
+        const textX = iconX + 8 + 2.4
+        const maxTextW = equipColW - (textX - x0) - 1.6
 
         pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(9)
+        pdf.setFontSize(9.4)
         pdf.setTextColor(17, 24, 39)
 
         if (item.hasDate && date?.month && date?.year) {
@@ -1417,10 +1427,36 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       for (const it of items) {
         const ok = !!checkedMap[it]
-        drawStatus(x + 6, yy - 4, ok)
-        const line = truncateToWidth(it, maxW)
-        pdf.text(line, textX, yy)
-        yy += 7
+        drawStatus(x + 6, yy - 4.4, ok)
+
+        // Wrap long lines; for "Goods correctly secured..." force a newline after the title
+        let lines: string[] = []
+        if (it.startsWith("Goods correctly secured:")) {
+          const parts = it.split(":")
+          const head = (parts[0] || "").trim() + ":"
+          const tail = parts.slice(1).join(":").trim()
+          lines = [head, ...(pdf.splitTextToSize(tail, maxW) as string[])]
+        } else {
+          lines = pdf.splitTextToSize(it, maxW) as string[]
+        }
+        if (!lines.length) lines = [truncateToWidth(it, maxW)]
+
+        pdf.setFont("helvetica", "bold")
+        pdf.setFontSize(7.8)
+        pdf.setTextColor(17, 24, 39)
+        pdf.text(lines[0], textX, yy)
+
+        if (lines.length > 1) {
+          pdf.setFont("helvetica", "normal")
+          pdf.setFontSize(7.6)
+          pdf.setTextColor(51, 65, 85)
+          for (let li = 1; li < lines.length; li++) {
+            pdf.text(lines[li], textX, yy + li * 5.2)
+          }
+          pdf.setTextColor(17, 24, 39)
+        }
+
+        yy += Math.max(1, lines.length) * 6.2
       }
     }
 
@@ -1465,23 +1501,32 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
       }
 
-      pdf.setFont("helvetica", "normal")
-      pdf.setFontSize(8)
-      pdf.setTextColor(100, 116, 139)
-      pdf.text(title, x, sigY + 30)
+            pdf.setFont("helvetica", "normal")
+            pdf.setFontSize(8)
+            pdf.setTextColor(100, 116, 139)
 
-      if (extra?.inspector) {
-        const inspectorColor = inspectorColors[selectedInspector] || "#111827"
-        const label = "Inspector: "
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor(17, 24, 39)
-        pdf.text(label, x, sigY + 30)
-        const lw = pdf.getTextWidth(label)
-        pdf.setTextColor(inspectorColor)
-        pdf.text(selectedInspector || "Not selected", x + lw, sigY + 30)
-      }
+            const cx = x + sigImgW / 2
 
-      pdf.setTextColor(17, 24, 39)
+            if (extra?.inspector) {
+              // Inspector label + name centered under signature
+              pdf.setFontSize(7.5)
+              pdf.text("Inspector name", cx, sigY + 28.5, { align: "center" })
+
+              const inspectorColor = inspectorColors[selectedInspector] || "#111827"
+              pdf.setFont("helvetica", "bold")
+              pdf.setFontSize(8.2)
+              pdf.setTextColor(inspectorColor)
+
+              const nameLines = pdf.splitTextToSize(selectedInspector || "Not selected", sigImgW) as string[]
+              pdf.text(nameLines, cx, sigY + 32.0, { align: "center", lineHeightFactor: 1.0 })
+            } else {
+              // Driver label centered under signature
+              const labelLines = pdf.splitTextToSize(title, sigImgW) as string[]
+              pdf.text(labelLines, cx, sigY + 30, { align: "center", lineHeightFactor: 1.05 })
+            }
+
+            pdf.setTextColor(17, 24, 39)
+pdf.setTextColor(17, 24, 39)
     }
 
     drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)

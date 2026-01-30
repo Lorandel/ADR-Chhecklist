@@ -858,7 +858,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setFont("helvetica", "bold")
       pdf.setFontSize(10)
       pdf.setTextColor(15, 23, 42)
-      pdf.text(title, margin + 3, y + 5)
+      pdf.text(title, margin + contentWidth / 2, y + 5, { align: "center" })
       return y + 9
     }
 
@@ -959,10 +959,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const col1X = margin
     const col2X = margin + colW + colGap
 
-    const rowH = 9.2
-    const icon = 7.2
-    const pad = 2
-    const statusSize = 5.2
+    const rowH = 10
+    const icon = 8
+    const pad = 2.2
+    const statusSize = 5.6
 
     // Preload equipment images (best-effort)
     const uniquePaths = Array.from(
@@ -1024,7 +1024,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       const textX = ix + icon + 2.2
       const maxTextW = colW - (textX - x) - statusSize - 3
       pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(8.2)
+      pdf.setFontSize(8.6)
       pdf.setTextColor(15, 23, 42)
 
       const name = item.name || ""
@@ -1079,7 +1079,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     // ---- Before Loading / After Loading (compact, two columns) ----
     const renderChecklistSection = (title: string, items: string[], checkedMap: Record<string, boolean>, startY: number) => {
       let cy = sectionHeader(title, startY)
-      const row = 5.1
+      const row = 7.0
       const col1 = items.slice(0, Math.ceil(items.length / 2))
       const col2 = items.slice(Math.ceil(items.length / 2))
 
@@ -1095,8 +1095,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           pdf.setFont("helvetica", "normal")
           pdf.setFontSize(8.0)
           pdf.setTextColor(15, 23, 42)
-          const wrapped = pdf.splitTextToSize(label, colW - 10)
-          pdf.text(wrapped, x + 9, yy)
+          let wrapped: string[] = []
+          if (label.startsWith("Goods correctly secured:")) {
+            const parts = label.split(":")
+            const head = (parts[0] || "").trim() + ":"
+            const tail = parts.slice(1).join(":").trim()
+            wrapped = [head, ...(pdf.splitTextToSize(tail, colW - 10) as string[])]
+          } else {
+            wrapped = pdf.splitTextToSize(label, colW - 10) as string[]
+          }
+          pdf.text(wrapped, x + 9, yy, { lineHeightFactor: 1.1 })
         }
 
         drawLine(col1[i], col1X)
@@ -1158,17 +1166,22 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.addImage(inspectorSignatureData, "PNG", inspectorX + 1, sigTop + 10.8, sigW - 2, sigH - 1.6)
     }
 
+    const driverLabel = signatureData ? "Driver signature" : "Driver signature (not signed)"
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(8.6)
     pdf.setTextColor(51, 65, 85)
-    pdf.text("Driver", driverX, sigTop + 26)
-    pdf.text("Inspector", inspectorX, sigTop + 26)
+    pdf.text(driverLabel, driverX + sigW / 2, sigTop + 26, { align: "center" })
 
     const inspectorColor = inspectorColors[selectedInspector] || "#0F172A"
+    const inspectorLabel = safe(selectedInspector) || "Inspector name"
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(8.6)
-    pdf.setTextColor(inspectorColor)
-    pdf.text(safe(selectedInspector), inspectorX, sigTop + 22)
+    if (inspectorLabel === "Inspector name") {
+      pdf.setTextColor(51, 65, 85)
+    } else {
+      pdf.setTextColor(inspectorColor)
+    }
+    pdf.text(inspectorLabel, inspectorX + sigW / 2, sigTop + 26, { align: "center" })
 
     // Single page by construction: we never add pages
     return pdf
