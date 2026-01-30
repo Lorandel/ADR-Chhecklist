@@ -4,16 +4,10 @@
 import { useState } from "react"
 import ADRChecklist, { type ChecklistVariant } from "@/components/AdrChecklist"
 import AdrHistoryModal from "@/components/AdrHistoryModal"
-import AdminPanelModal from "@/components/AdminPanelModal"
-import { AuthProvider, useAuth } from "@/components/auth/AuthProvider"
-import LoginGate from "@/components/auth/LoginGate"
-import { Button } from "@/components/ui/button"
 
-function HomePageInner() {
-  const { role, signOut, inspectorName } = useAuth()
+export default function HomePage() {
   const [variant, setVariant] = useState<ChecklistVariant | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [adminOpen, setAdminOpen] = useState(false)
 
   if (variant) {
     return <ADRChecklist variant={variant} onBack={() => setVariant(null)} />
@@ -21,31 +15,17 @@ function HomePageInner() {
 
   return (
     <div className="min-h-[100vh] flex items-center justify-center p-6 bg-white relative">
-      <div className="absolute top-4 right-4 flex items-center gap-2">
-        {inspectorName && <div className="text-xs text-gray-600 mr-2">Logged as <span className="font-semibold">{inspectorName}</span></div>}
-
-        {role === "admin" && (
-          <Button variant="outline" className="bg-transparent" onClick={() => setAdminOpen(true)}>
-            Admin
-          </Button>
-        )}
-
-        <Button
+      <div className="absolute top-4 right-4">
+        <button
           type="button"
-          variant="outline"
-          className="bg-transparent"
           onClick={() => setHistoryOpen(true)}
+          className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold shadow-sm hover:bg-gray-50"
         >
           ADR Checklists History
-        </Button>
-
-        <Button variant="outline" className="bg-transparent" onClick={() => void signOut()}>
-          Sign out
-        </Button>
+        </button>
       </div>
 
       <AdrHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} />
-      <AdminPanelModal open={adminOpen} onClose={() => setAdminOpen(false)} />
 
       <div className="w-full max-w-3xl">
         {/* Watermark above title (original image opacity) */}
@@ -88,15 +68,5 @@ function HomePageInner() {
         </p>
       </div>
     </div>
-  )
-}
-
-export default function HomePage() {
-  return (
-    <AuthProvider>
-      <LoginGate>
-        <HomePageInner />
-      </LoginGate>
-    </AuthProvider>
   )
 }

@@ -33,7 +33,6 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const {
       inspectorName,
-      inspectorEmail,
       driverName,
       truckPlate,
       trailerPlate,
@@ -46,7 +45,6 @@ export async function POST(req: NextRequest) {
       meta,
     } = body as {
       inspectorName: string
-      inspectorEmail?: string | string[]
       driverName: string
       truckPlate: string
       trailerPlate: string
@@ -94,22 +92,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const normalizeRecipientList = (v: unknown): string[] => {
-      if (!v) return []
-      if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean)
-      if (typeof v === "string") {
-        // allow comma/semicolon/space separated lists
-        return v
-          .split(/[;,\s]+/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-      }
-      return []
-    }
-
-    const recipientsFromBody = normalizeRecipientList(inspectorEmail)
-    const recipients = recipientsFromBody.length ? recipientsFromBody : inspectorEmails[inspectorName]
-
+    const recipients = inspectorEmails[inspectorName]
     if (!recipients || recipients.length === 0) {
       console.error("No recipients found for inspector:", inspectorName)
       return NextResponse.json(
