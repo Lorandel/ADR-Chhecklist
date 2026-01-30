@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
-import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
+import { idbPutPhoto, idbGetPhoto, idbDeletePhoto, idbListPhotos } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
 
 const capitalizeWords = (str: string) =>
@@ -792,6 +792,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         xhr.open("POST", "/api/upload-photo")
         xhr.responseType = "json"
+        xhr.timeout = 45000 // important on mobile; prevents "hanging" uploads on flaky networks
 
         xhr.upload.onprogress = (evt) => {
           if (!evt.lengthComputable) return
@@ -807,29 +808,42 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         xhr.onload = () => {
           const res = xhr.response
-          if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
+          const ok = xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url
+
+          if (ok) {
             setPhotos((prev) =>
-              prev.map((p) =>
-                p.id === photoId
-                  ? { ...p, progress: 100, status: "done", url: res.url, contentType: res.contentType || file.type }
-                  : p,
-              ),
+              prev.map((p) => {
+                if (p.id !== photoId) return p
+                // cleanup preview object URL (memory leak on mobile)
+                if (p.previewUrl?.startsWith("blob:")) {
+                  try {
+                    URL.revokeObjectURL(p.previewUrl)
+                  } catch {
+                    // ignore
+                  }
+                }
+                return {
+                  ...p,
+                  progress: 100,
+                  status: "done",
+                  url: res.url,
+                  previewUrl: res.url, // after upload, show the real hosted URL
+                  contentType: res.contentType || file.type,
+                  error: undefined,
+                }
+              }),
             )
             resolve({ url: res.url, contentType: res.contentType || file.type })
             return
           }
-          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
-          reject(new Error(message))
-        }
 
-        xhr.onerror = () => {
-          const message = "Upload failed (network error)"
-          const offline = typeof navigator !== "undefined" ? !navigator.onLine : false
+          const message = res?.message || res?.error || `Upload failed (${xhr.status || "unknown"})`
+          const retryable = xhr.status === 0 || (xhr.status >= 500 && xhr.status <= 599)
+
           setPhotos((prev) =>
             prev.map((p) =>
               p.id === photoId
-                ? offline
+                ? retryable
                   ? { ...p, status: "queued", progress: 0, error: message }
                   : { ...p, status: "error", error: message }
                 : p,
@@ -838,7 +852,29 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           reject(new Error(message))
         }
 
-        const formData = new FormData()
+        // NOTE: navigator.onLine is unreliable on Android; treat onerror/ontimeout as retryable.
+        const queueRetry = (message: string) => {
+          setPhotos((prev) =>
+            prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
+          )
+        }
+
+        xhr.onerror = () => {
+          queueRetry("Upload failed (network error)")
+          reject(new Error("Upload failed (network error)"))
+        }
+
+        xhr.ontimeout = () => {
+          queueRetry("Upload failed (timeout)")
+          reject(new Error("Upload failed (timeout)"))
+        }
+
+        xhr.onabort = () => {
+          queueRetry("Upload aborted")
+          reject(new Error("Upload aborted"))
+        }
+
+const formData = new FormData()
         formData.append("file", file)
         xhr.send(formData)
 
@@ -957,10 +993,26 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const onOnline = () => {
       void tryUploadPendingPhotos()
     }
+    const onVis = () => {
+      if (document.visibilityState === "visible" && navigator.onLine) {
+        void tryUploadPendingPhotos()
+      }
+    }
     window.addEventListener("online", onOnline)
-    // attempt once on mount (if there are queued photos restored)
+    document.addEventListener("visibilitychange", onVis)
+
+    // periodic safety net for Android (sometimes online event doesn't fire, or fires too early)
+    const intervalId = window.setInterval(() => {
+      if (navigator.onLine) void tryUploadPendingPhotos()
+    }, 25000)
+
+    // attempt once on mount (and after restoring queued photos)
     void tryUploadPendingPhotos()
-    return () => window.removeEventListener("online", onOnline)
+    return () => {
+      window.removeEventListener("online", onOnline)
+      document.removeEventListener("visibilitychange", onVis)
+      window.clearInterval(intervalId)
+    }
   }, [tryUploadPendingPhotos])
 
   const removePhoto = (photoId: string) => {
@@ -971,6 +1023,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       } catch {
         // ignore
       }
+    }
+
+    try {
+      void idbDeletePhoto(photoId)
+    } catch {
+      // ignore
+    }
+    try {
+      delete uploadXhrRefs.current[photoId]
+    } catch {
+      // ignore
     }
 
     setPhotos((prev) => {
@@ -1905,6 +1968,37 @@ pdf.setTextColor(17, 24, 39)
       }
     }
   }, [isMounted])
+
+  // Restore queued (offline) photos from IndexedDB after refresh/tab kill (Android friendly).
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+
+    ;(async () => {
+      const records = await idbListPhotos().catch(() => [])
+      if (!records.length) return
+
+      setPhotos((prev) => {
+        const existingIds = new Set(prev.map((p) => p.id))
+        const restored = records
+          .filter((r) => r && typeof r.id === "string" && r.id.length > 0 && r.blob)
+          .filter((r) => !existingIds.has(r.id))
+          .map((r) => ({
+            id: r.id,
+            name: r.name || "photo.jpg",
+            previewUrl: URL.createObjectURL(r.blob),
+            status: "queued" as const,
+            progress: 0,
+            contentType: r.contentType || "image/jpeg",
+          }))
+        return restored.length ? [...prev, ...restored] : prev
+      })
+
+      if (navigator.onLine) {
+        void tryUploadPendingPhotos()
+      }
+    })()
+  }, [isMounted, tryUploadPendingPhotos])
+
 
 
   // Restore signature drawings on the canvases after a refresh

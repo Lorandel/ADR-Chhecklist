@@ -49,6 +49,40 @@ export async function idbGetPhoto(id: string): Promise<OfflinePhotoRecord | null
   return out
 }
 
+export async function idbListPhotos(): Promise<OfflinePhotoRecord[]> {
+  const db = await openDb()
+  const out = await new Promise<OfflinePhotoRecord[]>((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly")
+    const store = tx.objectStore(STORE)
+
+    // getAll is widely supported; fallback to cursor for older engines
+    // @ts-ignore
+    if (typeof (store as any).getAll === "function") {
+      // @ts-ignore
+      const req = (store as any).getAll()
+      req.onsuccess = () => resolve((req.result as OfflinePhotoRecord[]) || [])
+      req.onerror = () => reject(req.error)
+      return
+    }
+
+    const items: OfflinePhotoRecord[] = []
+    const cursorReq = store.openCursor()
+    cursorReq.onsuccess = () => {
+      const cursor = cursorReq.result
+      if (cursor) {
+        items.push(cursor.value as OfflinePhotoRecord)
+        cursor.continue()
+      } else {
+        resolve(items)
+      }
+    }
+    cursorReq.onerror = () => reject(cursorReq.error)
+  })
+  db.close()
+  return out
+}
+
+
 export async function idbDeletePhoto(id: string): Promise<void> {
   const db = await openDb()
   await new Promise<void>((resolve, reject) => {
