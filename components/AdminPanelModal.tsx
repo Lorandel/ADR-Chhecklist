@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useAuth } from "@/components/auth/AuthProvider"
+import { getStoredProvider, providerLabel, setStoredProvider, type StorageProvider } from "@/lib/storageProvider"
 
 type Props = { open: boolean; onClose: () => void }
 
@@ -38,6 +39,9 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   const [newInspectorColor, setNewInspectorColor] = useState("")
   const [newInspectorEmail, setNewInspectorEmail] = useState("")
 
+  // storage provider switch (local, instant)
+  const [storageProvider, setStorageProvider] = useState<StorageProvider>("auto")
+
   // tests (Drive tests removed per request)
   const testEndpoints = useMemo(
     () => [
@@ -45,10 +49,17 @@ export default function AdminPanelModal({ open, onClose }: Props) {
       { label: "Send Test Email", path: "/api/test-email?send=1" },
       { label: "Check Blob Config", path: "/api/test-blob" },
       { label: "Blob Write Test", path: "/api/test-blob?run=1" },
+      { label: "Check R2 Config", path: "/api/test-r2" },
+      { label: "R2 Write Test", path: "/api/test-r2?run=1" },
       { label: "Debug Env", path: "/api/debug" },
     ],
     [],
   )
+
+  useEffect(() => {
+    if (!open) return
+    setStorageProvider(getStoredProvider())
+  }, [open])
 
   useEffect(() => {
     if (!open) {
@@ -228,6 +239,30 @@ export default function AdminPanelModal({ open, onClose }: Props) {
 
               <div className="rounded-xl border border-gray-200 p-4">
                 <div className="font-semibold mb-3">System tests</div>
+
+                <div className="mb-4 rounded-lg border border-gray-200 p-3">
+                  <div className="text-sm font-semibold mb-2">Photo upload storage</div>
+                  <div className="flex flex-wrap gap-3 text-sm">
+                    {(["auto", "blob", "r2"] as StorageProvider[]).map((p) => (
+                      <label key={p} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          checked={storageProvider === p}
+                          onChange={() => {
+                            setStorageProvider(p)
+                            setStoredProvider(p)
+                            setInfo(`Upload provider set to: ${providerLabel(p)}`)
+                          }}
+                        />
+                        {providerLabel(p)}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-600">
+                    Switch instantly if uploads fail (e.g. Blob store suspended). This setting is saved in your browser.
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap gap-2">
                   {testEndpoints.map((t) => (
                     <Button key={t.path} variant="outline" className="bg-transparent" onClick={() => void runTest(t.path)} disabled={loading}>

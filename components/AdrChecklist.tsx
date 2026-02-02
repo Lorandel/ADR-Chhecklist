@@ -12,6 +12,7 @@ import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
 import { idbPutPhoto, idbGetPhoto, idbDeletePhoto, idbListPhotos } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
+import { getStoredProvider } from "@/lib/storageProvider"
 
 const capitalizeWords = (str: string) =>
   str
@@ -803,7 +804,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           try { delete lastProgRef.current[photoId] } catch {}
         }
 
-        xhr.open("POST", "/api/upload-photo")
+        const provider = getStoredProvider()
+        xhr.open("POST", `/api/upload-photo?provider=${encodeURIComponent(provider)}`)
         xhr.responseType = "json"
         xhr.timeout = 45000 // important on mobile; prevents "hanging" uploads on flaky networks
 
