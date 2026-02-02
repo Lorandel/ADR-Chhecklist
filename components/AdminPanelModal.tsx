@@ -38,14 +38,14 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   const [newInspectorColor, setNewInspectorColor] = useState("")
   const [newInspectorEmail, setNewInspectorEmail] = useState("")
 
-  // tests
+  // tests (Drive tests removed per request)
   const testEndpoints = useMemo(
     () => [
-      { label: "Test Email", path: "/api/test-email" },
-      { label: "Test Drive", path: "/api/test-drive" },
-      { label: "Test Blob", path: "/api/test-blob" },
-      { label: "Test Upload Simple", path: "/api/test-upload-simple" },
-      { label: "Debug", path: "/api/debug" },
+      { label: "Check Email Config", path: "/api/test-email" },
+      { label: "Send Test Email", path: "/api/test-email?send=1" },
+      { label: "Check Blob Config", path: "/api/test-blob" },
+      { label: "Blob Write Test", path: "/api/test-blob?run=1" },
+      { label: "Debug Env", path: "/api/debug" },
     ],
     [],
   )
@@ -146,8 +146,12 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     try {
       const res = await fetch(path, { cache: "no-store" })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`)
-      setInfo(`${path}: OK`)
+      if (!res.ok) throw new Error(data?.error || data?.message || `HTTP ${res.status}`)
+      if (data?.success === false) {
+        setError(`${path}: ${data?.error || data?.message || "Not configured"}`)
+      } else {
+        setInfo(`${path}: OK`)
+      }
     } catch (e: any) {
       setError(`${path}: ${e?.message || "Failed"}`)
     } finally {
@@ -166,8 +170,8 @@ export default function AdminPanelModal({ open, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl border border-gray-200">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+      <div className="w-full max-w-4xl max-h-[90vh] rounded-2xl bg-white shadow-2xl border border-gray-200 overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
           <div className="text-lg font-bold">Admin Panel</div>
           <Button variant="outline" onClick={onClose} className="bg-transparent">
             Close
@@ -179,7 +183,7 @@ export default function AdminPanelModal({ open, onClose }: Props) {
             <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">Unauthorized</div>
           </div>
         ) : (
-          <div className="p-6 space-y-8">
+          <div className="p-6 space-y-8 overflow-y-auto">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="rounded-xl border border-gray-200 p-4">
                 <div className="font-semibold mb-3">Create user</div>
@@ -234,7 +238,9 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                     Run all
                   </Button>
                 </div>
-                <div className="mt-3 text-xs text-gray-500">These call your existing /api/test-* routes.</div>
+                <div className="mt-3 text-xs text-gray-500">
+                  These endpoints are safe during build. Actions that create external side effects run only when you click a "Run" button (query params).
+                </div>
               </div>
             </div>
 
@@ -276,11 +282,7 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                               <Button
                                 variant="outline"
                                 className="bg-transparent"
-                                onClick={() =>
-                                  void updateUser(u, {
-                                    role: meta.role === "admin" ? "user" : "admin",
-                                  })
-                                }
+                                onClick={() => void updateUser(u, { role: meta.role === "admin" ? "user" : "admin" })}
                                 disabled={loading}
                               >
                                 Toggle role

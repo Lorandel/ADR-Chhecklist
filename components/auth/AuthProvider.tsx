@@ -1,10 +1,12 @@
 "use client"
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react"
-import type { Session, User } from "@supabase/supabase-js"
-import { getSupabaseBrowser, normalizeLoginToEmail } from "@/lib/supabaseBrowser"
+import type { Session, User, SupabaseClient } from "@supabase/supabase-js"
+import { getSupabaseBrowser, hasSupabaseBrowserEnv, normalizeLoginToEmail } from "@/lib/supabaseBrowser"
 
 type AuthContextValue = {
+  configured: boolean
+  configError: string | null
   session: Session | null
   user: User | null
   role: "admin" | "user" | null
@@ -24,11 +26,23 @@ function pickMetaString(user: User | null, key: string): string {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const supabase = useMemo(() => getSupabaseBrowser(), [])
+  const configured = useMemo(() => hasSupabaseBrowserEnv(), [])
+  const [configError, setConfigError] = useState<string | null>(null)
+
+  // IMPORTANT: getSupabaseBrowser() can return null if env vars are missing.
+  const supabase = useMemo(() => getSupabaseBrowser(), []) as SupabaseClient | null
+
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
 
   useEffect(() => {
+    if (!configured || !supabase) {
+      setConfigError(
+        "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your environment.",
+      )
+      return
+    }
+
     let mounted = true
 
     ;(async () => {
@@ -49,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       mounted = false
       subscription.unsubscribe()
     }
-  }, [supabase])
+  }, [configured, supabase])
 
   const role: AuthContextValue["role"] = useMemo(() => {
     const r = (user?.user_metadata as any)?.role
@@ -63,6 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const inspectorEmail = useMemo(() => pickMetaString(user, "inspectorEmail"), [user])
 
   const signIn: AuthContextValue["signIn"] = async (usernameOrEmail, password) => {
+    if (!configured || !supabase) return { ok: false, message: configError || "Supabase not configured" }
     const email = normalizeLoginToEmail(usernameOrEmail)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) return { ok: false, message: error.message }
@@ -70,15 +85,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const signOut = async () => {
+    if (!configured || !supabase) return
     await supabase.auth.signOut()
   }
 
   const refreshUser = async () => {
+    if (!configured || !supabase) return
     const { data } = await supabase.auth.getUser()
     setUser(data.user ?? null)
   }
 
   const value: AuthContextValue = {
+    configured,
+    configError,
     session,
     user,
     role,

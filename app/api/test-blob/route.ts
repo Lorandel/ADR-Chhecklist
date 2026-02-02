@@ -1,65 +1,64 @@
 import { type NextRequest, NextResponse } from "next/server"
 
 export async function GET(req: NextRequest) {
-  try {
-    console.log("=== Testing Vercel Blob Storage ===")
+  // Safe by default (no side effects). To actually write a test blob, call /api/test-blob?run=1
+  const url = new URL(req.url)
+  const shouldRun = url.searchParams.get("run") === "1"
 
-    // Import Vercel Blob
+  const hasToken = !!process.env.BLOB_READ_WRITE_TOKEN
+
+  if (!shouldRun) {
+    return NextResponse.json({
+      success: true,
+      configured: hasToken,
+      message: hasToken
+        ? "Blob token is configured."
+        : "BLOB_READ_WRITE_TOKEN is not set. Configure it in Vercel environment variables.",
+      didRun: false,
+    })
+  }
+
+  if (!hasToken) {
+    return NextResponse.json({
+      success: false,
+      configured: false,
+      error: "No blob token found. Set BLOB_READ_WRITE_TOKEN in the environment.",
+      didRun: false,
+    })
+  }
+
+  try {
     const { put, list } = await import("@vercel/blob")
 
-    // Create a test file
-    const testContent = `Test file created at ${new Date().toISOString()}\nThis is a test of Vercel Blob Storage for the ADR Checklist system.`
+    const testContent = `Test file created at ${new Date().toISOString()}
+ADR Checklist Blob test.`
     const testFileName = `test/blob_test_${Date.now()}.txt`
 
-    console.log("Creating test file:", testFileName)
-    console.log("Content length:", testContent.length)
-
-    // Upload test file
     const blob = await put(testFileName, testContent, {
       access: "public",
       contentType: "text/plain",
     })
 
-    console.log("✓ Test file uploaded successfully")
-    console.log("Blob URL:", blob.url)
-    console.log("Blob size:", blob.size)
-
-    // List recent files
-    console.log("Listing recent files...")
     const { blobs } = await list({
       prefix: "test/",
       limit: 5,
     })
 
-    console.log("Recent test files:", blobs.length)
-
     return NextResponse.json({
       success: true,
-      message: "Vercel Blob Storage test successful!",
-      testFile: {
-        url: blob.url,
-        size: blob.size,
-        pathname: blob.pathname,
-      },
-      recentFiles: blobs.map((b) => ({
-        pathname: b.pathname,
-        size: b.size,
-        uploadedAt: b.uploadedAt,
-      })),
+      configured: true,
+      message: "Vercel Blob write test successful!",
+      didRun: true,
+      testFile: { url: blob.url, size: blob.size, pathname: blob.pathname },
+      recentFiles: blobs.map((b) => ({ pathname: b.pathname, size: b.size, uploadedAt: b.uploadedAt })),
     })
   } catch (error: any) {
-    console.error("❌ Vercel Blob test failed:", error)
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: error.message,
-        details: {
-          code: error.code,
-          cause: error.cause,
-        },
-      },
-      { status: 500 },
-    )
+    // Return 200 to avoid build/export failures; surface the error in the JSON payload.
+    return NextResponse.json({
+      success: false,
+      configured: hasToken,
+      didRun: true,
+      error: error?.message || "Blob test failed",
+    })
   }
 }
