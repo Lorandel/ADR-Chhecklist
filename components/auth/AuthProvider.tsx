@@ -86,7 +86,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     if (!configured || !supabase) return
-    await supabase.auth.signOut()
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      // Some mobile browsers can be flaky about firing the auth state change event immediately.
+      // Force local state reset so the UI reliably returns to the login screen.
+      setSession(null)
+      setUser(null)
+    }
   }
 
   const refreshUser = async () => {

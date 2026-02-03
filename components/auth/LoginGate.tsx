@@ -28,8 +28,16 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-[100vh] flex items-center justify-center p-6 bg-white">
-      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-xl">
+    <div className="min-h-[100vh] flex items-center justify-center bg-white px-4 py-8 sm:px-6">
+      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 sm:p-6 shadow-xl">
+        <div className="flex items-center justify-center mb-4">
+          <img
+            src="/images/albias-watermark.png"
+            alt="Alblas watermark"
+            className="w-48 sm:w-56"
+          />
+        </div>
+
         <h1 className="text-2xl font-bold text-center mb-6">Connect</h1>
 
         {!configured && (
@@ -72,7 +80,7 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
           </Button>
         </form>
 
-        <p className="mt-4 text-xs text-gray-500 text-center">
+        <p className="mt-4 text-xs text-gray-500 text-center leading-relaxed">
           Tip: you can login with a simple username (e.g. <span className="font-mono">admin</span>) if the account was created with
           the internal format (<span className="font-mono">@adr.local</span>).
         </p>

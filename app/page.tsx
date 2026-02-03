@@ -21,7 +21,7 @@ function HomePageInner() {
 
   return (
     <div className="min-h-[100vh] flex items-center justify-center p-6 bg-white relative">
-      <div className="absolute top-4 right-4 flex items-center gap-2">
+      <div className="fixed top-3 left-3 right-3 z-50 flex flex-wrap items-center justify-end gap-2 rounded-xl border border-gray-200 bg-white/90 p-2 backdrop-blur md:absolute md:top-4 md:left-auto md:right-4 md:rounded-none md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-0">
         {inspectorName && <div className="text-xs text-gray-600 mr-2">Logged as <span className="font-semibold">{inspectorName}</span></div>}
 
         {role === "admin" && (
@@ -39,7 +39,16 @@ function HomePageInner() {
           ADR Checklists History
         </Button>
 
-        <Button variant="outline" className="bg-transparent" onClick={() => void signOut()}>
+        <Button
+          type="button"
+          variant="outline"
+          className="bg-transparent"
+          onClick={async () => {
+            setHistoryOpen(false)
+            setAdminOpen(false)
+            await signOut()
+          }}
+        >
           Sign out
         </Button>
       </div>

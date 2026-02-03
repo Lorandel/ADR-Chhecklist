@@ -12,7 +12,6 @@ import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
 import { idbPutPhoto, idbGetPhoto, idbDeletePhoto, idbListPhotos } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
-import { getStoredProvider } from "@/lib/storageProvider"
 
 const capitalizeWords = (str: string) =>
   str
@@ -30,6 +29,8 @@ type UploadedPhoto = {
   previewUrl: string
   status: PhotoUploadStatus
   progress: number // 0-100
+  createdAt: number
+  offlineReady: boolean
   url?: string // public blob url when uploaded
   contentType?: string
   error?: string
@@ -91,7 +92,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   // Throttle progress updates + prevent UI jitter
   const lastProgRef = useRef<Record<string, { t: number; p: number }>>({})
   const uploadingRunnerRef = useRef(false)
+  const isBatchUploadingRef = useRef(false)
   const lastAttemptRef = useRef<Record<string, number>>({})
+
+  // Prevent background retry runner from racing with the initial multi-photo upload loop.
+  const batchUploadingRef = useRef(false)
 
 
   // Refs for signatures and inputs
@@ -804,8 +809,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           try { delete lastProgRef.current[photoId] } catch {}
         }
 
-        const provider = getStoredProvider()
-        xhr.open("POST", `/api/upload-photo?provider=${encodeURIComponent(provider)}`)
+        xhr.open("POST", "/api/upload-photo")
         xhr.responseType = "json"
         xhr.timeout = 45000 // important on mobile; prevents "hanging" uploads on flaky networks
 
@@ -818,7 +822,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           if (progress === last.p) return
           if (now - last.t < 120 && progress - last.p < 2) return
           lastProgRef.current[photoId] = { t: now, p: progress }
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
+          setPhotos((prev) =>
+            prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading", error: undefined } : p)),
+          )
         }
 
         xhr.onload = () => {
@@ -894,12 +900,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           reject(new Error("Upload aborted"))
         }
 
-const formData = new FormData()
+        const formData = new FormData()
         formData.append("file", file)
         xhr.send(formData)
 
         // Mark as uploading immediately
-        setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0 } : p)))
+        setPhotos((prev) =>
+          prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0, error: undefined } : p)),
+        )
       })
     },
     [setPhotos],
@@ -909,6 +917,7 @@ const formData = new FormData()
     const files = Array.from(e.target.files || [])
     if (files.length === 0) return
 
+    const now = Date.now()
     const newPhotos: UploadedPhoto[] = files.map((file) => {
       const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
       return {
@@ -917,6 +926,8 @@ const formData = new FormData()
         previewUrl: URL.createObjectURL(file),
         status: "queued",
         progress: 0,
+        createdAt: now,
+        offlineReady: false,
         contentType: file.type,
       }
     })
@@ -924,7 +935,11 @@ const formData = new FormData()
     setPhotos((prev) => [...prev, ...newPhotos])
 
     // Persist photos offline (so they survive refresh) and upload sequentially (less UI jitter)
-    for (let idx = 0; idx < newPhotos.length; idx++) {
+    // Also block the background retry runner while we are still preparing/saving the new files,
+    // otherwise it can briefly mark items as "Missing offline copy" on fast devices.
+    isBatchUploadingRef.current = true
+    try {
+      for (let idx = 0; idx < newPhotos.length; idx++) {
       const p = newPhotos[idx]
       const originalFile = files[idx]
 
@@ -957,6 +972,11 @@ const formData = new FormData()
         savedOffline = false
       }
 
+      // Mark whether we have an offline copy ready (used by the background retry runner).
+      if (savedOffline) {
+        setPhotos((prev) => prev.map((ph) => (ph.id === p.id ? { ...ph, offlineReady: true } : ph)))
+      }
+
       // If offline, we MUST have an offline copy; otherwise the photo can never be uploaded later.
       if (typeof navigator !== "undefined" && !navigator.onLine) {
         if (!savedOffline) {
@@ -982,6 +1002,9 @@ const formData = new FormData()
       } catch {
         // State already updated in uploadPhoto
       }
+      }
+    } finally {
+      isBatchUploadingRef.current = false
     }
 
     // Allow selecting the same file again
@@ -991,6 +1014,7 @@ const formData = new FormData()
   // Retry queued photos automatically when the connection comes back.
   const tryUploadPendingPhotos = useCallback(async () => {
     if (uploadingRunnerRef.current) return
+    if (isBatchUploadingRef.current) return
     if (typeof navigator !== "undefined" && !navigator.onLine) return
 
     const pending = photos.filter((p) => p.status === "queued")
@@ -1005,6 +1029,12 @@ const formData = new FormData()
 
         const rec = await idbGetPhoto(p.id).catch(() => null)
         if (!rec?.blob) {
+          // If the photo was just added, IndexedDB write may still be in-flight on some devices.
+          const ageMs = Date.now() - (p.createdAt || 0)
+          if (!p.offlineReady && ageMs < 30000) {
+            continue
+          }
+
           setPhotos((prev) =>
             prev.map((ph) =>
               ph.id === p.id
@@ -2059,6 +2089,8 @@ pdf.setTextColor(17, 24, 39)
             previewUrl: URL.createObjectURL(r.blob),
             status: "queued" as const,
             progress: 0,
+            createdAt: typeof r.createdAt === "number" ? r.createdAt : Date.now(),
+            offlineReady: true,
             contentType: r.contentType || "image/jpeg",
           }))
         return restored.length ? [...prev, ...restored] : prev
