@@ -270,7 +270,7 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                     </Button>
                   ))}
                   <Button onClick={() => void runAll()} disabled={loading}>
-                    Run all
+                    Run system-test (terminal)
                   </Button>
                 </div>
                 <div className="mt-3 text-xs text-gray-500">
