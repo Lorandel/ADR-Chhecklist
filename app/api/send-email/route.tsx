@@ -39,6 +39,8 @@ export async function POST(req: NextRequest) {
       trailerPlate,
       inspectionDate,
       pdfBase64,
+      pdfUrl,
+      pdfFileName,
       remarks,
       photos,
       variant,
@@ -51,7 +53,9 @@ export async function POST(req: NextRequest) {
       truckPlate: string
       trailerPlate: string
       inspectionDate: string
-      pdfBase64: string
+      pdfBase64?: string
+      pdfUrl?: string
+      pdfFileName?: string
       remarks?: string
       photos?: IncomingPhoto[]
       variant?: "full" | "under1000" | "reduced"
@@ -61,7 +65,8 @@ export async function POST(req: NextRequest) {
 
     console.log("Inspector:", inspectorName)
     console.log("Driver:", driverName)
-    console.log("PDF size:", pdfBase64?.length || 0, "characters")
+    console.log("PDF base64 chars:", pdfBase64?.length || 0)
+    console.log("PDF url:", typeof pdfUrl === "string" ? pdfUrl.slice(0, 120) : "(none)")
 
     // Validate required email environment variables
     if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
@@ -79,16 +84,17 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (!inspectorName || !pdfBase64) {
+    if (!inspectorName || (!pdfUrl && !pdfBase64)) {
       console.error("Missing required data:", {
         hasInspectorName: !!inspectorName,
-        hasPdfData: !!pdfBase64,
-        pdfDataLength: pdfBase64?.length || 0,
+        hasPdfUrl: !!pdfUrl,
+        hasPdfBase64: !!pdfBase64,
+        pdfBase64Length: pdfBase64?.length || 0,
       })
       return NextResponse.json(
         {
           success: false,
-          message: "Missing inspector name or PDF data",
+          message: "Missing inspector name or PDF data (provide pdfUrl or pdfBase64)",
         },
         { status: 400 },
       )
@@ -121,28 +127,32 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Convert base64 to buffer
+    // Obtain PDF buffer either from URL or base64.
+    // NOTE: Sending large base64 payloads to this endpoint can trigger 413 on Vercel.
     let pdfBuffer: Buffer
     try {
-      const cleanedBase64 = typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
-      pdfBuffer = Buffer.from(cleanedBase64, "base64")
-      console.log("PDF buffer size:", pdfBuffer.length, "bytes")
-
-      if (pdfBuffer.length === 0) {
-        throw new Error("PDF buffer is empty")
+      if (typeof pdfUrl === "string" && pdfUrl.trim()) {
+        const resp = await fetch(pdfUrl)
+        if (!resp.ok) throw new Error(`Failed to fetch PDF (HTTP ${resp.status})`)
+        const arr = await resp.arrayBuffer()
+        pdfBuffer = Buffer.from(arr)
+      } else {
+        const cleanedBase64 = typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
+        pdfBuffer = Buffer.from(cleanedBase64, "base64")
       }
 
-      // Validate that it's actually a PDF
+      console.log("PDF buffer size:", pdfBuffer.length, "bytes")
+      if (pdfBuffer.length === 0) throw new Error("PDF buffer is empty")
       if (!pdfBuffer.subarray(0, 4).equals(Buffer.from([0x25, 0x50, 0x44, 0x46]))) {
         console.warn("Warning: Buffer doesn't start with PDF signature")
       }
-    } catch (bufferError) {
+    } catch (bufferError: any) {
       console.error("PDF buffer processing error:", bufferError)
       return NextResponse.json(
         {
           success: false,
           message: "Failed to process PDF data",
-          error: bufferError.message,
+          error: bufferError?.message,
         },
         { status: 500 },
       )
@@ -151,7 +161,10 @@ export async function POST(req: NextRequest) {
     // Create ZIP (PDF + photos)
     const { default: JSZip } = await import("jszip")
     const zip = new JSZip()
-    const pdfInZipName = `ADR-Checklist_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}.pdf`
+    const pdfInZipName =
+      typeof pdfFileName === "string" && pdfFileName.trim()
+        ? safeFileName(pdfFileName.trim())
+        : `ADR-Checklist_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}.pdf`
     zip.file(pdfInZipName, pdfBuffer)
 
     const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "_")

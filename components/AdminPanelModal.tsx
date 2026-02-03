@@ -1,11 +1,10 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useAuth } from "@/components/auth/AuthProvider"
-import { getStoredProvider, providerLabel, setStoredProvider, type StorageProvider } from "@/lib/storageProvider"
 
 type Props = { open: boolean; onClose: () => void }
 
@@ -31,12 +30,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
 
-  // in-app terminal for system tests
-  const [termLog, setTermLog] = useState("")
-  const [termRunning, setTermRunning] = useState(false)
-  const termBoxRef = useRef<HTMLDivElement | null>(null)
-  const termAbortRef = useRef<AbortController | null>(null)
-
   // create user form
   const [newUsername, setNewUsername] = useState("")
   const [newPassword, setNewPassword] = useState("")
@@ -45,27 +38,18 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   const [newInspectorColor, setNewInspectorColor] = useState("")
   const [newInspectorEmail, setNewInspectorEmail] = useState("")
 
-  // storage provider switch (local, instant)
-  const [storageProvider, setStorageProvider] = useState<StorageProvider>("auto")
-
   // tests (Drive tests removed per request)
   const testEndpoints = useMemo(
     () => [
       { label: "Check Email Config", path: "/api/test-email" },
       { label: "Send Test Email", path: "/api/test-email?send=1" },
+      { label: "Send Test Email (with ZIP)", path: "/api/test-email?send=1&attach=1" },
       { label: "Check Blob Config", path: "/api/test-blob" },
       { label: "Blob Write Test", path: "/api/test-blob?run=1" },
-      { label: "Check R2 Config", path: "/api/test-r2" },
-      { label: "R2 Write Test", path: "/api/test-r2?run=1" },
       { label: "Debug Env", path: "/api/debug" },
     ],
     [],
   )
-
-  useEffect(() => {
-    if (!open) return
-    setStorageProvider(getStoredProvider())
-  }, [open])
 
   useEffect(() => {
     if (!open) {
@@ -183,86 +167,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     }
   }
 
-  const runSystemTest = async (mode: "all" | "blob" | "r2" | "supabase" | "email" = "all") => {
-    if (!token) {
-      setError("Missing token")
-      return
-    }
-    // stop any existing run
-    try {
-      termAbortRef.current?.abort()
-    } catch {}
-    const ac = new AbortController()
-    termAbortRef.current = ac
-
-    setTermRunning(true)
-    setTermLog("")
-    setError(null)
-    setInfo(null)
-
-    try {
-      const res = await fetch(`/api/system-test?mode=${mode}`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
-        signal: ac.signal,
-      })
-
-      if (!res.ok || !res.body) {
-        const t = await res.text().catch(() => "")
-        throw new Error(t || `System test failed (${res.status})`)
-      }
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ""
-
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        // flush full lines
-        const lines = buf.split("\n")
-        buf = lines.pop() || ""
-        if (lines.length) {
-          setTermLog((prev) => {
-            const next = prev + lines.join("\n") + "\n"
-            return next
-          })
-          // allow UI to paint and then auto-scroll
-          setTimeout(() => {
-            const el = termBoxRef.current
-            if (el) el.scrollTop = el.scrollHeight
-          }, 0)
-        }
-      }
-
-      if (buf) {
-        setTermLog((prev) => prev + buf + "\n")
-      }
-
-      setInfo("System test finished")
-    } catch (e: any) {
-      if (e?.name === "AbortError") {
-        setInfo("System test stopped")
-      } else {
-        setError(e?.message || String(e))
-      }
-    } finally {
-      setTermRunning(false)
-      termAbortRef.current = null
-      setTimeout(() => {
-        const el = termBoxRef.current
-        if (el) el.scrollTop = el.scrollHeight
-      }, 0)
-    }
-  }
-
-  const stopSystemTest = () => {
-    try {
-      termAbortRef.current?.abort()
-    } catch {}
-  }
-
   if (!open) return null
 
   return (
@@ -325,30 +229,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
 
               <div className="rounded-xl border border-gray-200 p-4">
                 <div className="font-semibold mb-3">System tests</div>
-
-                <div className="mb-4 rounded-lg border border-gray-200 p-3">
-                  <div className="text-sm font-semibold mb-2">Photo upload storage</div>
-                  <div className="flex flex-wrap gap-3 text-sm">
-                    {(["auto", "blob", "r2"] as StorageProvider[]).map((p) => (
-                      <label key={p} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          checked={storageProvider === p}
-                          onChange={() => {
-                            setStorageProvider(p)
-                            setStoredProvider(p)
-                            setInfo(`Upload provider set to: ${providerLabel(p)}`)
-                          }}
-                        />
-                        {providerLabel(p)}
-                      </label>
-                    ))}
-                  </div>
-                  <div className="mt-2 text-xs text-gray-600">
-                    Switch instantly if uploads fail (e.g. Blob store suspended). This setting is saved in your browser.
-                  </div>
-                </div>
-
                 <div className="flex flex-wrap gap-2">
                   {testEndpoints.map((t) => (
                     <Button key={t.path} variant="outline" className="bg-transparent" onClick={() => void runTest(t.path)} disabled={loading}>
@@ -358,42 +238,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                   <Button onClick={() => void runAll()} disabled={loading}>
                     Run all
                   </Button>
-
-                  <div className="w-full border-t border-gray-200 pt-3 mt-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button onClick={() => void runSystemTest("all")} disabled={termRunning || loading} variant="secondary">
-                        Run system test
-                      </Button>
-                      <Button onClick={() => void runSystemTest("blob")} disabled={termRunning || loading} variant="outline" className="bg-transparent">
-                        Test Blob
-                      </Button>
-                      <Button onClick={() => void runSystemTest("r2")} disabled={termRunning || loading} variant="outline" className="bg-transparent">
-                        Test R2
-                      </Button>
-                      <Button onClick={() => void runSystemTest("supabase")} disabled={termRunning || loading} variant="outline" className="bg-transparent">
-                        Test Supabase
-                      </Button>
-                      <Button onClick={() => void runSystemTest("email")} disabled={termRunning || loading} variant="outline" className="bg-transparent">
-                        Test Email
-                      </Button>
-                      <Button onClick={stopSystemTest} disabled={!termRunning} variant="destructive">
-                        Stop
-                      </Button>
-                    </div>
-
-                    <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 overflow-hidden">
-                      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">
-                        <div className="text-xs font-semibold text-gray-700">Terminal</div>
-                        <div className="text-xs text-gray-500">{termRunning ? "running…" : "idle"}</div>
-                      </div>
-                      <div
-                        ref={termBoxRef}
-                        className="h-64 overflow-auto px-3 py-2 font-mono text-xs whitespace-pre-wrap text-gray-900"
-                      >
-                        {termLog || "Run a system test to see logs here."}
-                      </div>
-                    </div>
-                  </div>
                 </div>
                 <div className="mt-3 text-xs text-gray-500">
                   These endpoints are safe during build. Actions that create external side effects run only when you click a "Run" button (query params).
