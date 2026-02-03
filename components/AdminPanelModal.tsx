@@ -25,6 +25,11 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   const { session, role, refreshUser } = useAuth()
   const token = session?.access_token || ""
 
+  // In-app terminal for system checks
+  const [terminal, setTerminal] = useState<string>("")
+  const [running, setRunning] = useState(false)
+  const [abortCtl, setAbortCtl] = useState<AbortController | null>(null)
+
   const [users, setUsers] = useState<AdminUser[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -43,7 +48,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     () => [
       { label: "Check Email Config", path: "/api/test-email" },
       { label: "Send Test Email", path: "/api/test-email?send=1" },
-      { label: "Send Test Email (with ZIP)", path: "/api/test-email?send=1&attach=1" },
       { label: "Check Blob Config", path: "/api/test-blob" },
       { label: "Blob Write Test", path: "/api/test-blob?run=1" },
       { label: "Debug Env", path: "/api/debug" },
@@ -167,6 +171,60 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     }
   }
 
+  const stopSystemCheck = () => {
+    try {
+      abortCtl?.abort()
+    } catch {}
+    setAbortCtl(null)
+    setRunning(false)
+  }
+
+  const runSystemCheck = async (sendEmail: boolean) => {
+    if (!token) {
+      setError("Missing session token")
+      return
+    }
+    stopSystemCheck()
+    setTerminal("")
+    setError(null)
+    setInfo(null)
+    const ctl = new AbortController()
+    setAbortCtl(ctl)
+    setRunning(true)
+
+    try {
+      const url = `/api/system-test${sendEmail ? "?send=1" : ""}`
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+        signal: ctl.signal,
+      })
+      if (!res.ok || !res.body) {
+        const txt = await res.text().catch(() => "")
+        throw new Error(txt || `HTTP ${res.status}`)
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        const chunk = decoder.decode(value, { stream: true })
+        setTerminal((prev) => prev + chunk)
+      }
+      setInfo("System check finished")
+    } catch (e: any) {
+      if (e?.name === "AbortError") {
+        setInfo("System check stopped")
+      } else {
+        setError(e?.message || "System check failed")
+      }
+    } finally {
+      setRunning(false)
+      setAbortCtl(null)
+    }
+  }
+
   if (!open) return null
 
   return (
@@ -238,6 +296,24 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                   <Button onClick={() => void runAll()} disabled={loading}>
                     Run all
                   </Button>
+                </div>
+
+                <div className="mt-4">
+                  <div className="font-semibold mb-2">Admin system check (terminal)</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={() => void runSystemCheck(false)} disabled={running || !token}>
+                      Run system check
+                    </Button>
+                    <Button variant="outline" className="bg-transparent" onClick={() => void runSystemCheck(true)} disabled={running || !token}>
+                      Run & send test email
+                    </Button>
+                    <Button variant="outline" className="bg-transparent" onClick={stopSystemCheck} disabled={!running}>
+                      Stop
+                    </Button>
+                  </div>
+                  <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap max-h-64 overflow-y-auto">
+                    {terminal || "(output will appear here)"}
+                  </div>
                 </div>
                 <div className="mt-3 text-xs text-gray-500">
                   These endpoints are safe during build. Actions that create external side effects run only when you click a "Run" button (query params).

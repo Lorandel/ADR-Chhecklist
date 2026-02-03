@@ -2214,27 +2214,44 @@ pdf.setTextColor(17, 24, 39)
 
       const pdf = await buildAdrPdf()
 
-      // IMPORTANT: Don't send large base64 payloads to /api/send-email (can trigger 413 on Vercel).
-      // Upload the PDF first (same endpoint as photos) and send a URL instead.
-      setEmailStatus("Uploading PDF...")
+      // Upload PDF via R2 signed URL to avoid request size limits (HTTP 413)
+      let pdfUrl: string | null = null
+      const pdfArrayBuffer = pdf.output("arraybuffer") as ArrayBuffer
+      const pdfBytes = (pdfArrayBuffer as any)?.byteLength ?? 0
+      if (!pdfBytes) throw new Error("Generated PDF is empty")
 
-      const pdfBlob: Blob = pdf.output("blob") as any
-      const pdfFileName = `ADR-Checklist_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
-      const pdfFile = new File([pdfBlob], pdfFileName, { type: "application/pdf" })
+      try {
+        setEmailStatus("Uploading PDF...")
 
-      const pdfForm = new FormData()
-      pdfForm.append("file", pdfFile)
+        const filename = `ADR-Checklist_${(driverName || "driver").replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
 
-      const pdfUploadRes = await fetch("/api/upload-photo", {
-        method: "POST",
-        body: pdfForm,
-      })
-      const pdfUploadData = await pdfUploadRes.json().catch(() => ({}))
-      if (!pdfUploadRes.ok || !pdfUploadData?.success || !pdfUploadData?.url) {
-        throw new Error(pdfUploadData?.message || `Failed to upload PDF (HTTP ${pdfUploadRes.status})`)
+        const presignRes = await fetch("/api/presign-r2", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename, contentType: "application/pdf", folder: "pdf" }),
+        })
+        const presignData = await presignRes.json().catch(() => ({}))
+        if (!presignRes.ok || !presignData?.success) {
+          throw new Error(presignData?.message || `Failed to prepare PDF upload (HTTP ${presignRes.status})`)
+        }
+
+        const putRes = await fetch(presignData.signedUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/pdf" },
+          body: new Blob([pdfArrayBuffer], { type: "application/pdf" }),
+        })
+        if (!putRes.ok) {
+          throw new Error(`Failed to upload PDF (HTTP ${putRes.status})`)
+        }
+
+        pdfUrl = presignData.publicUrl
+        if (!pdfUrl) throw new Error("PDF upload succeeded but no URL was returned")
+      } catch (uploadErr: any) {
+        // If PDF is too large for base64 (and R2 isn't configured), fail with a clear message.
+        // Fallbacking to base64 often triggers HTTP 413 on serverless platforms.
+        console.error("PDF upload error:", uploadErr)
+        throw new Error(uploadErr?.message || "Failed to upload PDF")
       }
-
-      const pdfUrl: string = String(pdfUploadData.url)
 
       setEmailStatus("Sending email...")
 
@@ -2272,7 +2289,6 @@ pdf.setTextColor(17, 24, 39)
           inspectorName: selectedInspector,
           inspectorEmail: authInspectorEmail,
           pdfUrl,
-          pdfFileName,
           driverName,
           truckPlate,
           trailerPlate,

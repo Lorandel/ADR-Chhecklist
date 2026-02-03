@@ -40,7 +40,6 @@ export async function POST(req: NextRequest) {
       inspectionDate,
       pdfBase64,
       pdfUrl,
-      pdfFileName,
       remarks,
       photos,
       variant,
@@ -55,7 +54,6 @@ export async function POST(req: NextRequest) {
       inspectionDate: string
       pdfBase64?: string
       pdfUrl?: string
-      pdfFileName?: string
       remarks?: string
       photos?: IncomingPhoto[]
       variant?: "full" | "under1000" | "reduced"
@@ -65,8 +63,8 @@ export async function POST(req: NextRequest) {
 
     console.log("Inspector:", inspectorName)
     console.log("Driver:", driverName)
-    console.log("PDF base64 chars:", pdfBase64?.length || 0)
-    console.log("PDF url:", typeof pdfUrl === "string" ? pdfUrl.slice(0, 120) : "(none)")
+    console.log("PDF base64 size:", pdfBase64?.length || 0, "characters")
+    console.log("PDF url present:", !!pdfUrl)
 
     // Validate required email environment variables
     if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
@@ -84,17 +82,17 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (!inspectorName || (!pdfUrl && !pdfBase64)) {
+    if (!inspectorName || (!pdfBase64 && !pdfUrl)) {
       console.error("Missing required data:", {
         hasInspectorName: !!inspectorName,
+        hasPdfData: !!pdfBase64,
         hasPdfUrl: !!pdfUrl,
-        hasPdfBase64: !!pdfBase64,
-        pdfBase64Length: pdfBase64?.length || 0,
+        pdfDataLength: pdfBase64?.length || 0,
       })
       return NextResponse.json(
         {
           success: false,
-          message: "Missing inspector name or PDF data (provide pdfUrl or pdfBase64)",
+          message: "Missing inspector name or PDF data",
         },
         { status: 400 },
       )
@@ -127,31 +125,28 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Obtain PDF buffer either from URL or base64.
-    // NOTE: Sending large base64 payloads to this endpoint can trigger 413 on Vercel.
+    // Obtain PDF buffer either from URL (preferred) or base64 (fallback)
     let pdfBuffer: Buffer
     try {
-      if (typeof pdfUrl === "string" && pdfUrl.trim()) {
+      if (pdfUrl) {
         const resp = await fetch(pdfUrl)
         if (!resp.ok) throw new Error(`Failed to fetch PDF (HTTP ${resp.status})`)
         const arr = await resp.arrayBuffer()
         pdfBuffer = Buffer.from(arr)
       } else {
-        const cleanedBase64 = typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
+        const cleanedBase64 =
+          typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
         pdfBuffer = Buffer.from(cleanedBase64, "base64")
       }
 
       console.log("PDF buffer size:", pdfBuffer.length, "bytes")
       if (pdfBuffer.length === 0) throw new Error("PDF buffer is empty")
-      if (!pdfBuffer.subarray(0, 4).equals(Buffer.from([0x25, 0x50, 0x44, 0x46]))) {
-        console.warn("Warning: Buffer doesn't start with PDF signature")
-      }
     } catch (bufferError: any) {
       console.error("PDF buffer processing error:", bufferError)
       return NextResponse.json(
         {
           success: false,
-          message: "Failed to process PDF data",
+          message: "Failed to obtain PDF data",
           error: bufferError?.message,
         },
         { status: 500 },
@@ -161,10 +156,7 @@ export async function POST(req: NextRequest) {
     // Create ZIP (PDF + photos)
     const { default: JSZip } = await import("jszip")
     const zip = new JSZip()
-    const pdfInZipName =
-      typeof pdfFileName === "string" && pdfFileName.trim()
-        ? safeFileName(pdfFileName.trim())
-        : `ADR-Checklist_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}.pdf`
+    const pdfInZipName = `ADR-Checklist_${driverName.replace(/\s+/g, "_")}_${inspectionDate.replace(/-/g, ".")}.pdf`
     zip.file(pdfInZipName, pdfBuffer)
 
     const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "_")
