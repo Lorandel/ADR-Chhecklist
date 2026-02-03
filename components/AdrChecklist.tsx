@@ -321,6 +321,42 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     "Alexandru Florea",
   ]
 
+// Export signature canvas as a compressed image for stable PDF size across devices
+const exportSignatureDataUrl = (srcCanvas: HTMLCanvasElement): string => {
+  try {
+    const maxW = 900
+    const maxH = 300
+    const w0 = Math.max(1, srcCanvas.width || 1)
+    const h0 = Math.max(1, srcCanvas.height || 1)
+
+    // Only downscale if needed
+    const scale = Math.min(1, maxW / w0, maxH / h0)
+    const w = Math.max(1, Math.round(w0 * scale))
+    const h = Math.max(1, Math.round(h0 * scale))
+
+    const out = document.createElement("canvas")
+    out.width = w
+    out.height = h
+    const octx = out.getContext("2d")
+    if (!octx) return srcCanvas.toDataURL("image/png")
+
+    // white background so JPEG looks clean
+    octx.fillStyle = "#fff"
+    octx.fillRect(0, 0, w, h)
+    octx.imageSmoothingEnabled = true
+    // @ts-ignore
+    octx.imageSmoothingQuality = "high"
+
+    octx.drawImage(srcCanvas, 0, 0, w, h)
+
+    // JPEG is much smaller than PNG and prevents huge request bodies
+    return out.toDataURL("image/jpeg", 0.78)
+  } catch {
+    return srcCanvas.toDataURL("image/png")
+  }
+}
+
+
   // Initialize canvas for signatures
   const initializeCanvas = () => {
     if (!isMounted || typeof window === "undefined") return
@@ -433,7 +469,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setSignatureData(canvas.toDataURL("image/png"))
+      setSignatureData(exportSignatureDataUrl(canvas))
     }
 
     // Mouse events
@@ -536,7 +572,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setInspectorSignatureData(canvas.toDataURL("image/png"))
+      setInspectorSignatureData(exportSignatureDataUrl(canvas))
     }
 
     // Mouse events
@@ -1607,7 +1643,28 @@ const formData = new FormData()
       // signature image / line
       if (imgData) {
         try {
-          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+          const imgType = /^data:image\/jpe?g/i.test(imgData) ? "JPEG" : "PNG"
+          // Keep aspect ratio to avoid distortion on any device
+          let drawX = x
+          let drawY = sigY + 6
+          let drawW = sigImgW
+          let drawH = sigImgH
+
+          try {
+            // @ts-ignore - exists at runtime
+            const props = typeof (pdf as any).getImageProperties === "function" ? (pdf as any).getImageProperties(imgData) : null
+            if (props?.width && props?.height) {
+              const s = Math.min(sigImgW / props.width, sigImgH / props.height)
+              drawW = props.width * s
+              drawH = props.height * s
+              drawX = x + (sigImgW - drawW) / 2
+              drawY = sigY + 6 + (sigImgH - drawH) / 2
+            }
+          } catch {
+            // ignore and use default box
+          }
+
+          pdf.addImage(imgData, imgType, drawX, drawY, drawW, drawH)
         } catch {
           // fallback to line
           pdf.setDrawColor(148, 163, 184)
@@ -2214,43 +2271,16 @@ pdf.setTextColor(17, 24, 39)
 
       const pdf = await buildAdrPdf()
 
-      // Upload PDF via R2 signed URL to avoid request size limits (HTTP 413)
-      let pdfUrl: string | null = null
-      const pdfArrayBuffer = pdf.output("arraybuffer") as ArrayBuffer
-      const pdfBytes = (pdfArrayBuffer as any)?.byteLength ?? 0
-      if (!pdfBytes) throw new Error("Generated PDF is empty")
-
+      // Convert PDF to base64
+      let pdfBase64 = ""
       try {
-        setEmailStatus("Uploading PDF...")
-
-        const filename = `ADR-Checklist_${(driverName || "driver").replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
-
-        const presignRes = await fetch("/api/presign-r2", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filename, contentType: "application/pdf", folder: "pdf" }),
-        })
-        const presignData = await presignRes.json().catch(() => ({}))
-        if (!presignRes.ok || !presignData?.success) {
-          throw new Error(presignData?.message || `Failed to prepare PDF upload (HTTP ${presignRes.status})`)
-        }
-
-        const putRes = await fetch(presignData.signedUrl, {
-          method: "PUT",
-          headers: { "Content-Type": "application/pdf" },
-          body: new Blob([pdfArrayBuffer], { type: "application/pdf" }),
-        })
-        if (!putRes.ok) {
-          throw new Error(`Failed to upload PDF (HTTP ${putRes.status})`)
-        }
-
-        pdfUrl = presignData.publicUrl
-        if (!pdfUrl) throw new Error("PDF upload succeeded but no URL was returned")
-      } catch (uploadErr: any) {
-        // If PDF is too large for base64 (and R2 isn't configured), fail with a clear message.
-        // Fallbacking to base64 often triggers HTTP 413 on serverless platforms.
-        console.error("PDF upload error:", uploadErr)
-        throw new Error(uploadErr?.message || "Failed to upload PDF")
+        const pdfBuffer = pdf.output("arraybuffer")
+        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
+        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
+      } catch (convError: any) {
+        console.error("Error processing PDF:", convError)
+        throw new Error(`PDF processing error: ${convError.message}`)
       }
 
       setEmailStatus("Sending email...")
@@ -2288,7 +2318,7 @@ pdf.setTextColor(17, 24, 39)
         body: JSON.stringify({
           inspectorName: selectedInspector,
           inspectorEmail: authInspectorEmail,
-          pdfUrl,
+          pdfBase64,
           driverName,
           truckPlate,
           trailerPlate,
