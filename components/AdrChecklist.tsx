@@ -6,9 +6,12 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useAuth } from "@/components/auth/AuthProvider"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
+import { stableStringify } from "@/lib/stableStringify"
+import { idbPutPhoto, idbGetPhoto, idbDeletePhoto, idbListPhotos } from "@/lib/offlinePhotos"
+import { sha256Hex } from "@/lib/hash"
 
 const capitalizeWords = (str: string) =>
   str
@@ -37,6 +40,7 @@ type ADRChecklistProps = {
 }
 
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
+  const { inspectorName: authInspectorName, inspectorColor: authInspectorColor, inspectorEmail: authInspectorEmail } = useAuth()
   const includeAdrCertificate = variant === "full"
   const storageKey = `adrChecklistData_${variant}`
 
@@ -57,6 +61,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [allChecked, setAllChecked] = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
   const [selectedInspector, setSelectedInspector] = useState("")
+
+  // sync inspector from logged user (admin sets this per account)
+  useEffect(() => {
+    if (authInspectorName && authInspectorName.trim()) {
+      setSelectedInspector(authInspectorName.trim())
+    }
+  }, [authInspectorName])
   const [dateValid, setDateValid] = useState({
     drivingLicense: false,
     adrCertificate: false,
@@ -75,6 +86,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [photos, setPhotos] = useState<UploadedPhoto[]>([])
   const photoInputRef = useRef<HTMLInputElement>(null)
   const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
+
+  // Throttle progress updates + prevent UI jitter
+  const lastProgRef = useRef<Record<string, { t: number; p: number }>>({})
+  const uploadingRunnerRef = useRef(false)
+  const lastAttemptRef = useRef<Record<string, number>>({})
+
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -304,6 +321,42 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     "Alexandru Florea",
   ]
 
+// Export signature canvas as a compressed image for stable PDF size across devices
+const exportSignatureDataUrl = (srcCanvas: HTMLCanvasElement): string => {
+  try {
+    const maxW = 900
+    const maxH = 300
+    const w0 = Math.max(1, srcCanvas.width || 1)
+    const h0 = Math.max(1, srcCanvas.height || 1)
+
+    // Only downscale if needed
+    const scale = Math.min(1, maxW / w0, maxH / h0)
+    const w = Math.max(1, Math.round(w0 * scale))
+    const h = Math.max(1, Math.round(h0 * scale))
+
+    const out = document.createElement("canvas")
+    out.width = w
+    out.height = h
+    const octx = out.getContext("2d")
+    if (!octx) return srcCanvas.toDataURL("image/png")
+
+    // white background so JPEG looks clean
+    octx.fillStyle = "#fff"
+    octx.fillRect(0, 0, w, h)
+    octx.imageSmoothingEnabled = true
+    // @ts-ignore
+    octx.imageSmoothingQuality = "high"
+
+    octx.drawImage(srcCanvas, 0, 0, w, h)
+
+    // JPEG is much smaller than PNG and prevents huge request bodies
+    return out.toDataURL("image/jpeg", 0.78)
+  } catch {
+    return srcCanvas.toDataURL("image/png")
+  }
+}
+
+
   // Initialize canvas for signatures
   const initializeCanvas = () => {
     if (!isMounted || typeof window === "undefined") return
@@ -416,7 +469,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setSignatureData(canvas.toDataURL("image/png"))
+      setSignatureData(exportSignatureDataUrl(canvas))
     }
 
     // Mouse events
@@ -519,7 +572,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setInspectorSignatureData(canvas.toDataURL("image/png"))
+      setInspectorSignatureData(exportSignatureDataUrl(canvas))
     }
 
     // Mouse events
@@ -781,40 +834,101 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         const xhr = new XMLHttpRequest()
         uploadXhrRefs.current[photoId] = xhr
 
+        const cleanupRefs = () => {
+          try { delete uploadXhrRefs.current[photoId] } catch {}
+          try { delete lastProgRef.current[photoId] } catch {}
+        }
+
         xhr.open("POST", "/api/upload-photo")
         xhr.responseType = "json"
+        xhr.timeout = 45000 // important on mobile; prevents "hanging" uploads on flaky networks
 
         xhr.upload.onprogress = (evt) => {
           if (!evt.lengthComputable) return
           const progress = Math.round((evt.loaded / evt.total) * 100)
+          const now = Date.now()
+          const last = lastProgRef.current[photoId] || { t: 0, p: -1 }
+          // update at most ~8 times/sec OR when progress jumps significantly
+          if (progress === last.p) return
+          if (now - last.t < 120 && progress - last.p < 2) return
+          lastProgRef.current[photoId] = { t: now, p: progress }
           setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
         }
 
         xhr.onload = () => {
           const res = xhr.response
-          if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
+          const ok = xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url
+
+          if (ok) {
             setPhotos((prev) =>
-              prev.map((p) =>
-                p.id === photoId
-                  ? { ...p, progress: 100, status: "done", url: res.url, contentType: res.contentType || file.type }
-                  : p,
-              ),
+              prev.map((p) => {
+                if (p.id !== photoId) return p
+                // cleanup preview object URL (memory leak on mobile)
+                if (p.previewUrl?.startsWith("blob:")) {
+                  try {
+                    URL.revokeObjectURL(p.previewUrl)
+                  } catch {
+                    // ignore
+                  }
+                }
+                return {
+                  ...p,
+                  progress: 100,
+                  status: "done",
+                  url: res.url,
+                  previewUrl: res.url, // after upload, show the real hosted URL
+                  contentType: res.contentType || file.type,
+                  error: undefined,
+                }
+              }),
             )
+            cleanupRefs()
             resolve({ url: res.url, contentType: res.contentType || file.type })
             return
           }
-          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+
+          const message = res?.message || res?.error || `Upload failed (${xhr.status || "unknown"})`
+          const retryable = xhr.status === 0 || (xhr.status >= 500 && xhr.status <= 599)
+
+          setPhotos((prev) =>
+            prev.map((p) =>
+              p.id === photoId
+                ? retryable
+                  ? { ...p, status: "queued", progress: 0, error: message }
+                  : { ...p, status: "error", error: message }
+                : p,
+            ),
+          )
+          cleanupRefs()
           reject(new Error(message))
+        }
+
+        // NOTE: navigator.onLine is unreliable on Android; treat onerror/ontimeout as retryable.
+        const queueRetry = (message: string) => {
+          setPhotos((prev) =>
+            prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
+          )
         }
 
         xhr.onerror = () => {
-          const message = "Upload failed (network error)"
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
-          reject(new Error(message))
+          queueRetry("Upload failed (network error)")
+          cleanupRefs()
+          reject(new Error("Upload failed (network error)"))
         }
 
-        const formData = new FormData()
+        xhr.ontimeout = () => {
+          queueRetry("Upload failed (timeout)")
+          cleanupRefs()
+          reject(new Error("Upload failed (timeout)"))
+        }
+
+        xhr.onabort = () => {
+          queueRetry("Upload aborted")
+          cleanupRefs()
+          reject(new Error("Upload aborted"))
+        }
+
+const formData = new FormData()
         formData.append("file", file)
         xhr.send(formData)
 
@@ -843,37 +957,139 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     setPhotos((prev) => [...prev, ...newPhotos])
 
-    // Start uploads
-    await Promise.all(
-      newPhotos.map(async (p, idx) => {
-        const originalFile = files[idx]
+    // Persist photos offline (so they survive refresh) and upload sequentially (less UI jitter)
+    for (let idx = 0; idx < newPhotos.length; idx++) {
+      const p = newPhotos[idx]
+      const originalFile = files[idx]
 
-        // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
-        let fileToUpload: File = originalFile
-        try {
-          fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
-        } catch {
-          fileToUpload = originalFile
-        }
+      // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
+      let fileToUpload: File = originalFile
+      try {
+        fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
+      } catch {
+        fileToUpload = originalFile
+      }
 
-        // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
-        if (fileToUpload !== originalFile) {
+      // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
+      if (fileToUpload !== originalFile) {
+        setPhotos((prev) =>
+          prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
+        )
+      }
+
+      // Save blob in IndexedDB (offline support)
+      let savedOffline = true
+      try {
+        await idbPutPhoto({
+          id: p.id,
+          blob: fileToUpload,
+          name: fileToUpload.name,
+          contentType: fileToUpload.type,
+          createdAt: Date.now(),
+        })
+      } catch {
+        savedOffline = false
+      }
+
+      // If offline, we MUST have an offline copy; otherwise the photo can never be uploaded later.
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        if (!savedOffline) {
           setPhotos((prev) =>
-            prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
+            prev.map((ph) =>
+              ph.id === p.id
+                ? {
+                    ...ph,
+                    status: "error",
+                    progress: 0,
+                    error: "Offline storage unavailable. Please keep the app open and retry when online.",
+                  }
+                : ph,
+            ),
           )
         }
+        continue
+      }
 
-        try {
-          await uploadPhoto(fileToUpload, p.id)
-        } catch {
-          // State already updated in uploadPhoto
-        }
-      }),
-    )
+      try {
+        await uploadPhoto(fileToUpload, p.id)
+        // Keep offline copy until ZIP/email/reset (prevents missing photos when offline later)
+      } catch {
+        // State already updated in uploadPhoto
+      }
+    }
 
     // Allow selecting the same file again
     e.target.value = ""
   }
+
+  // Retry queued photos automatically when the connection comes back.
+  const tryUploadPendingPhotos = useCallback(async () => {
+    if (uploadingRunnerRef.current) return
+    if (typeof navigator !== "undefined" && !navigator.onLine) return
+
+    const pending = photos.filter((p) => p.status === "queued")
+    if (pending.length === 0) return
+
+    uploadingRunnerRef.current = true
+    try {
+      for (const p of pending) {
+        const last = lastAttemptRef.current[p.id] || 0
+        if (Date.now() - last < 8000) continue // avoid rapid retry jitter
+        lastAttemptRef.current[p.id] = Date.now()
+
+        const rec = await idbGetPhoto(p.id).catch(() => null)
+        if (!rec?.blob) {
+          setPhotos((prev) =>
+            prev.map((ph) =>
+              ph.id === p.id
+                ? { ...ph, status: "error", progress: 0, error: "Missing offline copy. Please re-add the photo." }
+                : ph,
+            ),
+          )
+          continue
+        }
+
+        const file = new File([rec.blob], rec.name || p.name, {
+          type: rec.contentType || p.contentType || "image/jpeg",
+        })
+
+        try {
+          await uploadPhoto(file, p.id)
+          // Keep offline copy until ZIP/email/reset (supports offline ZIP later)
+        } catch {
+          // keep queued/error as set by uploadPhoto
+        }
+      }
+    } finally {
+      uploadingRunnerRef.current = false
+    }
+  }, [photos, uploadPhoto])
+
+  useEffect(() => {
+    const onOnline = () => {
+      void tryUploadPendingPhotos()
+    }
+    const onVis = () => {
+      if (document.visibilityState === "visible" && navigator.onLine) {
+        void tryUploadPendingPhotos()
+      }
+    }
+    window.addEventListener("online", onOnline)
+    document.addEventListener("visibilitychange", onVis)
+
+    // periodic safety net for Android (sometimes online event doesn't fire, or fires too early)
+    const intervalId = window.setInterval(() => {
+      if (navigator.onLine) void tryUploadPendingPhotos()
+    }, 25000)
+
+    // attempt once on mount (and after restoring queued photos)
+    void tryUploadPendingPhotos()
+    return () => {
+      window.removeEventListener("online", onOnline)
+      document.removeEventListener("visibilitychange", onVis)
+      window.clearInterval(intervalId)
+    }
+  }, [tryUploadPendingPhotos])
 
   const removePhoto = (photoId: string) => {
     const xhr = uploadXhrRefs.current[photoId]
@@ -883,6 +1099,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       } catch {
         // ignore
       }
+    }
+
+    try {
+      void idbDeletePhoto(photoId)
+    } catch {
+      // ignore
+    }
+    try {
+      delete uploadXhrRefs.current[photoId]
+    } catch {
+      // ignore
     }
 
     setPhotos((prev) => {
@@ -900,7 +1127,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
 
 
-  // Build a single-page, stylized ADR PDF (used for both Download and Send Email)
+  // Build a single-page, stylized ADR PDF (used for both Download ZIP and Send Email)
   const buildAdrPdf = async () => {
     const { jsPDF } = await import("jspdf")
 
@@ -973,8 +1200,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
 
     const drawStatus = (x: number, y: number, ok: boolean) => {
-      const w = 5
-      const h = 5
+      const w = 5.4
+      const h = 5.4
 
       pdf.setLineWidth(0.2)
       pdf.setDrawColor(203, 213, 225) // slate-300
@@ -1014,8 +1241,31 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.roundedRect(x, y, size, size, 1.2, 1.2, "FD")
 
       const padding = 0.6
+      const inner = size - padding * 2
       const imgType = isJpeg(imgUrl) ? "JPEG" : "PNG"
-      pdf.addImage(img, imgType, x + padding, y + padding, size - padding * 2, size - padding * 2)
+
+      // Keep aspect ratio (no stretch) and center the image in the square
+      try {
+        // @ts-ignore - available in jsPDF at runtime
+        const props = pdf.getImageProperties(img)
+        const iw = props?.width || inner
+        const ih = props?.height || inner
+        const ratio = iw / ih
+
+        let w = inner
+        let h = inner
+        if (ratio > 1) {
+          h = inner / ratio
+        } else if (ratio < 1) {
+          w = inner * ratio
+        }
+
+        const ix = x + padding + (inner - w) / 2
+        const iy = y + padding + (inner - h) / 2
+        pdf.addImage(img, imgType, ix, iy, w, h)
+      } catch {
+        pdf.addImage(img, imgType, x + padding, y + padding, inner, inner)
+      }
     }
 
     // Preload all icons + watermark (faster and consistent)
@@ -1208,12 +1458,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(11)
     pdf.setTextColor(17, 24, 39)
-    pdf.text("Equipment Checklist", equipX + 6, equipY + 8)
+    pdf.text("Equipment Checklist", equipX + equipW / 2, equipY + 8, { align: "center" })
 
-    const equipInnerY = equipY + 14
-    const equipInnerX = equipX + 6
-    const equipInnerW = equipW - 12
-    const equipColGap = 10
+    const equipInnerY = equipY + 18
+    const equipInnerX = equipX + 5
+    const equipInnerW = equipW - 10
+    const equipColGap = 8
     const equipColW = (equipInnerW - equipColGap) / 2
 
     const allEq = equipmentItems
@@ -1235,6 +1485,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       const col = eqCols[c]
       for (let i = 0; i < col.length; i++) {
         const item = col[i]
+        const displayName = item.name.replace(" (ADR class 6.1/2.3)", "")
         const rowY = equipInnerY + i * eqRowH
         const x0 = colXs[c]
 
@@ -1252,24 +1503,35 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         const ok = item.hasDate ? isChecked && !expired : isChecked
 
-        drawStatus(x0, rowY - 4, ok)
+        // Row container (tighter framing, slightly larger controls)
+        const rowTop = rowY - 6
+        const rowH = 10.8
+        pdf.setDrawColor(226, 232, 240)
+        pdf.setFillColor(248, 250, 252)
+        pdf.setLineWidth(0.25)
+        // @ts-ignore
+        pdf.roundedRect(x0, rowTop, equipColW, rowH, 2, 2, "FD")
 
+        const statusX = x0 + 1.4
+        drawStatus(statusX, rowY - 4.4, ok)
+
+        const iconX = statusX + 5.4 + 2.2
         // icon box
         try {
-          await drawIconBox(x0 + 6.2, rowY - 5.2, 7, item.image)
+          await drawIconBox(iconX, rowTop + 1.1, 8, item.image)
         } catch {
           // ignore missing icon
         }
 
-        const textX = x0 + 6.2 + 8.5
-        const maxTextW = equipColW - (textX - x0) - 2
+        const textX = iconX + 8 + 2.4
+        const maxTextW = equipColW - (textX - x0) - 1.6
 
         pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(9)
+        pdf.setFontSize(9.4)
         pdf.setTextColor(17, 24, 39)
 
         if (item.hasDate && date?.month && date?.year) {
-          const namePart = `${item.name} - `
+          const namePart = `${displayName} - `
           const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
 
           const nameFit = truncateToWidth(namePart, maxTextW * 0.65)
@@ -1283,7 +1545,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
           pdf.setTextColor(17, 24, 39)
         } else {
-          const nameFit = truncateToWidth(item.name, maxTextW)
+          const nameFit = truncateToWidth(displayName, maxTextW)
           pdf.text(nameFit, textX, rowY)
         }
 
@@ -1329,10 +1591,27 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       for (const it of items) {
         const ok = !!checkedMap[it]
-        drawStatus(x + 6, yy - 4, ok)
-        const line = truncateToWidth(it, maxW)
-        pdf.text(line, textX, yy)
-        yy += 7
+        drawStatus(x + 6, yy - 4.4, ok)
+
+        // Wrap long lines; for "Goods correctly secured..." force a newline after the title
+        let lines: string[] = []
+        if (it.startsWith("Goods correctly secured:")) {
+          const parts = it.split(":")
+          const head = ((parts[0] || "").trim() + ":").trim()
+          const tail = parts.slice(1).join(":").trim()
+          const headLines = pdf.splitTextToSize(head, maxW) as string[]
+          const tailLines = tail ? (pdf.splitTextToSize(tail, maxW) as string[]) : []
+          lines = [...headLines, ...tailLines]
+        } else {
+          lines = pdf.splitTextToSize(it, maxW) as string[]
+        }
+        if (!lines.length) lines = [truncateToWidth(it, maxW)]
+
+        for (let li = 0; li < lines.length; li++) {
+          pdf.text(lines[li], textX, yy + li * 7)
+        }
+
+        yy += Math.max(1, lines.length) * 7
       }
     }
 
@@ -1364,7 +1643,28 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       // signature image / line
       if (imgData) {
         try {
-          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+          const imgType = /^data:image\/jpe?g/i.test(imgData) ? "JPEG" : "PNG"
+          // Keep aspect ratio to avoid distortion on any device
+          let drawX = x
+          let drawY = sigY + 6
+          let drawW = sigImgW
+          let drawH = sigImgH
+
+          try {
+            // @ts-ignore - exists at runtime
+            const props = typeof (pdf as any).getImageProperties === "function" ? (pdf as any).getImageProperties(imgData) : null
+            if (props?.width && props?.height) {
+              const s = Math.min(sigImgW / props.width, sigImgH / props.height)
+              drawW = props.width * s
+              drawH = props.height * s
+              drawX = x + (sigImgW - drawW) / 2
+              drawY = sigY + 6 + (sigImgH - drawH) / 2
+            }
+          } catch {
+            // ignore and use default box
+          }
+
+          pdf.addImage(imgData, imgType, drawX, drawY, drawW, drawH)
         } catch {
           // fallback to line
           pdf.setDrawColor(148, 163, 184)
@@ -1377,23 +1677,34 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
       }
 
-      pdf.setFont("helvetica", "normal")
-      pdf.setFontSize(8)
-      pdf.setTextColor(100, 116, 139)
-      pdf.text(title, x, sigY + 30)
+            pdf.setFont("helvetica", "normal")
+            pdf.setFontSize(8)
+            pdf.setTextColor(100, 116, 139)
 
-      if (extra?.inspector) {
-        const inspectorColor = inspectorColors[selectedInspector] || "#111827"
-        const label = "Inspector: "
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor(17, 24, 39)
-        pdf.text(label, x, sigY + 30)
-        const lw = pdf.getTextWidth(label)
-        pdf.setTextColor(inspectorColor)
-        pdf.text(selectedInspector || "Not selected", x + lw, sigY + 30)
-      }
+            const cx = x + sigImgW / 2
 
-      pdf.setTextColor(17, 24, 39)
+            if (extra?.inspector) {
+              // Inspector label + name centered under signature
+              pdf.setFontSize(7.5)
+              pdf.text("Inspector name", cx, sigY + 28.5, { align: "center" })
+
+              const inspectorColor = (typeof authInspectorColor === "string" && authInspectorColor.trim().match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)
+                ? authInspectorColor.trim()
+                : inspectorColors[selectedInspector]) || "#111827"
+              pdf.setFont("helvetica", "bold")
+              pdf.setFontSize(8.2)
+              pdf.setTextColor(inspectorColor)
+
+              const nameLines = pdf.splitTextToSize(selectedInspector || "Not selected", sigImgW) as string[]
+              pdf.text(nameLines, cx, sigY + 32.0, { align: "center", lineHeightFactor: 1.0 })
+            } else {
+              // Driver label centered under signature
+              const labelLines = pdf.splitTextToSize(title, sigImgW) as string[]
+              pdf.text(labelLines, cx, sigY + 30, { align: "center", lineHeightFactor: 1.05 })
+            }
+
+            pdf.setTextColor(17, 24, 39)
+pdf.setTextColor(17, 24, 39)
     }
 
     drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
@@ -1404,19 +1715,121 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     return pdf
   }
-  // Generate PDF report
-
-  // Generate PDF report
-  const generatePDF = async () => {
+  // Generate ZIP (PDF + photos) and store in Supabase (60-day retention)
+  const generateZIP = async () => {
     if (!isMounted || typeof window === "undefined") return
 
     setIsPdfGenerating(true)
 
     try {
       const pdf = await buildAdrPdf()
-      pdf.save(`ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`)
+
+      // Build identity hash (used to dedupe between Download and Email)
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ id: p.id, url: p.url as string, name: p.name, contentType: p.contentType }))
+
+      const identity = {
+        variant,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+        selectedInspector,
+        remarks,
+        drivingLicenseDate,
+        adrCertificateDate,
+        truckDocDate,
+        trailerDocDate,
+        checkedItems,
+        beforeLoadingChecked,
+        afterLoadingChecked,
+        expiryDates,
+        signatureData,
+        inspectorSignatureData,
+        photos: uploadedPhotos,
+      }
+
+      const checklistHash = await sha256Hex(stableStringify(identity))
+
+      const { default: JSZip } = await import("jszip")
+      const zip = new JSZip()
+
+      // PDF in ZIP
+      const pdfBuffer = pdf.output("arraybuffer")
+      const pdfName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
+      zip.file(pdfName, pdfBuffer)
+
+      // Photos in ZIP
+      const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
+      for (let i = 0; i < uploadedPhotos.length; i++) {
+        const ph = uploadedPhotos[i]
+        try {
+          // Prefer offline copy (supports ZIP generation even without internet after upload)
+          const rec = await idbGetPhoto(ph.id).catch(() => null)
+
+          let arrBuf: ArrayBuffer
+          if (rec?.blob) {
+            arrBuf = await rec.blob.arrayBuffer()
+          } else {
+            const resp = await fetch(ph.url)
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+            arrBuf = await resp.arrayBuffer()
+          }
+
+          const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
+          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
+        } catch (e) {
+          console.warn("Failed to add photo to ZIP", e)
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      })
+
+      // Store ZIP in Supabase (best-effort; app continues even if store fails)
+      try {
+        const zipArr = await zipBlob.arrayBuffer()
+        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
+        const zipBase64 = Buffer.from(zipArr).toString("base64")
+
+        await fetch("/api/adr-store", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            variant,
+            checklistHash,
+            zipBase64,
+            emailSent: false,
+            meta: {
+              variant,
+              driverName,
+              truckPlate,
+              trailerPlate,
+              inspectionDate: checkDate,
+              inspectorName: selectedInspector,
+            },
+          }),
+        })
+      } catch (e) {
+        console.warn("Supabase store failed (download)", e)
+      }
+
+      // Download ZIP
+      const zipName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.zip`
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = zipName
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
     } catch (error) {
-      console.error("Error generating PDF:", error)
+      console.error("Error generating ZIP:", error)
     } finally {
       setIsPdfGenerating(false)
     }
@@ -1479,7 +1892,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     clearInspectorSignature()
 
     // Reset inspector
-    setSelectedInspector("")
+    setSelectedInspector(authInspectorName || "")
 
     // Reset remarks + photos
     setRemarks("")
@@ -1495,6 +1908,24 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       })
       return []
     })
+
+    // Clear offline photo cache (prevents stale queued/done photos and frees storage)
+    void (async () => {
+      try {
+        const recs = await idbListPhotos()
+        for (const r of recs) {
+          if (r?.id) {
+            try {
+              await idbDeletePhoto(r.id)
+            } catch {
+              // ignore
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    })()
 
     // Reset other states
     setShowResult(false)
@@ -1611,8 +2042,32 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
-        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
+
+        // Restore signatures
+        if (typeof parsedData.signatureData === "string") setSignatureData(parsedData.signatureData)
+        if (typeof parsedData.inspectorSignatureData === "string") setInspectorSignatureData(parsedData.inspectorSignatureData)
+
+        // Restore photos (we persist only uploaded photos with URLs)
+        if (Array.isArray(parsedData.photos)) {
+          const restored: UploadedPhoto[] = parsedData.photos
+            .filter((p: any) => p && typeof p === "object" && typeof p.url === "string" && p.url.length > 0)
+            .map((p: any) => ({
+              id:
+                typeof p.id === "string" && p.id.length > 0
+                  ? p.id
+                  : typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `${Date.now()}_${Math.random()}`,
+              name: typeof p.name === "string" ? p.name : "photo.jpg",
+              previewUrl: p.url,
+              status: "done" as const,
+              progress: 100,
+              url: p.url,
+              contentType: typeof p.contentType === "string" ? p.contentType : undefined,
+            }))
+          setPhotos(restored)
+        }
 
         // Validate dates after loading
         if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
@@ -1640,6 +2095,75 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [isMounted])
 
+  // Restore queued (offline) photos from IndexedDB after refresh/tab kill (Android friendly).
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+
+    ;(async () => {
+      const records = await idbListPhotos().catch(() => [])
+      if (!records.length) return
+
+      setPhotos((prev) => {
+        const existingIds = new Set(prev.map((p) => p.id))
+        const restored = records
+          .filter((r) => r && typeof r.id === "string" && r.id.length > 0 && r.blob)
+          .filter((r) => !existingIds.has(r.id))
+          .map((r) => ({
+            id: r.id,
+            name: r.name || "photo.jpg",
+            previewUrl: URL.createObjectURL(r.blob),
+            status: "queued" as const,
+            progress: 0,
+            contentType: r.contentType || "image/jpeg",
+          }))
+        return restored.length ? [...prev, ...restored] : prev
+      })
+
+      if (navigator.onLine) {
+        void tryUploadPendingPhotos()
+      }
+    })()
+  }, [isMounted, tryUploadPendingPhotos])
+
+
+
+  // Restore signature drawings on the canvases after a refresh
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (!signatureData) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const img = new window.Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#fff"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.src = signatureData
+  }, [isMounted, signatureData])
+
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (!inspectorSignatureData) return
+    const canvas = inspectorCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const img = new window.Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#fff"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.src = inspectorSignatureData
+  }, [isMounted, inspectorSignatureData])
+
   // Add an effect to save data to localStorage whenever relevant state changes
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
@@ -1658,6 +2182,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       expiryDates,
       selectedInspector,
       remarks,
+      signatureData,
+      inspectorSignatureData,
+      photos: photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ id: p.id, name: p.name, url: p.url, contentType: p.contentType })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
@@ -1676,6 +2205,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     expiryDates,
     selectedInspector,
     remarks,
+    signatureData,
+    inspectorSignatureData,
+    photos,
   ])
 
   // Add this right after the return statement
@@ -1755,13 +2287,37 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
-        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
+        .map((p) => ({ id: p.id, url: p.url as string, name: p.name, contentType: p.contentType }))
+
+      // Compute the same hash used by Download ZIP (so email updates the same DB entry).
+      const identity = {
+        variant,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+        selectedInspector,
+        remarks,
+        drivingLicenseDate,
+        adrCertificateDate,
+        truckDocDate,
+        trailerDocDate,
+        checkedItems,
+        beforeLoadingChecked,
+        afterLoadingChecked,
+        expiryDates,
+        signatureData,
+        inspectorSignatureData,
+        photos: uploadedPhotos,
+      }
+      const checklistHash = await sha256Hex(stableStringify(identity))
 
       const response = await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inspectorName: selectedInspector,
+          inspectorEmail: authInspectorEmail,
           pdfBase64,
           driverName,
           truckPlate,
@@ -1769,6 +2325,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           inspectionDate: checkDate,
           remarks,
           photos: uploadedPhotos,
+          variant,
+          checklistHash,
+          meta: {
+            variant,
+            driverName,
+            truckPlate,
+            trailerPlate,
+            inspectionDate: checkDate,
+            inspectorName: selectedInspector,
+          },
         }),
       })
 
@@ -2282,18 +2848,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-4">Inspector:</h2>
-        <Select value={selectedInspector} onValueChange={setSelectedInspector}>
-          <SelectTrigger className="bg-black text-white border-gray-700">
-            <SelectValue placeholder="Select inspector" className="text-white" />
-          </SelectTrigger>
-          <SelectContent className="bg-black text-white border-gray-700">
-            {inspectors.map((name) => (
-              <SelectItem key={name} value={name} className="hover:bg-gray-700">
-                {name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+          {selectedInspector || "Not selected"}
+        </div>
 
         {/* Remarks + Photos (below inspector select, above signatures) */}
         <div className="mt-4">
@@ -2410,8 +2967,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
-          {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
+        <Button onClick={generateZIP} disabled={isPdfGenerating} className="w-full">
+          {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
         </Button>
         <Button
           onClick={handleSendEmail}
