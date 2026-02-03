@@ -29,8 +29,6 @@ type UploadedPhoto = {
   previewUrl: string
   status: PhotoUploadStatus
   progress: number // 0-100
-  createdAt: number
-  offlineReady: boolean
   url?: string // public blob url when uploaded
   contentType?: string
   error?: string
@@ -92,11 +90,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   // Throttle progress updates + prevent UI jitter
   const lastProgRef = useRef<Record<string, { t: number; p: number }>>({})
   const uploadingRunnerRef = useRef(false)
-  const isBatchUploadingRef = useRef(false)
   const lastAttemptRef = useRef<Record<string, number>>({})
-
-  // Prevent background retry runner from racing with the initial multi-photo upload loop.
-  const batchUploadingRef = useRef(false)
 
 
   // Refs for signatures and inputs
@@ -327,45 +321,70 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     "Alexandru Florea",
   ]
 
+
+const resizeSignatureCanvas = (canvas: HTMLCanvasElement) => {
+  // Keep signatures crisp on high-DPI/mobile by decoupling canvas resolution from CSS size.
+  // Also enforce a minimum internal resolution so PDF signatures don't look pixelated on phones.
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return
+
+  const rect = canvas.getBoundingClientRect()
+  if (!rect.width || !rect.height) return
+
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
+
+  // Minimum "virtual" canvas width in CSS pixels (prevents low-res signatures on small screens)
+  const minCssWidth = 600
+  const targetCssW = Math.max(rect.width, minCssWidth)
+  const targetCssH = (targetCssW * rect.height) / rect.width
+
+  canvas.width = Math.round(targetCssW * dpr)
+  canvas.height = Math.round(targetCssH * dpr)
+
+  ctx.fillStyle = "#fff"
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+}
+
+const exportSignaturePng = (canvas: HTMLCanvasElement) => {
+  // Export to a stable resolution image so PDF output looks consistent across devices.
+  try {
+    const targetW = 1600
+    const ratio = canvas.height > 0 ? canvas.width / canvas.height : 5
+    const targetH = Math.max(1, Math.round(targetW / ratio))
+
+    const out = document.createElement("canvas")
+    out.width = targetW
+    out.height = targetH
+    const octx = out.getContext("2d")
+    if (!octx) return canvas.toDataURL("image/png")
+
+    octx.fillStyle = "#fff"
+    octx.fillRect(0, 0, out.width, out.height)
+    octx.drawImage(canvas, 0, 0, out.width, out.height)
+
+    return out.toDataURL("image/png")
+  } catch {
+    return canvas.toDataURL("image/png")
+  }
+}
+
   // Initialize canvas for signatures
-  const initializeCanvas = () => {
-    if (!isMounted || typeof window === "undefined") return
+const initializeCanvas = () => {
+  if (!isMounted || typeof window === "undefined") return
+  const canvas = canvasRef.current
+  if (!canvas) return
+  resizeSignatureCanvas(canvas)
+}
 
-    const canvas = canvasRef.current
-    if (!canvas) return
+// Initialize Inspector Canvas
+const initializeInspectorCanvas = () => {
+  if (!isMounted || typeof window === "undefined") return
+  const canvas = inspectorCanvasRef.current
+  if (!canvas) return
+  resizeSignatureCanvas(canvas)
+}
 
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    // Set canvas dimensions to match display size
-    const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width
-    canvas.height = rect.height
-
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-  }
-
-  // Initialize Inspector Canvas
-  const initializeInspectorCanvas = () => {
-    if (!isMounted || typeof window === "undefined") return
-
-    const canvas = inspectorCanvasRef.current
-    if (!canvas) return
-
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    // Set canvas dimensions to match display size
-    const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width
-    canvas.height = rect.height
-
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-  }
-
-  // Signature pad implementation for driver
+// Signature pad implementation for driver
   const setupSignaturePad = () => {
     if (!isMounted || typeof window === "undefined") return
 
@@ -375,8 +394,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
+    // Ensure the canvas has enough internal resolution (important on phones)
+    resizeSignatureCanvas(canvas)
+
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = rect.width ? canvas.width / rect.width : 1
+
     // Set canvas style
-    ctx.lineWidth = 2
+    ctx.lineWidth = 2 * scaleX
     ctx.lineCap = "round"
     ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
     ctx.fillStyle = "#fff"
@@ -439,7 +464,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setSignatureData(canvas.toDataURL("image/png"))
+      setSignatureData(exportSignaturePng(canvas))
     }
 
     // Mouse events
@@ -478,8 +503,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
+    // Ensure the canvas has enough internal resolution (important on phones)
+    resizeSignatureCanvas(canvas)
+
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = rect.width ? canvas.width / rect.width : 1
+
     // Set canvas style
-    ctx.lineWidth = 2
+    ctx.lineWidth = 2 * scaleX
     ctx.lineCap = "round"
     ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
     ctx.fillStyle = "#fff"
@@ -542,7 +573,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setInspectorSignatureData(canvas.toDataURL("image/png"))
+      setInspectorSignatureData(exportSignaturePng(canvas))
     }
 
     // Mouse events
@@ -822,9 +853,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           if (progress === last.p) return
           if (now - last.t < 120 && progress - last.p < 2) return
           lastProgRef.current[photoId] = { t: now, p: progress }
-          setPhotos((prev) =>
-            prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading", error: undefined } : p)),
-          )
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
         }
 
         xhr.onload = () => {
@@ -900,14 +929,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           reject(new Error("Upload aborted"))
         }
 
-        const formData = new FormData()
+const formData = new FormData()
         formData.append("file", file)
         xhr.send(formData)
 
         // Mark as uploading immediately
-        setPhotos((prev) =>
-          prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0, error: undefined } : p)),
-        )
+        setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0 } : p)))
       })
     },
     [setPhotos],
@@ -917,7 +944,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const files = Array.from(e.target.files || [])
     if (files.length === 0) return
 
-    const now = Date.now()
     const newPhotos: UploadedPhoto[] = files.map((file) => {
       const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
       return {
@@ -926,8 +952,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         previewUrl: URL.createObjectURL(file),
         status: "queued",
         progress: 0,
-        createdAt: now,
-        offlineReady: false,
         contentType: file.type,
       }
     })
@@ -935,11 +959,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setPhotos((prev) => [...prev, ...newPhotos])
 
     // Persist photos offline (so they survive refresh) and upload sequentially (less UI jitter)
-    // Also block the background retry runner while we are still preparing/saving the new files,
-    // otherwise it can briefly mark items as "Missing offline copy" on fast devices.
-    isBatchUploadingRef.current = true
-    try {
-      for (let idx = 0; idx < newPhotos.length; idx++) {
+    for (let idx = 0; idx < newPhotos.length; idx++) {
       const p = newPhotos[idx]
       const originalFile = files[idx]
 
@@ -972,11 +992,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         savedOffline = false
       }
 
-      // Mark whether we have an offline copy ready (used by the background retry runner).
-      if (savedOffline) {
-        setPhotos((prev) => prev.map((ph) => (ph.id === p.id ? { ...ph, offlineReady: true } : ph)))
-      }
-
       // If offline, we MUST have an offline copy; otherwise the photo can never be uploaded later.
       if (typeof navigator !== "undefined" && !navigator.onLine) {
         if (!savedOffline) {
@@ -1002,9 +1017,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       } catch {
         // State already updated in uploadPhoto
       }
-      }
-    } finally {
-      isBatchUploadingRef.current = false
     }
 
     // Allow selecting the same file again
@@ -1014,7 +1026,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   // Retry queued photos automatically when the connection comes back.
   const tryUploadPendingPhotos = useCallback(async () => {
     if (uploadingRunnerRef.current) return
-    if (isBatchUploadingRef.current) return
     if (typeof navigator !== "undefined" && !navigator.onLine) return
 
     const pending = photos.filter((p) => p.status === "queued")
@@ -1029,12 +1040,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         const rec = await idbGetPhoto(p.id).catch(() => null)
         if (!rec?.blob) {
-          // If the photo was just added, IndexedDB write may still be in-flight on some devices.
-          const ageMs = Date.now() - (p.createdAt || 0)
-          if (!p.offlineReady && ageMs < 30000) {
-            continue
-          }
-
           setPhotos((prev) =>
             prev.map((ph) =>
               ph.id === p.id
@@ -1639,7 +1644,35 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       // signature image / line
       if (imgData) {
         try {
-          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+          // Fit signature image into the box without stretching (prevents distortion across devices)
+try {
+  // @ts-ignore
+  const props = typeof (pdf as any).getImageProperties === "function" ? (pdf as any).getImageProperties(imgData) : null
+  const iw = props?.width || 0
+  const ih = props?.height || 0
+  if (iw > 0 && ih > 0) {
+    const imgRatio = iw / ih
+    const boxRatio = sigImgW / sigImgH
+
+    let drawW = sigImgW
+    let drawH = sigImgH
+    if (imgRatio > boxRatio) {
+      drawW = sigImgW
+      drawH = sigImgW / imgRatio
+    } else {
+      drawH = sigImgH
+      drawW = sigImgH * imgRatio
+    }
+
+    const dx = x + (sigImgW - drawW) / 2
+    const dy = sigY + 6 + (sigImgH - drawH) / 2
+    pdf.addImage(imgData, "PNG", dx, dy, drawW, drawH)
+  } else {
+    pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+  }
+} catch {
+  pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+}
         } catch {
           // fallback to line
           pdf.setDrawColor(148, 163, 184)
@@ -2089,8 +2122,6 @@ pdf.setTextColor(17, 24, 39)
             previewUrl: URL.createObjectURL(r.blob),
             status: "queued" as const,
             progress: 0,
-            createdAt: typeof r.createdAt === "number" ? r.createdAt : Date.now(),
-            offlineReady: true,
             contentType: r.contentType || "image/jpeg",
           }))
         return restored.length ? [...prev, ...restored] : prev
