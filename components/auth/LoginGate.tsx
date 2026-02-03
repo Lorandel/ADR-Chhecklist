@@ -38,7 +38,7 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
           />
         </div>
 
-        <h1 className="text-2xl font-bold text-center mb-6">Connect</h1>
+       
 
         {!configured && (
           <div className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
@@ -79,11 +79,6 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
             {loading ? "Connecting..." : "Login"}
           </Button>
         </form>
-
-        <p className="mt-4 text-xs text-gray-500 text-center leading-relaxed">
-          Tip: you can login with a simple username (e.g. <span className="font-mono">admin</span>) if the account was created with
-          the internal format (<span className="font-mono">@adr.local</span>).
-        </p>
       </div>
     </div>
   )
