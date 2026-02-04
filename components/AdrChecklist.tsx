@@ -63,6 +63,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
   const [selectedInspector, setSelectedInspector] = useState("")
 
+  // iOS/iPadOS Safari sometimes ignores the download attribute and navigates to the Blob URL.
+  // We avoid "page reset / history navigation" by opening the Blob URL in a new tab on iOS.
+  const isIOSDevice = () => {
+    if (typeof navigator === "undefined") return false
+    const ua = navigator.userAgent || ""
+    const iOS = /iPad|iPhone|iPod/.test(ua)
+    const iPadOS = /Macintosh/.test(ua) && (navigator as any).maxTouchPoints > 1
+    return iOS || iPadOS
+  }
+
+
   // Inspector is always the logged-in inspector (no manual selector).
   useEffect(() => {
     if (!loggedInspectorName) return
@@ -1501,6 +1512,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     try {
       const pdf = await buildAdrPdf()
 
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
+      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
+
       // Build identity hash (used to dedupe between Download and Email)
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
@@ -1593,10 +1607,23 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       const a = document.createElement("a")
       a.href = url
       a.download = zipName
+      a.style.display = "none"
+      if (isIOSDevice()) {
+        a.target = "_blank"
+        a.rel = "noopener noreferrer"
+      }
       document.body.appendChild(a)
       a.click()
       a.remove()
-      URL.revokeObjectURL(url)
+      // Delay revoke so Safari has time to start the download/open.
+      setTimeout(() => {
+        try {
+          URL.revokeObjectURL(url)
+        } catch {
+          // ignore
+        }
+      }, 10000)
+
     } catch (error) {
       console.error("Error generating ZIP:", error)
     } finally {
@@ -1991,6 +2018,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       setEmailStatus("Generating PDF...")
 
       const pdf = await buildAdrPdf()
+
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
+      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
 
       // IMPORTANT: do NOT send the PDF as base64 in JSON (can exceed Vercel body limits -> HTTP 413).
       // Instead, upload the PDF directly to Supabase Storage via a signed upload URL, then pass the storage path
@@ -2615,7 +2645,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           />
 
           <div className="mt-4 flex flex-col gap-3">
-            <div className="flex items-start gap-4">
+            <div className="flex flex-col sm:flex-row items-start gap-4">
               <div className="shrink-0">
                 <Button
                   type="button"
@@ -2681,7 +2711,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         </div>
 
         {/* Container to hold both signature boxes side by side */}
-        <div className="flex gap-6 mt-6">
+        <div className="flex flex-col md:flex-row gap-6 mt-6">
           <div className="flex-1">
             <Label className="block mb-2">Driver Signature:</Label>
             <div className="border rounded-md p-2">
@@ -2690,7 +2720,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
                 className="w-full border border-gray-300 rounded"
                 style={{ height: "150px", touchAction: "none" }}
               />
-              <Button variant="outline" className="mt-2 bg-transparent" onClick={clearSignature}>
+              <Button type="button" variant="outline" className="mt-2 bg-transparent" onClick={clearSignature}>
                 Clear Signature
               </Button>
             </div>
@@ -2704,7 +2734,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
                 className="w-full border border-gray-300 rounded"
                 style={{ height: "150px", touchAction: "none" }}
               />
-              <Button variant="outline" className="mt-2 bg-transparent" onClick={clearInspectorSignature}>
+              <Button type="button" variant="outline" className="mt-2 bg-transparent" onClick={clearInspectorSignature}>
                 Clear Signature
               </Button>
             </div>
@@ -2713,13 +2743,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       </div>
 
       <div className="flex flex-col space-y-4 mb-6">
-        <Button onClick={checkMissingItems} className="w-full">
+        <Button type="button" onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button onClick={generateZIP} disabled={isPdfGenerating} className="w-full">
+        <Button type="button" onClick={generateZIP} disabled={isPdfGenerating} className="w-full">
           {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
         </Button>
         <Button
+          type="button"
           onClick={handleSendEmail}
           disabled={
             isSendingEmail ||

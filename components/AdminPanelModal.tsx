@@ -40,6 +40,10 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
 
+  // terminal output for full system test
+  const [terminalText, setTerminalText] = useState("")
+  const [terminalRunning, setTerminalRunning] = useState(false)
+
   // create user form
   const [newUsername, setNewUsername] = useState("")
   const [newPassword, setNewPassword] = useState("")
@@ -74,6 +78,8 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     if (!open) {
       setError(null)
       setInfo(null)
+      setTerminalText("")
+      setTerminalRunning(false)
       return
     }
     if (role !== "admin") return
@@ -204,6 +210,52 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     }
   }
 
+
+  const runSystemTest = async (send: boolean) => {
+    const token = await getToken()
+    if (!token) {
+      setError("Missing admin session token.")
+      return
+    }
+    setError(null)
+    setInfo(null)
+    setTerminalText("")
+    setTerminalRunning(true)
+
+    try {
+      const url = `/api/system-test${send ? "?send=1" : ""}`
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      })
+
+      if (!res.ok) {
+        const t = await res.text().catch(() => "")
+        throw new Error(t || `HTTP ${res.status}`)
+      }
+
+      const reader = res.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (!reader) {
+        const t = await res.text().catch(() => "")
+        setTerminalText(t)
+        return
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        setTerminalText((prev) => prev + decoder.decode(value, { stream: true }))
+      }
+    } catch (e: any) {
+      setTerminalText((prev) => (prev ? prev + "\n" : "") + `ERROR: ${e?.message || "System test failed"}`)
+    } finally {
+      setTerminalRunning(false)
+    }
+  }
+
+
   if (!open) return null
 
   return (
@@ -302,6 +354,40 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                 </div>
                 <div className="mt-3 text-xs text-gray-500">
                   These endpoints are safe during build. Actions that create external side effects run only when you click a "Run" button (query params).
+                </div>
+
+                <div className="mt-5 border-t border-gray-200 pt-4">
+                  <div className="text-sm font-semibold mb-2">Full system test (terminal)</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      className="bg-transparent"
+                      onClick={() => void runSystemTest(false)}
+                      disabled={terminalRunning}
+                    >
+                      Run system test
+                    </Button>
+                    <Button onClick={() => void runSystemTest(true)} disabled={terminalRunning}>
+                      Run + send test email
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="bg-transparent"
+                      onClick={() => setTerminalText("")}
+                      disabled={terminalRunning || !terminalText}
+                    >
+                      Clear terminal
+                    </Button>
+                  </div>
+
+                  <div className="mt-3 h-60 overflow-auto rounded-lg bg-black p-3 font-mono text-xs text-green-100 whitespace-pre-wrap">
+                    {terminalText || (terminalRunning ? "Running..." : "No output yet.")}
+                  </div>
+
+                  <div className="mt-2 text-xs text-gray-600">
+                    Uses <span className="font-mono">/api/system-test</span> (stream). For real email pipeline append{" "}
+                    <span className="font-mono">?send=1</span>.
+                  </div>
                 </div>
               </div>
             </div>
