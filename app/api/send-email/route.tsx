@@ -30,90 +30,38 @@ export async function POST(req: NextRequest) {
   try {
     console.log("=== Email API Called ===")
 
-    const contentType = req.headers.get("content-type") || ""
-
-    // Support both JSON (legacy) and multipart/form-data (preferred, avoids HTTP 413)
-    let inspectorName = ""
-    let inspectorEmail: string | string[] | undefined
-    let driverName = ""
-    let truckPlate = ""
-    let trailerPlate = ""
-    let inspectionDate = ""
-    let pdfBase64 = ""
-    let pdfFile: File | null = null
-    let remarks: string | undefined
-    let photos: IncomingPhoto[] | undefined
-    let variant: "full" | "under1000" | "reduced" | undefined
-    let checklistHash: string | undefined
-    let meta: Record<string, unknown> | undefined
-
-    if (contentType.includes("multipart/form-data")) {
-      const fd = await req.formData()
-      inspectorName = String(fd.get("inspectorName") || "")
-      inspectorEmail = fd.get("inspectorEmail") ? String(fd.get("inspectorEmail") || "") : undefined
-      driverName = String(fd.get("driverName") || "")
-      truckPlate = String(fd.get("truckPlate") || "")
-      trailerPlate = String(fd.get("trailerPlate") || "")
-      inspectionDate = String(fd.get("inspectionDate") || "")
-      remarks = fd.get("remarks") ? String(fd.get("remarks") || "") : undefined
-      variant = (fd.get("variant") ? String(fd.get("variant")) : undefined) as any
-      checklistHash = fd.get("checklistHash") ? String(fd.get("checklistHash") || "") : undefined
-
-      const photosRaw = fd.get("photos") ? String(fd.get("photos") || "") : ""
-      if (photosRaw) {
-        try {
-          photos = JSON.parse(photosRaw)
-        } catch {
-          photos = []
-        }
-      }
-
-      const metaRaw = fd.get("meta") ? String(fd.get("meta") || "") : ""
-      if (metaRaw) {
-        try {
-          meta = JSON.parse(metaRaw)
-        } catch {
-          meta = undefined
-        }
-      }
-
-      const pdfAny = fd.get("pdf")
-      pdfFile = pdfAny instanceof File ? pdfAny : null
-    } else {
-      const body = await req.json()
-      const parsed = body as {
-        inspectorName: string
-        inspectorEmail?: string | string[]
-        driverName: string
-        truckPlate: string
-        trailerPlate: string
-        inspectionDate: string
-        pdfBase64: string
-        remarks?: string
-        photos?: IncomingPhoto[]
-        variant?: "full" | "under1000" | "reduced"
-        checklistHash?: string
-        meta?: Record<string, unknown>
-      }
-
-      inspectorName = parsed.inspectorName
-      inspectorEmail = parsed.inspectorEmail
-      driverName = parsed.driverName
-      truckPlate = parsed.truckPlate
-      trailerPlate = parsed.trailerPlate
-      inspectionDate = parsed.inspectionDate
-      pdfBase64 = parsed.pdfBase64
-      remarks = parsed.remarks
-      photos = parsed.photos
-      variant = parsed.variant
-      checklistHash = parsed.checklistHash
-      meta = parsed.meta
+    const body = await req.json()
+    const {
+      inspectorName,
+      inspectorEmail,
+      driverName,
+      truckPlate,
+      trailerPlate,
+      inspectionDate,
+      pdfBase64,
+      remarks,
+      photos,
+      variant,
+      checklistHash,
+      meta,
+    } = body as {
+      inspectorName: string
+      inspectorEmail?: string | string[]
+      driverName: string
+      truckPlate: string
+      trailerPlate: string
+      inspectionDate: string
+      pdfBase64: string
+      remarks?: string
+      photos?: IncomingPhoto[]
+      variant?: "full" | "under1000" | "reduced"
+      checklistHash?: string
+      meta?: Record<string, unknown>
     }
 
     console.log("Inspector:", inspectorName)
     console.log("Driver:", driverName)
-    console.log("PDF base64 size:", pdfBase64?.length || 0, "characters")
-    console.log("PDF file present:", !!pdfFile)
+    console.log("PDF size:", pdfBase64?.length || 0, "characters")
 
     // Validate required email environment variables
     if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
@@ -131,11 +79,10 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (!inspectorName || (!pdfBase64 && !pdfFile)) {
+    if (!inspectorName || !pdfBase64) {
       console.error("Missing required data:", {
         hasInspectorName: !!inspectorName,
-        hasPdfBase64: !!pdfBase64,
-        hasPdfFile: !!pdfFile,
+        hasPdfData: !!pdfBase64,
         pdfDataLength: pdfBase64?.length || 0,
       })
       return NextResponse.json(
@@ -174,31 +121,28 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Convert PDF to buffer
+    // Convert base64 to buffer
     let pdfBuffer: Buffer
     try {
-      if (pdfFile) {
-        const arr = await pdfFile.arrayBuffer()
-        pdfBuffer = Buffer.from(arr)
-      } else {
-        const cleanedBase64 = typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
-        pdfBuffer = Buffer.from(cleanedBase64, "base64")
-      }
-
+      const cleanedBase64 = typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
+      pdfBuffer = Buffer.from(cleanedBase64, "base64")
       console.log("PDF buffer size:", pdfBuffer.length, "bytes")
-      if (pdfBuffer.length === 0) throw new Error("PDF buffer is empty")
+
+      if (pdfBuffer.length === 0) {
+        throw new Error("PDF buffer is empty")
+      }
 
       // Validate that it's actually a PDF
       if (!pdfBuffer.subarray(0, 4).equals(Buffer.from([0x25, 0x50, 0x44, 0x46]))) {
         console.warn("Warning: Buffer doesn't start with PDF signature")
       }
-    } catch (bufferError: any) {
+    } catch (bufferError) {
       console.error("PDF buffer processing error:", bufferError)
       return NextResponse.json(
         {
           success: false,
           message: "Failed to process PDF data",
-          error: bufferError?.message,
+          error: bufferError.message,
         },
         { status: 500 },
       )

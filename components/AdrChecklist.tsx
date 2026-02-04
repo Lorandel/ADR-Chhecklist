@@ -2279,12 +2279,13 @@ pdf.setTextColor(17, 24, 39)
 
       const pdf = await buildAdrPdf()
 
-      // IMPORTANT: Avoid sending large base64 JSON bodies (can trigger HTTP 413 on Vercel).
-      // Send the PDF as multipart/form-data instead.
-      let pdfArrayBuffer: ArrayBuffer
+      // Convert PDF to base64
+      let pdfBase64 = ""
       try {
-        pdfArrayBuffer = pdf.output("arraybuffer") as ArrayBuffer
-        if (!pdfArrayBuffer || pdfArrayBuffer.byteLength === 0) throw new Error("Generated PDF is empty")
+        const pdfBuffer = pdf.output("arraybuffer")
+        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
+        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
+        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
       } catch (convError: any) {
         console.error("Error processing PDF:", convError)
         throw new Error(`PDF processing error: ${convError.message}`)
@@ -2319,36 +2320,30 @@ pdf.setTextColor(17, 24, 39)
       }
       const checklistHash = await sha256Hex(stableStringify(identity))
 
-      const pdfBlob = new Blob([pdfArrayBuffer], { type: "application/pdf" })
-      const pdfFileName = `ADR-Checklist_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
-
-      const form = new FormData()
-      form.append("inspectorName", selectedInspector)
-      if (authInspectorEmail) form.append("inspectorEmail", Array.isArray(authInspectorEmail) ? authInspectorEmail.join(",") : String(authInspectorEmail))
-      form.append("driverName", driverName)
-      form.append("truckPlate", truckPlate)
-      form.append("trailerPlate", trailerPlate)
-      form.append("inspectionDate", checkDate)
-      if (typeof remarks === "string") form.append("remarks", remarks)
-      form.append("variant", variant)
-      form.append("checklistHash", checklistHash)
-      form.append("photos", JSON.stringify(uploadedPhotos))
-      form.append(
-        "meta",
-        JSON.stringify({
-          variant,
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inspectorName: selectedInspector,
+          inspectorEmail: authInspectorEmail,
+          pdfBase64,
           driverName,
           truckPlate,
           trailerPlate,
           inspectionDate: checkDate,
-          inspectorName: selectedInspector,
+          remarks,
+          photos: uploadedPhotos,
+          variant,
+          checklistHash,
+          meta: {
+            variant,
+            driverName,
+            truckPlate,
+            trailerPlate,
+            inspectionDate: checkDate,
+            inspectorName: selectedInspector,
+          },
         }),
-      )
-      form.append("pdf", pdfBlob, pdfFileName)
-
-      const response = await fetch("/api/send-email", {
-        method: "POST",
-        body: form,
       })
 
       const data = await response.json().catch(() => ({}))
