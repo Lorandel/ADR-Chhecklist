@@ -15,7 +15,14 @@ async function assertAdmin(req: NextRequest) {
 
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase.auth.getUser(token)
-  if (error || !data?.user) return { ok: false, status: 401, message: "Invalid token" }
+  if (error || !data?.user) {
+    const msg = (error as any)?.message || "Invalid token"
+    const hint =
+      msg.toLowerCase().includes("jwt") || msg.toLowerCase().includes("signature")
+        ? "Check that SUPABASE_SERVICE_ROLE_KEY matches NEXT_PUBLIC_SUPABASE_URL (same Supabase project)."
+        : null
+    return { ok: false, status: 401, message: hint ? `${msg}. ${hint}` : msg }
+  }
   const role = (data.user.user_metadata as any)?.role
   if (role !== "admin") return { ok: false, status: 403, message: "Forbidden" }
 

@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useAuth } from "@/components/auth/AuthProvider"
+import { getSupabaseBrowser } from "@/lib/supabaseBrowser"
+import { getStoredProvider, providerLabel, setStoredProvider, type StorageProvider } from "@/lib/storageProvider"
 
 type Props = { open: boolean; onClose: () => void }
 
@@ -23,18 +25,21 @@ function usernameFromEmail(email: string): string {
 
 export default function AdminPanelModal({ open, onClose }: Props) {
   const { session, role, refreshUser } = useAuth()
-  const token = session?.access_token || ""
+
+  // Always try to use a fresh access token (some browsers can lag behind with state updates).
+  const getAccessToken = async (): Promise<string> => {
+    const direct = session?.access_token
+    if (direct) return direct
+    const sb = getSupabaseBrowser()
+    if (!sb) return ""
+    const { data } = await sb.auth.getSession()
+    return data.session?.access_token || ""
+  }
 
   const [users, setUsers] = useState<AdminUser[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
-  const [logs, setLogs] = useState<string[]>([])
-
-  const appendLog = (line: string) => {
-    const ts = new Date().toISOString().replace("T", " ").replace("Z", "")
-    setLogs((prev) => [...prev, `[${ts}] ${line}`].slice(-800))
-  }
 
   // create user form
   const [newUsername, setNewUsername] = useState("")
@@ -44,18 +49,27 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   const [newInspectorColor, setNewInspectorColor] = useState("")
   const [newInspectorEmail, setNewInspectorEmail] = useState("")
 
+  // storage provider switch (local, instant)
+  const [storageProvider, setStorageProvider] = useState<StorageProvider>("auto")
+
   // tests (Drive tests removed per request)
   const testEndpoints = useMemo(
     () => [
       { label: "Check Email Config", path: "/api/test-email" },
       { label: "Send Test Email", path: "/api/test-email?send=1" },
-      { label: "Send Test Email (with ZIP)", path: "/api/test-email?send=1&attach=1" },
       { label: "Check Blob Config", path: "/api/test-blob" },
       { label: "Blob Write Test", path: "/api/test-blob?run=1" },
+      { label: "Check R2 Config", path: "/api/test-r2" },
+      { label: "R2 Write Test", path: "/api/test-r2?run=1" },
       { label: "Debug Env", path: "/api/debug" },
     ],
     [],
   )
+
+  useEffect(() => {
+    if (!open) return
+    setStorageProvider(getStoredProvider())
+  }, [open])
 
   useEffect(() => {
     if (!open) {
@@ -69,7 +83,11 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   }, [open, role])
 
   const loadUsers = async () => {
-    if (!token) return
+    const token = await getAccessToken()
+    if (!token) {
+      setError("Missing session token. Please sign in again.")
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -78,9 +96,15 @@ export default function AdminPanelModal({ open, onClose }: Props) {
         cache: "no-store",
       })
       const data = await res.json().catch(() => ({}))
-      appendLog(`HTTP ${res.status} ${path}`)
-      try { appendLog(`RESPONSE ${path}: ${JSON.stringify(data)}`) } catch {}
-      if (!res.ok || !data?.success) throw new Error(data?.message || `Failed (${res.status})`)
+      if (!res.ok || !data?.success) {
+        const base = data?.message || `Failed (${res.status})`
+        if (res.status === 401) {
+          throw new Error(
+            `${base}. If you are logged in, this usually means SUPABASE_SERVICE_ROLE_KEY does not match NEXT_PUBLIC_SUPABASE_URL (wrong project in Vercel env vars).`,
+          )
+        }
+        throw new Error(base)
+      }
       setUsers(Array.isArray(data.users) ? data.users : [])
     } catch (e: any) {
       setError(e?.message || "Failed to load users")
@@ -90,7 +114,11 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   }
 
   const createUser = async () => {
-    if (!token) return
+    const token = await getAccessToken()
+    if (!token) {
+      setError("Missing session token. Please sign in again.")
+      return
+    }
     setLoading(true)
     setError(null)
     setInfo(null)
@@ -109,8 +137,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
         }),
       })
       const data = await res.json().catch(() => ({}))
-      appendLog(`HTTP ${res.status} ${path}`)
-      try { appendLog(`RESPONSE ${path}: ${JSON.stringify(data)}`) } catch {}
       if (!res.ok || !data?.success) throw new Error(data?.message || `Failed (${res.status})`)
       setInfo("User created")
       setNewUsername("")
@@ -128,7 +154,11 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   }
 
   const updateUser = async (u: AdminUser, patch: any) => {
-    if (!token) return
+    const token = await getAccessToken()
+    if (!token) {
+      setError("Missing session token. Please sign in again.")
+      return
+    }
     setLoading(true)
     setError(null)
     setInfo(null)
@@ -139,8 +169,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
         body: JSON.stringify({ action: "update", userId: u.id, ...patch }),
       })
       const data = await res.json().catch(() => ({}))
-      appendLog(`HTTP ${res.status} ${path}`)
-      try { appendLog(`RESPONSE ${path}: ${JSON.stringify(data)}`) } catch {}
       if (!res.ok || !data?.success) throw new Error(data?.message || `Failed (${res.status})`)
       setInfo("Updated")
       await loadUsers()
@@ -156,26 +184,17 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     setLoading(true)
     setError(null)
     setInfo(null)
-    appendLog(`RUN ${path}`)
     try {
       const res = await fetch(path, { cache: "no-store" })
       const data = await res.json().catch(() => ({}))
-      appendLog(`HTTP ${res.status} ${path}`)
-      try { appendLog(`RESPONSE ${path}: ${JSON.stringify(data)}`) } catch {}
       if (!res.ok) throw new Error(data?.error || data?.message || `HTTP ${res.status}`)
       if (data?.success === false) {
-        const msg = `${path}: ${data?.error || data?.message || "Not configured"}`
-        setError(msg)
-        appendLog(`ERROR ${msg}`)
+        setError(`${path}: ${data?.error || data?.message || "Not configured"}`)
       } else {
-        const msg = `${path}: OK`
-        setInfo(msg)
-        appendLog(msg)
+        setInfo(`${path}: OK`)
       }
     } catch (e: any) {
-      const msg = `${path}: ${e?.message || "Failed"}`
-      setError(msg)
-      appendLog(`ERROR ${msg}`)
+      setError(`${path}: ${e?.message || "Failed"}`)
     } finally {
       setLoading(false)
     }
@@ -250,6 +269,30 @@ export default function AdminPanelModal({ open, onClose }: Props) {
 
               <div className="rounded-xl border border-gray-200 p-4">
                 <div className="font-semibold mb-3">System tests</div>
+
+                <div className="mb-4 rounded-lg border border-gray-200 p-3">
+                  <div className="text-sm font-semibold mb-2">Photo upload storage</div>
+                  <div className="flex flex-wrap gap-3 text-sm">
+                    {(["auto", "blob", "r2"] as StorageProvider[]).map((p) => (
+                      <label key={p} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          checked={storageProvider === p}
+                          onChange={() => {
+                            setStorageProvider(p)
+                            setStoredProvider(p)
+                            setInfo(`Upload provider set to: ${providerLabel(p)}`)
+                          }}
+                        />
+                        {providerLabel(p)}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-600">
+                    Switch instantly if uploads fail (e.g. Blob store suspended). This setting is saved in your browser.
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap gap-2">
                   {testEndpoints.map((t) => (
                     <Button key={t.path} variant="outline" className="bg-transparent" onClick={() => void runTest(t.path)} disabled={loading}>
@@ -346,27 +389,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                 {loading && <div className="text-sm text-gray-500 mt-3">Loading...</div>}
               </div>
             </div>
-
-<div className="rounded-xl border border-gray-200 p-4">
-  <div className="flex items-center justify-between mb-2">
-    <div className="font-semibold">Terminal output</div>
-    <div className="flex gap-2">
-      <Button
-        type="button"
-        variant="outline"
-        className="bg-transparent"
-        onClick={() => setLogs([])}
-        disabled={loading}
-      >
-        Clear
-      </Button>
-    </div>
-  </div>
-  <div className="rounded-lg border border-gray-200 bg-black text-white p-3 max-h-64 overflow-y-auto">
-    <pre className="text-xs whitespace-pre-wrap break-words">{logs.length ? logs.join("\n") : "No output yet."}</pre>
-  </div>
-</div>
-
           </div>
         )}
       </div>
