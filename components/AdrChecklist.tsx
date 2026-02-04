@@ -6,11 +6,11 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useAuth } from "@/components/auth/AuthProvider"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
-import { idbPutPhoto, idbGetPhoto, idbDeletePhoto, idbListPhotos } from "@/lib/offlinePhotos"
+import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
 
 const capitalizeWords = (str: string) =>
@@ -40,7 +40,6 @@ type ADRChecklistProps = {
 }
 
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
-  const { inspectorName: authInspectorName, inspectorColor: authInspectorColor, inspectorEmail: authInspectorEmail } = useAuth()
   const includeAdrCertificate = variant === "full"
   const storageKey = `adrChecklistData_${variant}`
 
@@ -61,13 +60,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [allChecked, setAllChecked] = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
   const [selectedInspector, setSelectedInspector] = useState("")
-
-  // sync inspector from logged user (admin sets this per account)
-  useEffect(() => {
-    if (authInspectorName && authInspectorName.trim()) {
-      setSelectedInspector(authInspectorName.trim())
-    }
-  }, [authInspectorName])
   const [dateValid, setDateValid] = useState({
     drivingLicense: false,
     adrCertificate: false,
@@ -321,78 +313,45 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     "Alexandru Florea",
   ]
 
-
-const resizeSignatureCanvas = (canvas: HTMLCanvasElement) => {
-  // Keep signatures crisp on high-DPI/mobile by decoupling canvas resolution from CSS size.
-  // Also enforce a minimum internal resolution so PDF signatures don't look pixelated on phones.
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return
-
-  const rect = canvas.getBoundingClientRect()
-  if (!rect.width || !rect.height) return
-
-  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
-
-  // Minimum "virtual" canvas width in CSS pixels (prevents low-res signatures on small screens)
-  const minCssWidth = 600
-  const targetCssW = Math.max(rect.width, minCssWidth)
-  const targetCssH = (targetCssW * rect.height) / rect.width
-
-  canvas.width = Math.round(targetCssW * dpr)
-  canvas.height = Math.round(targetCssH * dpr)
-
-  ctx.fillStyle = "#fff"
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
-}
-
-const exportSignatureImage = (canvas: HTMLCanvasElement) => {
-  // Export to a stable, size-efficient image so PDF output looks consistent across devices
-  // and doesn't exceed request body limits when sending by email.
-  try {
-    const targetW = 900 // keep quality but reduce payload
-    const ratio = canvas.height > 0 ? canvas.width / canvas.height : 5
-    const targetH = Math.max(1, Math.round(targetW / ratio))
-
-    const out = document.createElement("canvas")
-    out.width = targetW
-    out.height = targetH
-    const octx = out.getContext("2d")
-    if (!octx) return canvas.toDataURL("image/jpeg", 0.78)
-
-    // white background for jpeg
-    octx.fillStyle = "#fff"
-    octx.fillRect(0, 0, out.width, out.height)
-    octx.drawImage(canvas, 0, 0, out.width, out.height)
-
-    // JPEG is significantly smaller than PNG for signatures with a white background.
-    return out.toDataURL("image/jpeg", 0.78)
-  } catch {
-    try {
-      return canvas.toDataURL("image/jpeg", 0.78)
-    } catch {
-      return canvas.toDataURL("image/png")
-    }
-  }
-}
-
-
   // Initialize canvas for signatures
-const initializeCanvas = () => {
-  if (!isMounted || typeof window === "undefined") return
-  const canvas = canvasRef.current
-  if (!canvas) return
-  resizeSignatureCanvas(canvas)
-}
+  const initializeCanvas = () => {
+    if (!isMounted || typeof window === "undefined") return
 
-// Initialize Inspector Canvas
-const initializeInspectorCanvas = () => {
-  if (!isMounted || typeof window === "undefined") return
-  const canvas = inspectorCanvasRef.current
-  if (!canvas) return
-  resizeSignatureCanvas(canvas)
-}
+    const canvas = canvasRef.current
+    if (!canvas) return
 
-// Signature pad implementation for driver
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    // Set canvas dimensions to match display size
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width
+    canvas.height = rect.height
+
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+  }
+
+  // Initialize Inspector Canvas
+  const initializeInspectorCanvas = () => {
+    if (!isMounted || typeof window === "undefined") return
+
+    const canvas = inspectorCanvasRef.current
+    if (!canvas) return
+
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    // Set canvas dimensions to match display size
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width
+    canvas.height = rect.height
+
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+  }
+
+  // Signature pad implementation for driver
   const setupSignaturePad = () => {
     if (!isMounted || typeof window === "undefined") return
 
@@ -402,14 +361,8 @@ const initializeInspectorCanvas = () => {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Ensure the canvas has enough internal resolution (important on phones)
-    resizeSignatureCanvas(canvas)
-
-    const rect = canvas.getBoundingClientRect()
-    const scaleX = rect.width ? canvas.width / rect.width : 1
-
     // Set canvas style
-    ctx.lineWidth = 2 * scaleX
+    ctx.lineWidth = 2
     ctx.lineCap = "round"
     ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
     ctx.fillStyle = "#fff"
@@ -472,7 +425,7 @@ const initializeInspectorCanvas = () => {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setSignatureData(exportSignatureImage(canvas))
+      setSignatureData(canvas.toDataURL("image/png"))
     }
 
     // Mouse events
@@ -511,14 +464,8 @@ const initializeInspectorCanvas = () => {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Ensure the canvas has enough internal resolution (important on phones)
-    resizeSignatureCanvas(canvas)
-
-    const rect = canvas.getBoundingClientRect()
-    const scaleX = rect.width ? canvas.width / rect.width : 1
-
     // Set canvas style
-    ctx.lineWidth = 2 * scaleX
+    ctx.lineWidth = 2
     ctx.lineCap = "round"
     ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
     ctx.fillStyle = "#fff"
@@ -581,7 +528,7 @@ const initializeInspectorCanvas = () => {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setInspectorSignatureData(exportSignatureImage(canvas))
+      setInspectorSignatureData(canvas.toDataURL("image/png"))
     }
 
     // Mouse events
@@ -843,14 +790,8 @@ const initializeInspectorCanvas = () => {
         const xhr = new XMLHttpRequest()
         uploadXhrRefs.current[photoId] = xhr
 
-        const cleanupRefs = () => {
-          try { delete uploadXhrRefs.current[photoId] } catch {}
-          try { delete lastProgRef.current[photoId] } catch {}
-        }
-
         xhr.open("POST", "/api/upload-photo")
         xhr.responseType = "json"
-        xhr.timeout = 45000 // important on mobile; prevents "hanging" uploads on flaky networks
 
         xhr.upload.onprogress = (evt) => {
           if (!evt.lengthComputable) return
@@ -866,78 +807,38 @@ const initializeInspectorCanvas = () => {
 
         xhr.onload = () => {
           const res = xhr.response
-          const ok = xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url
-
-          if (ok) {
+          if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
             setPhotos((prev) =>
-              prev.map((p) => {
-                if (p.id !== photoId) return p
-                // cleanup preview object URL (memory leak on mobile)
-                if (p.previewUrl?.startsWith("blob:")) {
-                  try {
-                    URL.revokeObjectURL(p.previewUrl)
-                  } catch {
-                    // ignore
-                  }
-                }
-                return {
-                  ...p,
-                  progress: 100,
-                  status: "done",
-                  url: res.url,
-                  previewUrl: res.url, // after upload, show the real hosted URL
-                  contentType: res.contentType || file.type,
-                  error: undefined,
-                }
-              }),
+              prev.map((p) =>
+                p.id === photoId
+                  ? { ...p, progress: 100, status: "done", url: res.url, contentType: res.contentType || file.type }
+                  : p,
+              ),
             )
-            cleanupRefs()
             resolve({ url: res.url, contentType: res.contentType || file.type })
             return
           }
+          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          reject(new Error(message))
+        }
 
-          const message = res?.message || res?.error || `Upload failed (${xhr.status || "unknown"})`
-          const retryable = xhr.status === 0 || (xhr.status >= 500 && xhr.status <= 599)
-
+        xhr.onerror = () => {
+          const message = "Upload failed (network error)"
+          const offline = typeof navigator !== "undefined" ? !navigator.onLine : false
           setPhotos((prev) =>
             prev.map((p) =>
               p.id === photoId
-                ? retryable
+                ? offline
                   ? { ...p, status: "queued", progress: 0, error: message }
                   : { ...p, status: "error", error: message }
                 : p,
             ),
           )
-          cleanupRefs()
           reject(new Error(message))
         }
 
-        // NOTE: navigator.onLine is unreliable on Android; treat onerror/ontimeout as retryable.
-        const queueRetry = (message: string) => {
-          setPhotos((prev) =>
-            prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
-          )
-        }
-
-        xhr.onerror = () => {
-          queueRetry("Upload failed (network error)")
-          cleanupRefs()
-          reject(new Error("Upload failed (network error)"))
-        }
-
-        xhr.ontimeout = () => {
-          queueRetry("Upload failed (timeout)")
-          cleanupRefs()
-          reject(new Error("Upload failed (timeout)"))
-        }
-
-        xhr.onabort = () => {
-          queueRetry("Upload aborted")
-          cleanupRefs()
-          reject(new Error("Upload aborted"))
-        }
-
-const formData = new FormData()
+        const formData = new FormData()
         formData.append("file", file)
         xhr.send(formData)
 
@@ -987,7 +888,6 @@ const formData = new FormData()
       }
 
       // Save blob in IndexedDB (offline support)
-      let savedOffline = true
       try {
         await idbPutPhoto({
           id: p.id,
@@ -997,31 +897,17 @@ const formData = new FormData()
           createdAt: Date.now(),
         })
       } catch {
-        savedOffline = false
+        // IndexedDB can be unavailable in some private modes; ignore
       }
 
-      // If offline, we MUST have an offline copy; otherwise the photo can never be uploaded later.
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
-        if (!savedOffline) {
-          setPhotos((prev) =>
-            prev.map((ph) =>
-              ph.id === p.id
-                ? {
-                    ...ph,
-                    status: "error",
-                    progress: 0,
-                    error: "Offline storage unavailable. Please keep the app open and retry when online.",
-                  }
-                : ph,
-            ),
-          )
-        }
-        continue
-      }
+      // If offline, keep queued; upload will resume automatically when online
+      if (typeof navigator !== "undefined" && !navigator.onLine) continue
 
       try {
         await uploadPhoto(fileToUpload, p.id)
-        // Keep offline copy until ZIP/email/reset (prevents missing photos when offline later)
+        try {
+          await idbDeletePhoto(p.id)
+        } catch {}
       } catch {
         // State already updated in uploadPhoto
       }
@@ -1047,16 +933,7 @@ const formData = new FormData()
         lastAttemptRef.current[p.id] = Date.now()
 
         const rec = await idbGetPhoto(p.id).catch(() => null)
-        if (!rec?.blob) {
-          setPhotos((prev) =>
-            prev.map((ph) =>
-              ph.id === p.id
-                ? { ...ph, status: "error", progress: 0, error: "Missing offline copy. Please re-add the photo." }
-                : ph,
-            ),
-          )
-          continue
-        }
+        if (!rec?.blob) continue
 
         const file = new File([rec.blob], rec.name || p.name, {
           type: rec.contentType || p.contentType || "image/jpeg",
@@ -1064,7 +941,9 @@ const formData = new FormData()
 
         try {
           await uploadPhoto(file, p.id)
-          // Keep offline copy until ZIP/email/reset (supports offline ZIP later)
+          try {
+            await idbDeletePhoto(p.id)
+          } catch {}
         } catch {
           // keep queued/error as set by uploadPhoto
         }
@@ -1078,26 +957,10 @@ const formData = new FormData()
     const onOnline = () => {
       void tryUploadPendingPhotos()
     }
-    const onVis = () => {
-      if (document.visibilityState === "visible" && navigator.onLine) {
-        void tryUploadPendingPhotos()
-      }
-    }
     window.addEventListener("online", onOnline)
-    document.addEventListener("visibilitychange", onVis)
-
-    // periodic safety net for Android (sometimes online event doesn't fire, or fires too early)
-    const intervalId = window.setInterval(() => {
-      if (navigator.onLine) void tryUploadPendingPhotos()
-    }, 25000)
-
-    // attempt once on mount (and after restoring queued photos)
+    // attempt once on mount (if there are queued photos restored)
     void tryUploadPendingPhotos()
-    return () => {
-      window.removeEventListener("online", onOnline)
-      document.removeEventListener("visibilitychange", onVis)
-      window.clearInterval(intervalId)
-    }
+    return () => window.removeEventListener("online", onOnline)
   }, [tryUploadPendingPhotos])
 
   const removePhoto = (photoId: string) => {
@@ -1108,17 +971,6 @@ const formData = new FormData()
       } catch {
         // ignore
       }
-    }
-
-    try {
-      void idbDeletePhoto(photoId)
-    } catch {
-      // ignore
-    }
-    try {
-      delete uploadXhrRefs.current[photoId]
-    } catch {
-      // ignore
     }
 
     setPhotos((prev) => {
@@ -1209,8 +1061,8 @@ const formData = new FormData()
     }
 
     const drawStatus = (x: number, y: number, ok: boolean) => {
-      const w = 5.4
-      const h = 5.4
+      const w = 5
+      const h = 5
 
       pdf.setLineWidth(0.2)
       pdf.setDrawColor(203, 213, 225) // slate-300
@@ -1250,31 +1102,8 @@ const formData = new FormData()
       pdf.roundedRect(x, y, size, size, 1.2, 1.2, "FD")
 
       const padding = 0.6
-      const inner = size - padding * 2
       const imgType = isJpeg(imgUrl) ? "JPEG" : "PNG"
-
-      // Keep aspect ratio (no stretch) and center the image in the square
-      try {
-        // @ts-ignore - available in jsPDF at runtime
-        const props = pdf.getImageProperties(img)
-        const iw = props?.width || inner
-        const ih = props?.height || inner
-        const ratio = iw / ih
-
-        let w = inner
-        let h = inner
-        if (ratio > 1) {
-          h = inner / ratio
-        } else if (ratio < 1) {
-          w = inner * ratio
-        }
-
-        const ix = x + padding + (inner - w) / 2
-        const iy = y + padding + (inner - h) / 2
-        pdf.addImage(img, imgType, ix, iy, w, h)
-      } catch {
-        pdf.addImage(img, imgType, x + padding, y + padding, inner, inner)
-      }
+      pdf.addImage(img, imgType, x + padding, y + padding, size - padding * 2, size - padding * 2)
     }
 
     // Preload all icons + watermark (faster and consistent)
@@ -1467,12 +1296,12 @@ const formData = new FormData()
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(11)
     pdf.setTextColor(17, 24, 39)
-    pdf.text("Equipment Checklist", equipX + equipW / 2, equipY + 8, { align: "center" })
+    pdf.text("Equipment Checklist", equipX + 6, equipY + 8)
 
-    const equipInnerY = equipY + 18
-    const equipInnerX = equipX + 5
-    const equipInnerW = equipW - 10
-    const equipColGap = 8
+    const equipInnerY = equipY + 14
+    const equipInnerX = equipX + 6
+    const equipInnerW = equipW - 12
+    const equipColGap = 10
     const equipColW = (equipInnerW - equipColGap) / 2
 
     const allEq = equipmentItems
@@ -1494,7 +1323,6 @@ const formData = new FormData()
       const col = eqCols[c]
       for (let i = 0; i < col.length; i++) {
         const item = col[i]
-        const displayName = item.name.replace(" (ADR class 6.1/2.3)", "")
         const rowY = equipInnerY + i * eqRowH
         const x0 = colXs[c]
 
@@ -1512,35 +1340,24 @@ const formData = new FormData()
 
         const ok = item.hasDate ? isChecked && !expired : isChecked
 
-        // Row container (tighter framing, slightly larger controls)
-        const rowTop = rowY - 6
-        const rowH = 10.8
-        pdf.setDrawColor(226, 232, 240)
-        pdf.setFillColor(248, 250, 252)
-        pdf.setLineWidth(0.25)
-        // @ts-ignore
-        pdf.roundedRect(x0, rowTop, equipColW, rowH, 2, 2, "FD")
+        drawStatus(x0, rowY - 4, ok)
 
-        const statusX = x0 + 1.4
-        drawStatus(statusX, rowY - 4.4, ok)
-
-        const iconX = statusX + 5.4 + 2.2
         // icon box
         try {
-          await drawIconBox(iconX, rowTop + 1.1, 8, item.image)
+          await drawIconBox(x0 + 6.2, rowY - 5.2, 7, item.image)
         } catch {
           // ignore missing icon
         }
 
-        const textX = iconX + 8 + 2.4
-        const maxTextW = equipColW - (textX - x0) - 1.6
+        const textX = x0 + 6.2 + 8.5
+        const maxTextW = equipColW - (textX - x0) - 2
 
         pdf.setFont("helvetica", "bold")
-        pdf.setFontSize(9.4)
+        pdf.setFontSize(9)
         pdf.setTextColor(17, 24, 39)
 
         if (item.hasDate && date?.month && date?.year) {
-          const namePart = `${displayName} - `
+          const namePart = `${item.name} - `
           const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
 
           const nameFit = truncateToWidth(namePart, maxTextW * 0.65)
@@ -1554,7 +1371,7 @@ const formData = new FormData()
 
           pdf.setTextColor(17, 24, 39)
         } else {
-          const nameFit = truncateToWidth(displayName, maxTextW)
+          const nameFit = truncateToWidth(item.name, maxTextW)
           pdf.text(nameFit, textX, rowY)
         }
 
@@ -1600,27 +1417,10 @@ const formData = new FormData()
 
       for (const it of items) {
         const ok = !!checkedMap[it]
-        drawStatus(x + 6, yy - 4.4, ok)
-
-        // Wrap long lines; for "Goods correctly secured..." force a newline after the title
-        let lines: string[] = []
-        if (it.startsWith("Goods correctly secured:")) {
-          const parts = it.split(":")
-          const head = ((parts[0] || "").trim() + ":").trim()
-          const tail = parts.slice(1).join(":").trim()
-          const headLines = pdf.splitTextToSize(head, maxW) as string[]
-          const tailLines = tail ? (pdf.splitTextToSize(tail, maxW) as string[]) : []
-          lines = [...headLines, ...tailLines]
-        } else {
-          lines = pdf.splitTextToSize(it, maxW) as string[]
-        }
-        if (!lines.length) lines = [truncateToWidth(it, maxW)]
-
-        for (let li = 0; li < lines.length; li++) {
-          pdf.text(lines[li], textX, yy + li * 7)
-        }
-
-        yy += Math.max(1, lines.length) * 7
+        drawStatus(x + 6, yy - 4, ok)
+        const line = truncateToWidth(it, maxW)
+        pdf.text(line, textX, yy)
+        yy += 7
       }
     }
 
@@ -1652,35 +1452,7 @@ const formData = new FormData()
       // signature image / line
       if (imgData) {
         try {
-          // Fit signature image into the box without stretching (prevents distortion across devices)
-try {
-  // @ts-ignore
-  const props = typeof (pdf as any).getImageProperties === "function" ? (pdf as any).getImageProperties(imgData) : null
-  const iw = props?.width || 0
-  const ih = props?.height || 0
-  if (iw > 0 && ih > 0) {
-    const imgRatio = iw / ih
-    const boxRatio = sigImgW / sigImgH
-
-    let drawW = sigImgW
-    let drawH = sigImgH
-    if (imgRatio > boxRatio) {
-      drawW = sigImgW
-      drawH = sigImgW / imgRatio
-    } else {
-      drawH = sigImgH
-      drawW = sigImgH * imgRatio
-    }
-
-    const dx = x + (sigImgW - drawW) / 2
-    const dy = sigY + 6 + (sigImgH - drawH) / 2
-    pdf.addImage(imgData, (imgData.startsWith("data:image/jpeg") ? "JPEG" : "PNG") as any, dx, dy, drawW, drawH)
-  } else {
-    pdf.addImage(imgData, (imgData.startsWith("data:image/jpeg") ? "JPEG" : "PNG") as any, x, sigY + 6, sigImgW, sigImgH)
-  }
-} catch {
-  pdf.addImage(imgData, (imgData.startsWith("data:image/jpeg") ? "JPEG" : "PNG") as any, x, sigY + 6, sigImgW, sigImgH)
-}
+          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
         } catch {
           // fallback to line
           pdf.setDrawColor(148, 163, 184)
@@ -1693,34 +1465,23 @@ try {
         pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
       }
 
-            pdf.setFont("helvetica", "normal")
-            pdf.setFontSize(8)
-            pdf.setTextColor(100, 116, 139)
+      pdf.setFont("helvetica", "normal")
+      pdf.setFontSize(8)
+      pdf.setTextColor(100, 116, 139)
+      pdf.text(title, x, sigY + 30)
 
-            const cx = x + sigImgW / 2
+      if (extra?.inspector) {
+        const inspectorColor = inspectorColors[selectedInspector] || "#111827"
+        const label = "Inspector: "
+        pdf.setFont("helvetica", "bold")
+        pdf.setTextColor(17, 24, 39)
+        pdf.text(label, x, sigY + 30)
+        const lw = pdf.getTextWidth(label)
+        pdf.setTextColor(inspectorColor)
+        pdf.text(selectedInspector || "Not selected", x + lw, sigY + 30)
+      }
 
-            if (extra?.inspector) {
-              // Inspector label + name centered under signature
-              pdf.setFontSize(7.5)
-              pdf.text("Inspector name", cx, sigY + 28.5, { align: "center" })
-
-              const inspectorColor = (typeof authInspectorColor === "string" && authInspectorColor.trim().match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)
-                ? authInspectorColor.trim()
-                : inspectorColors[selectedInspector]) || "#111827"
-              pdf.setFont("helvetica", "bold")
-              pdf.setFontSize(8.2)
-              pdf.setTextColor(inspectorColor)
-
-              const nameLines = pdf.splitTextToSize(selectedInspector || "Not selected", sigImgW) as string[]
-              pdf.text(nameLines, cx, sigY + 32.0, { align: "center", lineHeightFactor: 1.0 })
-            } else {
-              // Driver label centered under signature
-              const labelLines = pdf.splitTextToSize(title, sigImgW) as string[]
-              pdf.text(labelLines, cx, sigY + 30, { align: "center", lineHeightFactor: 1.05 })
-            }
-
-            pdf.setTextColor(17, 24, 39)
-pdf.setTextColor(17, 24, 39)
+      pdf.setTextColor(17, 24, 39)
     }
 
     drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
@@ -1743,7 +1504,7 @@ pdf.setTextColor(17, 24, 39)
       // Build identity hash (used to dedupe between Download and Email)
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
-        .map((p) => ({ id: p.id, url: p.url as string, name: p.name, contentType: p.contentType }))
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
       const identity = {
         variant,
@@ -1781,18 +1542,9 @@ pdf.setTextColor(17, 24, 39)
       for (let i = 0; i < uploadedPhotos.length; i++) {
         const ph = uploadedPhotos[i]
         try {
-          // Prefer offline copy (supports ZIP generation even without internet after upload)
-          const rec = await idbGetPhoto(ph.id).catch(() => null)
-
-          let arrBuf: ArrayBuffer
-          if (rec?.blob) {
-            arrBuf = await rec.blob.arrayBuffer()
-          } else {
-            const resp = await fetch(ph.url)
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-            arrBuf = await resp.arrayBuffer()
-          }
-
+          const resp = await fetch(ph.url)
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const arrBuf = await resp.arrayBuffer()
           const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
           zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
         } catch (e) {
@@ -1908,7 +1660,7 @@ pdf.setTextColor(17, 24, 39)
     clearInspectorSignature()
 
     // Reset inspector
-    setSelectedInspector(authInspectorName || "")
+    setSelectedInspector("")
 
     // Reset remarks + photos
     setRemarks("")
@@ -1924,24 +1676,6 @@ pdf.setTextColor(17, 24, 39)
       })
       return []
     })
-
-    // Clear offline photo cache (prevents stale queued/done photos and frees storage)
-    void (async () => {
-      try {
-        const recs = await idbListPhotos()
-        for (const r of recs) {
-          if (r?.id) {
-            try {
-              await idbDeletePhoto(r.id)
-            } catch {
-              // ignore
-            }
-          }
-        }
-      } catch {
-        // ignore
-      }
-    })()
 
     // Reset other states
     setShowResult(false)
@@ -2058,6 +1792,7 @@ pdf.setTextColor(17, 24, 39)
         if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
+        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
         // Restore signatures
@@ -2110,37 +1845,6 @@ pdf.setTextColor(17, 24, 39)
       }
     }
   }, [isMounted])
-
-  // Restore queued (offline) photos from IndexedDB after refresh/tab kill (Android friendly).
-  useEffect(() => {
-    if (!isMounted || typeof window === "undefined") return
-
-    ;(async () => {
-      const records = await idbListPhotos().catch(() => [])
-      if (!records.length) return
-
-      setPhotos((prev) => {
-        const existingIds = new Set(prev.map((p) => p.id))
-        const restored = records
-          .filter((r) => r && typeof r.id === "string" && r.id.length > 0 && r.blob)
-          .filter((r) => !existingIds.has(r.id))
-          .map((r) => ({
-            id: r.id,
-            name: r.name || "photo.jpg",
-            previewUrl: URL.createObjectURL(r.blob),
-            status: "queued" as const,
-            progress: 0,
-            contentType: r.contentType || "image/jpeg",
-          }))
-        return restored.length ? [...prev, ...restored] : prev
-      })
-
-      if (navigator.onLine) {
-        void tryUploadPendingPhotos()
-      }
-    })()
-  }, [isMounted, tryUploadPendingPhotos])
-
 
 
   // Restore signature drawings on the canvases after a refresh
@@ -2287,23 +1991,15 @@ pdf.setTextColor(17, 24, 39)
 
       const pdf = await buildAdrPdf()
 
-      // Convert PDF to base64
-      let pdfBase64 = ""
-      try {
-        const pdfBuffer = pdf.output("arraybuffer")
-        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
-        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
-        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
-      } catch (convError: any) {
-        console.error("Error processing PDF:", convError)
-        throw new Error(`PDF processing error: ${convError.message}`)
-      }
-
-      setEmailStatus("Sending email...")
+      // IMPORTANT: do NOT send the PDF as base64 in JSON (can exceed Vercel body limits -> HTTP 413).
+      // Instead, upload the PDF directly to Supabase Storage via a signed upload URL, then pass the storage path
+      // to the email API. This keeps the UI/behavior the same while making the request small and reliable.
+      const pdfArrBuf = pdf.output("arraybuffer") as ArrayBuffer
+      if (!pdfArrBuf || (pdfArrBuf as any).byteLength === 0) throw new Error("Generated PDF is empty")
 
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
-        .map((p) => ({ id: p.id, url: p.url as string, name: p.name, contentType: p.contentType }))
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
 
       // Compute the same hash used by Download ZIP (so email updates the same DB entry).
       const identity = {
@@ -2328,13 +2024,43 @@ pdf.setTextColor(17, 24, 39)
       }
       const checklistHash = await sha256Hex(stableStringify(identity))
 
+      setEmailStatus("Uploading PDF...")
+      const presignRes = await fetch("/api/presign-pdf-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ checklistHash, variant }),
+      })
+      const presignData = await presignRes.json().catch(() => ({}))
+      if (!presignRes.ok || !presignData?.success || !presignData?.bucket || !presignData?.path || !presignData?.token) {
+        throw new Error(presignData?.message || `PDF presign failed (${presignRes.status})`)
+      }
+
+      // Upload to Supabase Storage using the signed upload token.
+      // Use 'any' to stay compatible with supabase-js minor changes.
+      const { getSupabaseClient } = await import("@/lib/supabaseClient")
+      const supabase = getSupabaseClient()
+      const anyBucket: any = supabase.storage.from(presignData.bucket)
+      if (typeof anyBucket.uploadToSignedUrl !== "function") {
+        throw new Error("Supabase client does not support uploadToSignedUrl")
+      }
+
+      const pdfBlob = new Blob([pdfArrBuf], { type: "application/pdf" })
+      const uploadResult = await anyBucket.uploadToSignedUrl(presignData.path, presignData.token, pdfBlob, {
+        contentType: "application/pdf",
+      })
+      if (uploadResult?.error) {
+        throw new Error(uploadResult.error.message || "Failed to upload PDF")
+      }
+
+      setEmailStatus("Sending email...")
+
       const response = await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inspectorName: selectedInspector,
-          inspectorEmail: authInspectorEmail,
-          pdfBase64,
+          // Keep the payload small; the server will download from Storage.
+          pdfStoragePath: presignData.path,
           driverName,
           truckPlate,
           trailerPlate,
@@ -2864,9 +2590,18 @@ pdf.setTextColor(17, 24, 39)
 
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-4">Inspector:</h2>
-        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
-          {selectedInspector || "Not selected"}
-        </div>
+        <Select value={selectedInspector} onValueChange={setSelectedInspector}>
+          <SelectTrigger className="bg-black text-white border-gray-700">
+            <SelectValue placeholder="Select inspector" className="text-white" />
+          </SelectTrigger>
+          <SelectContent className="bg-black text-white border-gray-700">
+            {inspectors.map((name) => (
+              <SelectItem key={name} value={name} className="hover:bg-gray-700">
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
         {/* Remarks + Photos (below inspector select, above signatures) */}
         <div className="mt-4">

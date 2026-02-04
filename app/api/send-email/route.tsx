@@ -33,12 +33,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const {
       inspectorName,
-      inspectorEmail,
       driverName,
       truckPlate,
       trailerPlate,
       inspectionDate,
       pdfBase64,
+      pdfStoragePath,
       remarks,
       photos,
       variant,
@@ -46,12 +46,12 @@ export async function POST(req: NextRequest) {
       meta,
     } = body as {
       inspectorName: string
-      inspectorEmail?: string | string[]
       driverName: string
       truckPlate: string
       trailerPlate: string
       inspectionDate: string
-      pdfBase64: string
+      pdfBase64?: string
+      pdfStoragePath?: string
       remarks?: string
       photos?: IncomingPhoto[]
       variant?: "full" | "under1000" | "reduced"
@@ -61,7 +61,8 @@ export async function POST(req: NextRequest) {
 
     console.log("Inspector:", inspectorName)
     console.log("Driver:", driverName)
-    console.log("PDF size:", pdfBase64?.length || 0, "characters")
+    console.log("PDF base64 size:", (pdfBase64 || "").length, "characters")
+    console.log("PDF storage path:", pdfStoragePath || "(none)")
 
     // Validate required email environment variables
     if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
@@ -79,11 +80,12 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (!inspectorName || !pdfBase64) {
+    if (!inspectorName || (!pdfBase64 && !pdfStoragePath)) {
       console.error("Missing required data:", {
         hasInspectorName: !!inspectorName,
-        hasPdfData: !!pdfBase64,
-        pdfDataLength: pdfBase64?.length || 0,
+        hasPdfBase64: !!pdfBase64,
+        hasPdfStoragePath: !!pdfStoragePath,
+        pdfDataLength: (pdfBase64 || "").length,
       })
       return NextResponse.json(
         {
@@ -94,22 +96,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const normalizeRecipientList = (v: unknown): string[] => {
-      if (!v) return []
-      if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean)
-      if (typeof v === "string") {
-        // allow comma/semicolon/space separated lists
-        return v
-          .split(/[;,\s]+/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-      }
-      return []
-    }
-
-    const recipientsFromBody = normalizeRecipientList(inspectorEmail)
-    const recipients = recipientsFromBody.length ? recipientsFromBody : inspectorEmails[inspectorName]
-
+    const recipients = inspectorEmails[inspectorName]
     if (!recipients || recipients.length === 0) {
       console.error("No recipients found for inspector:", inspectorName)
       return NextResponse.json(
@@ -121,28 +108,34 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Convert base64 to buffer
+    // Obtain PDF buffer either from Supabase storage (preferred) or base64 (fallback)
     let pdfBuffer: Buffer
+    const supabase = getSupabaseAdmin()
     try {
-      const cleanedBase64 = typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
-      pdfBuffer = Buffer.from(cleanedBase64, "base64")
-      console.log("PDF buffer size:", pdfBuffer.length, "bytes")
-
-      if (pdfBuffer.length === 0) {
-        throw new Error("PDF buffer is empty")
+      if (typeof pdfStoragePath === "string" && pdfStoragePath.trim()) {
+        const bucket = "adr-checklists"
+        const download = await supabase.storage.from(bucket).download(pdfStoragePath.trim())
+        if (download.error || !download.data) throw new Error(download.error?.message || "PDF download failed")
+        const blob: any = download.data as any
+        const arrBuf = typeof blob.arrayBuffer === "function" ? await blob.arrayBuffer() : await (blob as Response).arrayBuffer()
+        pdfBuffer = Buffer.from(arrBuf)
+      } else {
+        const cleanedBase64 = typeof pdfBase64 === "string" ? pdfBase64.replace(/^data:application\/pdf;base64,/, "") : ""
+        pdfBuffer = Buffer.from(cleanedBase64, "base64")
       }
 
-      // Validate that it's actually a PDF
+      console.log("PDF buffer size:", pdfBuffer.length, "bytes")
+      if (pdfBuffer.length === 0) throw new Error("PDF buffer is empty")
       if (!pdfBuffer.subarray(0, 4).equals(Buffer.from([0x25, 0x50, 0x44, 0x46]))) {
         console.warn("Warning: Buffer doesn't start with PDF signature")
       }
-    } catch (bufferError) {
+    } catch (bufferError: any) {
       console.error("PDF buffer processing error:", bufferError)
       return NextResponse.json(
         {
           success: false,
           message: "Failed to process PDF data",
-          error: bufferError.message,
+          error: bufferError?.message || String(bufferError),
         },
         { status: 500 },
       )
@@ -184,7 +177,6 @@ export async function POST(req: NextRequest) {
     try {
       const hash = (checklistHash || "").trim()
       if (hash) {
-        const supabase = getSupabaseAdmin()
         const checklistType = mapVariant(variant)
         const bucket = "adr-checklists"
         const objectPath = `${checklistType}/${hash}.zip`
@@ -336,6 +328,15 @@ This checklist was generated automatically by the ADR Checklist System.`,
       console.log("✓ Email sent successfully")
       console.log("Message ID:", emailResult.messageId)
 
+      // Best-effort cleanup of temporary PDF (uploaded via signed upload).
+      try {
+        if (typeof pdfStoragePath === "string" && pdfStoragePath.startsWith("tmp-pdf/")) {
+          await supabase.storage.from("adr-checklists").remove([pdfStoragePath])
+        }
+      } catch (e: any) {
+        console.log("Temp PDF cleanup failed:", e?.message || String(e))
+      }
+
       // Prepare response message
       let message = `Email sent successfully to ${recipients.length} recipient(s)`
       if (storedUrl) message += " and saved to Supabase (ZIP)"
@@ -362,6 +363,7 @@ This checklist was generated automatically by the ADR Checklist System.`,
         { status: 500 },
       )
     }
+
   } catch (error) {
     console.error("❌ Email API error:", error)
     return NextResponse.json(
