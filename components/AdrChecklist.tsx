@@ -345,10 +345,11 @@ const resizeSignatureCanvas = (canvas: HTMLCanvasElement) => {
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 }
 
-const exportSignaturePng = (canvas: HTMLCanvasElement) => {
-  // Export to a stable resolution image so PDF output looks consistent across devices.
+const exportSignatureImage = (canvas: HTMLCanvasElement) => {
+  // Export to a stable, size-efficient image so PDF output looks consistent across devices
+  // and doesn't exceed request body limits when sending by email.
   try {
-    const targetW = 1600
+    const targetW = 900 // keep quality but reduce payload
     const ratio = canvas.height > 0 ? canvas.width / canvas.height : 5
     const targetH = Math.max(1, Math.round(targetW / ratio))
 
@@ -356,17 +357,24 @@ const exportSignaturePng = (canvas: HTMLCanvasElement) => {
     out.width = targetW
     out.height = targetH
     const octx = out.getContext("2d")
-    if (!octx) return canvas.toDataURL("image/png")
+    if (!octx) return canvas.toDataURL("image/jpeg", 0.78)
 
+    // white background for jpeg
     octx.fillStyle = "#fff"
     octx.fillRect(0, 0, out.width, out.height)
     octx.drawImage(canvas, 0, 0, out.width, out.height)
 
-    return out.toDataURL("image/png")
+    // JPEG is significantly smaller than PNG for signatures with a white background.
+    return out.toDataURL("image/jpeg", 0.78)
   } catch {
-    return canvas.toDataURL("image/png")
+    try {
+      return canvas.toDataURL("image/jpeg", 0.78)
+    } catch {
+      return canvas.toDataURL("image/png")
+    }
   }
 }
+
 
   // Initialize canvas for signatures
 const initializeCanvas = () => {
@@ -464,7 +472,7 @@ const initializeInspectorCanvas = () => {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setSignatureData(exportSignaturePng(canvas))
+      setSignatureData(exportSignatureImage(canvas))
     }
 
     // Mouse events
@@ -573,7 +581,7 @@ const initializeInspectorCanvas = () => {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setInspectorSignatureData(exportSignaturePng(canvas))
+      setInspectorSignatureData(exportSignatureImage(canvas))
     }
 
     // Mouse events
@@ -1666,12 +1674,12 @@ try {
 
     const dx = x + (sigImgW - drawW) / 2
     const dy = sigY + 6 + (sigImgH - drawH) / 2
-    pdf.addImage(imgData, "PNG", dx, dy, drawW, drawH)
+    pdf.addImage(imgData, (imgData.startsWith("data:image/jpeg") ? "JPEG" : "PNG") as any, dx, dy, drawW, drawH)
   } else {
-    pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+    pdf.addImage(imgData, (imgData.startsWith("data:image/jpeg") ? "JPEG" : "PNG") as any, x, sigY + 6, sigImgW, sigImgH)
   }
 } catch {
-  pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+  pdf.addImage(imgData, (imgData.startsWith("data:image/jpeg") ? "JPEG" : "PNG") as any, x, sigY + 6, sigImgW, sigImgH)
 }
         } catch {
           // fallback to line
