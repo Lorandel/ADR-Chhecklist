@@ -7,6 +7,12 @@ type IncomingPhoto = {
   contentType?: string
 }
 export const runtime = "nodejs"
+
+function getBearerToken(req: NextRequest): string {
+  const h = req.headers.get("authorization") || ""
+  const m = h.match(/^Bearer\s+(.+)$/i)
+  return m ? m[1] : ""
+}
 const inspectorEmails: Record<string, string[]> = {
   "Eduard Tudose": ["eduard.tudose@alblas.nl"],
   "Angela Ilis": ["angela.ilis@alblas.nl"],
@@ -33,6 +39,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const {
       inspectorName,
+      inspectorEmail,
       driverName,
       truckPlate,
       trailerPlate,
@@ -46,6 +53,7 @@ export async function POST(req: NextRequest) {
       meta,
     } = body as {
       inspectorName: string
+      inspectorEmail?: string
       driverName: string
       truckPlate: string
       trailerPlate: string
@@ -80,29 +88,47 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (!inspectorName || (!pdfBase64 && !pdfStoragePath)) {
-      console.error("Missing required data:", {
-        hasInspectorName: !!inspectorName,
+    if ((!pdfBase64 || typeof pdfBase64 !== "string") && (!pdfStoragePath || typeof pdfStoragePath !== "string")) {
+      console.error("Missing PDF data for email", {
         hasPdfBase64: !!pdfBase64,
         hasPdfStoragePath: !!pdfStoragePath,
-        pdfDataLength: (pdfBase64 || "").length,
       })
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Missing inspector name or PDF data",
-        },
-        { status: 400 },
-      )
+      return NextResponse.json({ success: false, message: "Missing PDF data" }, { status: 400 })
     }
 
-    const recipients = inspectorEmails[inspectorName]
+    const supabase = getSupabaseAdmin()
+
+    const token = getBearerToken(req)
+
+    // Prefer inspector email assigned to authenticated account (set by admin).
+    let resolvedInspectorEmail = (typeof inspectorEmail === "string" ? inspectorEmail : "").trim()
+
+    if (token) {
+      const { data: u, error: uErr } = await supabase.auth.getUser(token)
+      if (!uErr) {
+        const metaEmail = (u.user?.user_metadata as any)?.inspectorEmail
+        if (typeof metaEmail === "string" && metaEmail.trim()) {
+          resolvedInspectorEmail = metaEmail.trim()
+        }
+      }
+    }
+
+    const recipients =
+      resolvedInspectorEmail
+        ? resolvedInspectorEmail
+            .split(",")
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : typeof inspectorName === "string" && inspectorName.trim()
+          ? inspectorEmails[inspectorName.trim()] || []
+          : []
+
     if (!recipients || recipients.length === 0) {
-      console.error("No recipients found for inspector:", inspectorName)
+      console.error("No recipients resolved for email", { inspectorName, resolvedInspectorEmail })
       return NextResponse.json(
         {
           success: false,
-          message: "No email recipients found for this inspector",
+          message: "Missing inspector email. Ask admin to set Inspector email (ZIP recipient) for this account.",
         },
         { status: 400 },
       )
@@ -110,7 +136,6 @@ export async function POST(req: NextRequest) {
 
     // Obtain PDF buffer either from Supabase storage (preferred) or base64 (fallback)
     let pdfBuffer: Buffer
-    const supabase = getSupabaseAdmin()
     try {
       if (typeof pdfStoragePath === "string" && pdfStoragePath.trim()) {
         const bucket = "adr-checklists"
