@@ -1,13 +1,17 @@
 "use client"
 
-import type { RefObject } from "react"
+import type { RefObject, ChangeEvent } from "react"
 import { useState, useEffect, useRef, useCallback, createRef, useMemo } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useAuth } from "@/components/auth/AuthProvider"
 import Image from "next/image"
+import { compressImageFile } from "@/lib/imageCompress"
+import { stableStringify } from "@/lib/stableStringify"
+import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
+import { sha256Hex } from "@/lib/hash"
 
 const capitalizeWords = (str: string) =>
   str
@@ -17,6 +21,19 @@ const capitalizeWords = (str: string) =>
 
 export type ChecklistVariant = "full" | "under1000"
 
+type PhotoUploadStatus = "queued" | "uploading" | "done" | "error"
+
+type UploadedPhoto = {
+  id: string
+  name: string
+  previewUrl: string
+  status: PhotoUploadStatus
+  progress: number // 0-100
+  url?: string // public blob url when uploaded
+  contentType?: string
+  error?: string
+}
+
 type ADRChecklistProps = {
   variant: ChecklistVariant
   onBack?: () => void
@@ -25,6 +42,11 @@ type ADRChecklistProps = {
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
   const storageKey = `adrChecklistData_${variant}`
+
+  const { inspectorName, inspectorColor, inspectorEmail, session } = useAuth()
+  const inspectorNameText = (inspectorName || "").trim()
+  const inspectorEmailText = (inspectorEmail || "").trim()
+  const inspectorColorHex = (inspectorColor || "").trim()
 
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
@@ -42,7 +64,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [showResult, setShowResult] = useState(false)
   const [allChecked, setAllChecked] = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
-  const [selectedInspector, setSelectedInspector] = useState("")
   const [dateValid, setDateValid] = useState({
     drivingLicense: false,
     adrCertificate: false,
@@ -55,6 +76,18 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [trailerDocExpired, setTrailerDocExpired] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<string | null>(null)
+
+  // Remarks + photo uploads
+  const [remarks, setRemarks] = useState("")
+  const [photos, setPhotos] = useState<UploadedPhoto[]>([])
+  const photoInputRef = useRef<HTMLInputElement>(null)
+  const uploadXhrRefs = useRef<Record<string, XMLHttpRequest>>({})
+
+  // Throttle progress updates + prevent UI jitter
+  const lastProgRef = useRef<Record<string, { t: number; p: number }>>({})
+  const uploadingRunnerRef = useRef(false)
+  const lastAttemptRef = useRef<Record<string, number>>({})
+
 
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -273,16 +306,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const removed = new Set(["ADR plate front + back are open"])
     return afterLoadingItemsBase.filter((item) => !removed.has(item))
   }, [variant])
-
-  const inspectors = [
-    "Eduard Tudose",
-    "Angela Ilis",
-    "Lucian Sistac",
-    "Alexandru Dogariu",
-    "Martian Gherasim",
-    "Robert Kerekes",
-    "Alexandru Florea",
-  ]
 
   // Initialize canvas for signatures
   const initializeCanvas = () => {
@@ -755,473 +778,810 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     return isExpired
   }
 
-  // Generate PDF report (styled, single page, shared for Download + Email)
-  const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-    const bytes = new Uint8Array(buffer)
-    const chunkSize = 0x8000
-    let binary = ""
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, i + chunkSize)
-      binary += String.fromCharCode(...chunk)
-    }
-    return btoa(binary)
-  }
+  const uploadPhoto = useCallback(
+    (file: File, photoId: string) => {
+      return new Promise<{ url: string; contentType: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        uploadXhrRefs.current[photoId] = xhr
 
-  const buildPdfDocument = async () => {
-    if (!isMounted || typeof window === "undefined") throw new Error("Not mounted")
+        xhr.open("POST", "/api/upload-photo")
+        xhr.responseType = "json"
 
-    const { jsPDF } = await import("jspdf")
-    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+        xhr.upload.onprogress = (evt) => {
+          if (!evt.lengthComputable) return
+          const progress = Math.round((evt.loaded / evt.total) * 100)
+          const now = Date.now()
+          const last = lastProgRef.current[photoId] || { t: 0, p: -1 }
+          // update at most ~8 times/sec OR when progress jumps significantly
+          if (progress === last.p) return
+          if (now - last.t < 120 && progress - last.p < 2) return
+          lastProgRef.current[photoId] = { t: now, p: progress }
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, progress, status: "uploading" } : p)))
+        }
 
-    const pageWidth = pdf.internal.pageSize.getWidth()
-    const pageHeight = pdf.internal.pageSize.getHeight()
+        xhr.onload = () => {
+          const res = xhr.response
+          if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
+            setPhotos((prev) =>
+              prev.map((p) =>
+                p.id === photoId
+                  ? { ...p, progress: 100, status: "done", url: res.url, contentType: res.contentType || file.type }
+                  : p,
+              ),
+            )
+            resolve({ url: res.url, contentType: res.contentType || file.type })
+            return
+          }
+          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          reject(new Error(message))
+        }
 
-    const margin = 10
-    const contentWidth = pageWidth - margin * 2
-    const sigBoxH = 28
-    const sigTop = pageHeight - margin - sigBoxH
+        xhr.onerror = () => {
+          const message = "Upload failed (network error)"
+          const offline = typeof navigator !== "undefined" ? !navigator.onLine : false
+          setPhotos((prev) =>
+            prev.map((p) =>
+              p.id === photoId
+                ? offline
+                  ? { ...p, status: "queued", progress: 0, error: message }
+                  : { ...p, status: "error", error: message }
+                : p,
+            ),
+          )
+          reject(new Error(message))
+        }
 
-    const safe = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : "-")
+        const formData = new FormData()
+        formData.append("file", file)
+        xhr.send(formData)
 
-    const inspectorColors: Record<string, string> = {
-      "Alexandru Dogariu": "#FF8C00",
-      "Robert Kerekes": "#8B4513",
-      "Eduard Tudose": "#000000",
-      "Angela Ilis": "#FF69B4",
-      "Lucian Sistac": "#1E90FF",
-      "Martian Gherasim": "#008000",
-      "Alexandru Florea": "#DAA520",
-    }
-
-    const loadCache = new Map<string, string>()
-    const loadImageAsDataUrl = async (url: string) => {
-      if (loadCache.has(url)) return loadCache.get(url) as string
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`Failed to fetch image: ${url}`)
-      const blob = await res.blob()
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result as string)
-        reader.readAsDataURL(blob)
+        // Mark as uploading immediately
+        setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "uploading", progress: 0 } : p)))
       })
-      loadCache.set(url, dataUrl)
-      return dataUrl
-    }
+    },
+    [setPhotos],
+  )
 
-    // ---- watermark (center, uses file transparency; no "extra" fading) ----
-    let watermarkData: string | null = null
-    try {
-      watermarkData = await loadImageAsDataUrl("/images/albias-watermark.png")
-    } catch {
-      watermarkData = null
-    }
+  const handlePhotoInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
 
-    // ---- helpers (professional status boxes) ---- (professional status boxes) ----
-    const drawStatus = (x: number, y: number, status: "ok" | "bad" | "na") => {
-      const size = 5.2
-      pdf.setLineWidth(0.35)
-
-      if (status === "ok") {
-        pdf.setFillColor(22, 163, 74) // green
-        pdf.setDrawColor(22, 163, 74)
-        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "F")
-        // check mark
-        pdf.setDrawColor(255, 255, 255)
-        pdf.setLineWidth(0.9)
-        pdf.line(x + 1.1, y + 2.9, x + 2.1, y + 3.9)
-        pdf.line(x + 2.1, y + 3.9, x + 4.3, y + 1.3)
-      } else if (status === "bad") {
-        pdf.setFillColor(220, 38, 38) // red
-        pdf.setDrawColor(220, 38, 38)
-        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "F")
-        // X
-        pdf.setDrawColor(255, 255, 255)
-        pdf.setLineWidth(0.9)
-        pdf.line(x + 1.2, y + 1.2, x + 4.0, y + 4.0)
-        pdf.line(x + 4.0, y + 1.2, x + 1.2, y + 4.0)
-      } else {
-        pdf.setDrawColor(156, 163, 175)
-        pdf.setFillColor(255, 255, 255)
-        pdf.roundedRect(x, y, size, size, 1.1, 1.1, "S")
+    const newPhotos: UploadedPhoto[] = files.map((file) => {
+      const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      return {
+        id,
+        name: file.name || `photo_${Date.now()}.jpg`,
+        previewUrl: URL.createObjectURL(file),
+        status: "queued",
+        progress: 0,
+        contentType: file.type,
       }
-
-      // reset
-      pdf.setDrawColor(17, 24, 39)
-      pdf.setLineWidth(0.2)
-    }
-
-    const sectionHeader = (title: string, y: number) => {
-      pdf.setFillColor(248, 250, 252)
-      pdf.setDrawColor(226, 232, 240)
-      pdf.setLineWidth(0.35)
-      pdf.roundedRect(margin, y, contentWidth, 7, 2, 2, "FD")
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(10)
-      pdf.setTextColor(15, 23, 42)
-      pdf.text(title, margin + contentWidth / 2, y + 5, { align: "center" })
-      return y + 9
-    }
-
-    const kv = (label: string, value: string, x: number, y: number, valueColor = "#0F172A") => {
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(8.7)
-      pdf.setTextColor(51, 65, 85)
-      pdf.text(label, x, y)
-      const lw = pdf.getTextWidth(label) + 1
-      pdf.setFont("helvetica", "normal")
-      pdf.setTextColor(valueColor)
-      pdf.text(value, x + lw, y)
-      pdf.setTextColor(15, 23, 42)
-    }
-
-    const expiryColor = (expired: boolean) => (expired ? "#DC2626" : "#16A34A")
-
-    // ---- header ----
-    let y = margin
-
-    // top bar
-    pdf.setFillColor(255, 255, 255)
-    pdf.setDrawColor(226, 232, 240)
-    pdf.setLineWidth(0.35)
-    pdf.roundedRect(margin, y, contentWidth, 18, 3, 3, "FD")
-
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(16)
-    pdf.setTextColor(15, 23, 42)
-    pdf.text("ADR Checklist", pageWidth / 2, y + 7, { align: "center" })
-
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(9)
-    pdf.setTextColor(51, 65, 85)
-    pdf.text(variant === "under1000" ? "Reduced (Under 1000 pts)" : "Full (1000+ pts)", pageWidth / 2, y + 14, {
-      align: "center",
     })
 
-    pdf.setFont("helvetica", "normal")
-    pdf.setFontSize(9)
-    pdf.setTextColor(71, 85, 105)
-    pdf.text(`Inspection: ${safe(checkDate)}`, pageWidth - margin - 3, y + 7, { align: "right" })
+    setPhotos((prev) => [...prev, ...newPhotos])
 
-    y += 22
+    // Persist photos offline (so they survive refresh) and upload sequentially (less UI jitter)
+    for (let idx = 0; idx < newPhotos.length; idx++) {
+      const p = newPhotos[idx]
+      const originalFile = files[idx]
 
-    // ---- details ----
-    pdf.setFillColor(255, 255, 255)
-    pdf.setDrawColor(226, 232, 240)
-    pdf.roundedRect(margin, y, contentWidth, 26, 3, 3, "FD")
-
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(10)
-    pdf.setTextColor(15, 23, 42)
-    pdf.text("Load details", margin + 3, y + 6)
-
-    const leftX = margin + 3
-    const rightX = margin + contentWidth / 2 + 2
-
-    kv("Driver:", safe(driverName), leftX, y + 12)
-    kv("Truck:", safe(truckPlate), leftX, y + 17)
-    kv("Trailer:", safe(trailerPlate), leftX, y + 22)
-
-    kv(
-      "Driving licence:",
-      drivingLicenseDate.month && drivingLicenseDate.year
-        ? `${drivingLicenseDate.month}/${drivingLicenseDate.year}${drivingLicenseExpired ? " (EXPIRED)" : ""}`
-        : "-",
-      rightX,
-      y + 12,
-      drivingLicenseDate.month && drivingLicenseDate.year ? expiryColor(drivingLicenseExpired) : "#0F172A",
-    )
-
-    kv(
-      "Truck doc:",
-      truckDocDate.month && truckDocDate.year ? `${truckDocDate.month}/${truckDocDate.year}${truckDocExpired ? " (EXPIRED)" : ""}` : "-",
-      rightX,
-      y + 17,
-      truckDocDate.month && truckDocDate.year ? expiryColor(truckDocExpired) : "#0F172A",
-    )
-
-    kv(
-      "Trailer doc:",
-      trailerDocDate.month && trailerDocDate.year
-        ? `${trailerDocDate.month}/${trailerDocDate.year}${trailerDocExpired ? " (EXPIRED)" : ""}`
-        : "-",
-      rightX,
-      y + 22,
-      trailerDocDate.month && trailerDocDate.year ? expiryColor(trailerDocExpired) : "#0F172A",
-    )
-
-    y += 32
-
-    // ---- Equipment (two columns, with images) ----
-    y = sectionHeader("Equipment", y)
-
-    const colGap = 6
-    const colW = (contentWidth - colGap) / 2
-    const col1X = margin
-    const col2X = margin + colW + colGap
-
-    const rowH = 10
-    const icon = 8
-    const pad = 2.2
-    const statusSize = 5.6
-
-    // Preload equipment images (best-effort)
-    const uniquePaths = Array.from(
-      new Set(
-        equipmentItems
-          .map((it: any) => (it?.additionalImage ? it.additionalImage : it?.image))
-          .filter(Boolean) as string[],
-      ),
-    )
-
-    const imageMap = new Map<string, string>()
-    await Promise.all(
-      uniquePaths.map(async (p) => {
-        try {
-          const data = await loadImageAsDataUrl(p)
-          imageMap.set(p, data)
-        } catch {
-          // ignore
-        }
-      }),
-    )
-
-    const getEquipmentStatus = (itemName: string, hasDate?: boolean) => {
-      if (hasDate) {
-        const m = expiryDates[itemName]?.month || ""
-        const yr = expiryDates[itemName]?.year || ""
-        const complete = m.length === 2 && yr.length === 4
-        if (!complete) return "na" as const
-        return expiredItems[itemName] ? ("bad" as const) : checkedItems[itemName] ? ("ok" as const) : ("bad" as const)
-      }
-      return checkedItems[itemName] ? ("ok" as const) : ("bad" as const)
-    }
-
-    const renderEquipmentRow = (item: any, x: number, yy: number) => {
-      if (!item) return
-      // row container
-      pdf.setDrawColor(226, 232, 240)
-      pdf.setFillColor(255, 255, 255)
-      pdf.roundedRect(x, yy, colW, rowH, 2, 2, "FD")
-
-      // icon frame
-      const ix = x + pad
-      const iy = yy + (rowH - icon) / 2
-      pdf.setDrawColor(203, 213, 225)
-      pdf.setFillColor(248, 250, 252)
-      pdf.roundedRect(ix, iy, icon, icon, 1.6, 1.6, "FD")
-
-      const imgPath = item.additionalImage ? item.additionalImage : item.image
-      const imgData = imgPath ? imageMap.get(imgPath) : null
-      if (imgData) {
-        try {
-          const padding = 0.6
-          const inner = icon - padding * 2
-          // Keep aspect ratio (no stretch) and center inside the icon box
-          try {
-            // @ts-ignore - available in jsPDF at runtime
-            const props = pdf.getImageProperties(imgData)
-            const iw = props?.width || inner
-            const ih = props?.height || inner
-            const ratio = iw / ih
-
-            let w = inner
-            let h = inner
-            if (ratio > 1) {
-              h = inner / ratio
-            } else if (ratio < 1) {
-              w = inner * ratio
-            }
-
-            const xImg = ix + padding + (inner - w) / 2
-            const yImg = iy + padding + (inner - h) / 2
-            pdf.addImage(imgData, "PNG", xImg, yImg, w, h)
-          } catch {
-            pdf.addImage(imgData, "PNG", ix + padding, iy + padding, inner, inner)
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      // label + expiry
-      const textX = ix + icon + 2.2
-      const maxTextW = colW - (textX - x) - statusSize - 3
-      pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(8.6)
-      pdf.setTextColor(15, 23, 42)
-
-      const name = item.name || ""
-      const note =
-        name === "Flashlight" ||
-        name === "Rubber gloves" ||
-        name === "Safety glasses" ||
-        name === "Mask + filter (ADR class 6.1/2.3)" ||
-        name === "Collection bucket"
-          ? " (1/driver)"
-          : ""
-
-      const line1 = pdf.splitTextToSize(name + note, maxTextW)
-      pdf.text((line1[0] as string) || "", textX, yy + 4.0)
-
-      // expiry (small, right under)
-      if (item.hasDate) {
-        const m = expiryDates[name]?.month || ""
-        const yr = expiryDates[name]?.year || ""
-        if (m && yr) {
-          const expStr = `${m}/${yr}${expiredItems[name] ? " EXP" : ""}`
-          pdf.setFont("helvetica", "bold")
-          pdf.setFontSize(7.2)
-          pdf.setTextColor(expiryColor(!!expiredItems[name]))
-          pdf.text(expStr, textX, yy + 7.3)
-        } else {
-          pdf.setFont("helvetica", "normal")
-          pdf.setFontSize(7.0)
-          pdf.setTextColor(100, 116, 139)
-          pdf.text("Expiry: -", textX, yy + 7.2)
-        }
-      }
-
-      // status box (right)
-      const status = getEquipmentStatus(name, item.hasDate)
-      drawStatus(x + colW - statusSize - 2.2, yy + (rowH - statusSize) / 2, status)
-    }
-
-    const leftItems = equipmentItems.slice(0, Math.ceil(equipmentItems.length / 2))
-    const rightItems = equipmentItems.slice(Math.ceil(equipmentItems.length / 2))
-    const rows = Math.max(leftItems.length, rightItems.length)
-
-    for (let i = 0; i < rows; i++) {
-      const yy = y + i * (rowH + 1.8)
-      if (yy + rowH + 4 > sigTop) break
-      renderEquipmentRow(leftItems[i], col1X, yy)
-      renderEquipmentRow(rightItems[i], col2X, yy)
-    }
-
-    y += rows * (rowH + 1.8) + 2
-
-    // ---- Before Loading / After Loading (compact, two columns) ----
-    const renderChecklistSection = (title: string, items: string[], checkedMap: Record<string, boolean>, startY: number) => {
-      let cy = sectionHeader(title, startY)
-      const row = 7.0
-      const col1 = items.slice(0, Math.ceil(items.length / 2))
-      const col2 = items.slice(Math.ceil(items.length / 2))
-
-      const max = Math.max(col1.length, col2.length)
-      for (let i = 0; i < max; i++) {
-        const yy = cy + i * row
-        if (yy + row + 3 > sigTop) break
-
-        const drawLine = (label: string | undefined, x: number) => {
-          if (!label) return
-          const status: "ok" | "bad" = checkedMap[label] ? "ok" : "bad"
-          drawStatus(x + 2, yy - 3.6, status)
-          pdf.setFont("helvetica", "normal")
-          pdf.setFontSize(8.0)
-          pdf.setTextColor(15, 23, 42)
-          let wrapped: string[] = []
-          if (label.startsWith("Goods correctly secured:")) {
-            const parts = label.split(":")
-            const head = (parts[0] || "").trim() + ":"
-            const tail = parts.slice(1).join(":").trim()
-            wrapped = [head, ...(pdf.splitTextToSize(tail, colW - 10) as string[])]
-          } else {
-            wrapped = pdf.splitTextToSize(label, colW - 10) as string[]
-          }
-          pdf.text(wrapped, x + 9, yy, { lineHeightFactor: 1.1 })
-        }
-
-        drawLine(col1[i], col1X)
-        drawLine(col2[i], col2X)
-      }
-      return cy + max * row + 2
-    }
-
-    if (y < sigTop - 20) y = renderChecklistSection("Before Loading", beforeLoadingItems, beforeLoadingChecked, y)
-    if (y < sigTop - 20) y = renderChecklistSection("After Loading", afterLoadingItems, afterLoadingChecked, y)
-    // Watermark on top (low opacity) to remain visible even over boxes
-    if (watermarkData) {
+      // Reduce image size automatically before upload (faster uploads, smaller ZIP/email).
+      let fileToUpload: File = originalFile
       try {
-        // jsPDF supports GState in v2.x; fall back if unavailable
-        const GStateCtor = (pdf as any).GState
-        if (GStateCtor) {
-          const prev = (pdf as any).getGState?.()
-          ;(pdf as any).setGState(new GStateCtor({ opacity: 0.12 }))
-          const wmW = 120
-          const wmH = 120
-          pdf.addImage(watermarkData, "PNG", (pageWidth - wmW) / 2, (pageHeight - wmH) / 2, wmW, wmH)
-          if (prev) (pdf as any).setGState(prev)
-          else (pdf as any).setGState(new GStateCtor({ opacity: 1 }))
-        } else {
-          const wmW = 120
-          const wmH = 120
-          pdf.addImage(watermarkData, "PNG", (pageWidth - wmW) / 2, (pageHeight - wmH) / 2, wmW, wmH)
+        fileToUpload = await compressImageFile(originalFile, { maxSide: 1600, quality: 0.75, mimeType: "image/jpeg" })
+      } catch {
+        fileToUpload = originalFile
+      }
+
+      // If compression changed name/type, keep metadata in state (used later when zipping/emailing).
+      if (fileToUpload !== originalFile) {
+        setPhotos((prev) =>
+          prev.map((ph) => (ph.id === p.id ? { ...ph, name: fileToUpload.name, contentType: fileToUpload.type } : ph)),
+        )
+      }
+
+      // Save blob in IndexedDB (offline support)
+      try {
+        await idbPutPhoto({
+          id: p.id,
+          blob: fileToUpload,
+          name: fileToUpload.name,
+          contentType: fileToUpload.type,
+          createdAt: Date.now(),
+        })
+      } catch {
+        // IndexedDB can be unavailable in some private modes; ignore
+      }
+
+      // If offline, keep queued; upload will resume automatically when online
+      if (typeof navigator !== "undefined" && !navigator.onLine) continue
+
+      try {
+        await uploadPhoto(fileToUpload, p.id)
+        try {
+          await idbDeletePhoto(p.id)
+        } catch {}
+      } catch {
+        // State already updated in uploadPhoto
+      }
+    }
+
+    // Allow selecting the same file again
+    e.target.value = ""
+  }
+
+  // Retry queued photos automatically when the connection comes back.
+  const tryUploadPendingPhotos = useCallback(async () => {
+    if (uploadingRunnerRef.current) return
+    if (typeof navigator !== "undefined" && !navigator.onLine) return
+
+    const pending = photos.filter((p) => p.status === "queued")
+    if (pending.length === 0) return
+
+    uploadingRunnerRef.current = true
+    try {
+      for (const p of pending) {
+        const last = lastAttemptRef.current[p.id] || 0
+        if (Date.now() - last < 8000) continue // avoid rapid retry jitter
+        lastAttemptRef.current[p.id] = Date.now()
+
+        const rec = await idbGetPhoto(p.id).catch(() => null)
+        if (!rec?.blob) continue
+
+        const file = new File([rec.blob], rec.name || p.name, {
+          type: rec.contentType || p.contentType || "image/jpeg",
+        })
+
+        try {
+          await uploadPhoto(file, p.id)
+          try {
+            await idbDeletePhoto(p.id)
+          } catch {}
+        } catch {
+          // keep queued/error as set by uploadPhoto
         }
+      }
+    } finally {
+      uploadingRunnerRef.current = false
+    }
+  }, [photos, uploadPhoto])
+
+  useEffect(() => {
+    const onOnline = () => {
+      void tryUploadPendingPhotos()
+    }
+    window.addEventListener("online", onOnline)
+    // attempt once on mount (if there are queued photos restored)
+    void tryUploadPendingPhotos()
+    return () => window.removeEventListener("online", onOnline)
+  }, [tryUploadPendingPhotos])
+
+  const removePhoto = (photoId: string) => {
+    const xhr = uploadXhrRefs.current[photoId]
+    if (xhr && xhr.readyState !== XMLHttpRequest.DONE) {
+      try {
+        xhr.abort()
       } catch {
         // ignore
       }
     }
 
-
-    // ---- signatures (fixed bottom) ----
-    pdf.setFillColor(255, 255, 255)
-    pdf.setDrawColor(226, 232, 240)
-    pdf.roundedRect(margin, sigTop, contentWidth, sigBoxH, 3, 3, "FD")
-
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(10)
-    pdf.setTextColor(15, 23, 42)
-    pdf.text("Signatures", margin + 3, sigTop + 6)
-
-    const sigW = 72
-    const sigH = 14
-    const driverX = margin + 3
-    const inspectorX = margin + contentWidth - 3 - sigW
-
-    pdf.setDrawColor(148, 163, 184)
-    pdf.setLineWidth(0.35)
-    pdf.roundedRect(driverX, sigTop + 10, sigW, sigH, 2, 2, "S")
-    pdf.roundedRect(inspectorX, sigTop + 10, sigW, sigH, 2, 2, "S")
-
-    if (signatureData) {
-      pdf.addImage(signatureData, "PNG", driverX + 1, sigTop + 10.8, sigW - 2, sigH - 1.6)
-    }
-    if (inspectorSignatureData) {
-      pdf.addImage(inspectorSignatureData, "PNG", inspectorX + 1, sigTop + 10.8, sigW - 2, sigH - 1.6)
-    }
-
-    const driverLabel = signatureData ? "Driver signature" : "Driver signature (not signed)"
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(8.6)
-    pdf.setTextColor(51, 65, 85)
-    pdf.text(driverLabel, driverX + sigW / 2, sigTop + 26, { align: "center" })
-
-    const inspectorColor = inspectorColors[selectedInspector] || "#0F172A"
-    const inspectorLabel = safe(selectedInspector) || "Inspector name"
-    pdf.setFont("helvetica", "bold")
-    pdf.setFontSize(8.6)
-    if (inspectorLabel === "Inspector name") {
-      pdf.setTextColor(51, 65, 85)
-    } else {
-      pdf.setTextColor(inspectorColor)
-    }
-    pdf.text(inspectorLabel, inspectorX + sigW / 2, sigTop + 26, { align: "center" })
-
-    // Single page by construction: we never add pages
-    return pdf
+    setPhotos((prev) => {
+      const toRemove = prev.find((p) => p.id === photoId)
+      if (toRemove?.previewUrl) {
+        try {
+          URL.revokeObjectURL(toRemove.previewUrl)
+        } catch {
+          // ignore
+        }
+      }
+      return prev.filter((p) => p.id !== photoId)
+    })
   }
 
-  const generatePDF = async () => {
-    if (!isMounted || typeof window === "undefined") return
-    setIsPdfGenerating(true)
+
+
+  // Build a single-page, stylized ADR PDF (used for both Download ZIP and Send Email)
+  const buildAdrPdf = async () => {
+    const { jsPDF } = await import("jspdf")
+
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+    const pageW = pdf.internal.pageSize.getWidth()
+    const pageH = pdf.internal.pageSize.getHeight()
+
+    const margin = 10
+    const gap = 6
+    const headerH = 18
+
+    const safeVal = (v: string) => {
+      const s = (v || "").toString().trim()
+      return s.length ? s : "-"
+    }
+
+    const formatExpiry = (
+      d: { month: string; year: string },
+      expired: boolean,
+      opts?: { notApplicable?: boolean },
+    ): { text: string; color: string } => {
+      if (opts?.notApplicable) return { text: "N/A", color: "#6B7280" }
+      if (!d?.month || !d?.year) return { text: "-", color: "#111827" }
+      return {
+        text: `${d.month}/${d.year}${expired ? " (EXPIRED)" : ""}`,
+        color: expired ? "#B91C1C" : "#166534",
+      }
+    }
+
+    const isJpeg = (url: string) => /\.(jpe?g)$/i.test(url)
+
+    const imageCache = new Map<string, string>()
+    const loadImageDataUrl = async (url: string) => {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`Failed to load image: ${url} (${res.status})`)
+      const blob = await res.blob()
+      return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(reader.result as string)
+        reader.onerror = () => reject(new Error(`Failed to read image as DataURL: ${url}`))
+        reader.readAsDataURL(blob)
+      })
+    }
+
+    const getImage = async (url: string) => {
+      if (imageCache.has(url)) return imageCache.get(url) as string
+      const dataUrl = await loadImageDataUrl(url)
+      imageCache.set(url, dataUrl)
+      return dataUrl
+    }
+
+    const truncateToWidth = (str: string, maxWidth: number) => {
+      const s = (str || "").toString()
+      if (pdf.getTextWidth(s) <= maxWidth) return s
+      let out = s
+      while (out.length > 0 && pdf.getTextWidth(out + "…") > maxWidth) {
+        out = out.slice(0, -1)
+      }
+      return out.length ? out + "…" : ""
+    }
+
+    const drawStatus = (x: number, y: number, ok: boolean) => {
+      const w = 5
+      const h = 5
+
+      pdf.setLineWidth(0.2)
+      pdf.setDrawColor(203, 213, 225) // slate-300
+
+      if (ok) {
+        pdf.setFillColor(230, 244, 234) // green-50-ish
+      } else {
+        pdf.setFillColor(252, 232, 230) // red-50-ish
+      }
+
+      // rounded status box
+      // @ts-ignore - roundedRect exists at runtime
+      pdf.roundedRect(x, y, w, h, 1.2, 1.2, "FD")
+
+      if (ok) {
+        pdf.setDrawColor(22, 101, 52)
+        pdf.setLineWidth(0.9)
+        pdf.line(x + 1.1, y + 2.7, x + 2.2, y + 3.8)
+        pdf.line(x + 2.2, y + 3.8, x + 4.0, y + 1.2)
+      } else {
+        pdf.setDrawColor(185, 28, 28)
+        pdf.setLineWidth(0.9)
+        pdf.line(x + 1.2, y + 1.2, x + 3.8, y + 3.8)
+        pdf.line(x + 3.8, y + 1.2, x + 1.2, y + 3.8)
+      }
+
+      pdf.setLineWidth(0.2)
+      pdf.setDrawColor(203, 213, 225)
+    }
+
+    const drawIconBox = async (x: number, y: number, size: number, imgUrl: string) => {
+      const img = await getImage(imgUrl)
+      pdf.setLineWidth(0.2)
+      pdf.setDrawColor(226, 232, 240)
+      pdf.setFillColor(255, 255, 255)
+      // @ts-ignore - roundedRect exists at runtime
+      pdf.roundedRect(x, y, size, size, 1.2, 1.2, "FD")
+
+      const padding = 0.6
+      const imgType = isJpeg(imgUrl) ? "JPEG" : "PNG"
+      pdf.addImage(img, imgType, x + padding, y + padding, size - padding * 2, size - padding * 2)
+    }
+
+    // Preload all icons + watermark (faster and consistent)
     try {
-      const pdf = await buildPdfDocument()
-      const filename = `ADR-Check_${(driverName || "Driver").replace(/\s+/g, "_")}_${(checkDate || "date").replace(
-        /-/g,
-        ".",
-      )}.pdf`
-      pdf.save(filename)
+      const urls = [
+        "/images/albias-watermark.png",
+        ...Array.from(new Set(equipmentItems.map((i) => i.image).filter(Boolean))),
+      ]
+      await Promise.all(
+        urls.map(async (u) => {
+          try {
+            await getImage(u)
+          } catch {
+            // ignore missing icons
+          }
+        }),
+      )
+    } catch {
+      // ignore
+    }
+
+    // Watermark (drawn LAST so it stays visible over boxes)
+    const addWatermark = async () => {
+      try {
+        const watermark = await getImage("/images/albias-watermark.png")
+        // @ts-ignore - GState exists at runtime
+        const GState = (pdf as any).GState
+        if (GState) {
+          // @ts-ignore
+          const gs = new (pdf as any).GState({ opacity: 0.18 })
+          // @ts-ignore
+          ;(pdf as any).setGState(gs)
+        }
+
+        pdf.addImage(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
+
+        // reset opacity
+        // @ts-ignore
+        if ((pdf as any).setGState && (pdf as any).GState) {
+          // @ts-ignore
+          ;(pdf as any).setGState(new (pdf as any).GState({ opacity: 1 }))
+        }
+      } catch {
+        // Continue without watermark
+      }
+    }
+    // Header (red)
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(18)
+    pdf.setTextColor(0, 0, 0)
+    pdf.text("ADR Checklist", pageW / 2, 12, { align: "center" })
+
+    if (variant === "under1000") {
+      pdf.setFontSize(9)
+      pdf.setFont("helvetica", "normal")
+      pdf.text("UNDER 1000 PTS • Reduced checklist", pageW / 2, 16.5, { align: "center" })
+    }
+
+    pdf.setTextColor(17, 24, 39)
+
+    // ---- Driver / vehicle info card ----
+    const cardX = margin
+    const cardY = headerH + gap
+    const cardW = pageW - margin * 2
+    const cardH = 46
+
+    pdf.setDrawColor(226, 232, 240)
+    pdf.setLineWidth(0.3)
+    pdf.setFillColor(248, 250, 252)
+    // @ts-ignore
+    pdf.roundedRect(cardX, cardY, cardW, cardH, 3, 3, "FD")
+
+    const colGap = 8
+    const colW = (cardW - colGap) / 2
+    const leftX = cardX + 6
+    const rightX = cardX + 6 + colW + colGap
+
+    const rowStartY = cardY + 9
+    const rowStep = 7
+
+    const drawField = (x: number, y: number, label: string, value: string, valueColor = "#111827") => {
+      pdf.setFontSize(8)
+      pdf.setFont("helvetica", "normal")
+      pdf.setTextColor(100, 116, 139) // slate-500
+      pdf.text(label, x, y)
+
+      pdf.setFont("helvetica", "bold")
+      pdf.setTextColor(valueColor)
+      const lw = pdf.getTextWidth(label)
+      const v = truncateToWidth(value, colW - lw - 2)
+      pdf.text(v, x + lw + 1.5, y)
+
+      pdf.setTextColor(17, 24, 39)
+    }
+
+    const dl = formatExpiry(drivingLicenseDate, drivingLicenseExpired)
+    const adr = includeAdrCertificate
+      ? formatExpiry(adrCertificateDate, adrCertificateExpired)
+      : formatExpiry({ month: "", year: "" }, false, { notApplicable: true })
+    const truckDoc = formatExpiry(truckDocDate, truckDocExpired)
+    const trailerDoc = formatExpiry(trailerDocDate, trailerDocExpired)
+
+    drawField(leftX, rowStartY + 0 * rowStep, "Driver's name: ", safeVal(driverName), "#111827")
+    drawField(rightX, rowStartY + 0 * rowStep, "Truck plate: ", safeVal(truckPlate), "#111827")
+
+    drawField(leftX, rowStartY + 1 * rowStep, "Trailer plate: ", safeVal(trailerPlate), "#111827")
+    drawField(rightX, rowStartY + 1 * rowStep, "Inspection date: ", safeVal(checkDate), "#111827")
+
+    drawField(leftX, rowStartY + 2 * rowStep, "Driving Licence expiry: ", dl.text, dl.color)
+    drawField(rightX, rowStartY + 2 * rowStep, "ADR certificate expiry: ", adr.text, adr.color)
+
+    drawField(leftX, rowStartY + 3 * rowStep, "Truck tehnical insp.: ", truckDoc.text, truckDoc.color)
+    drawField(rightX, rowStartY + 3 * rowStep, "Trailer tehnical insp.: ", trailerDoc.text, trailerDoc.color)
+
+    // Remarks (always show label; content optional)
+    const remarksBoxX = cardX + 6
+    const remarksBoxY = cardY + 34
+    const remarksBoxW = cardW - 12
+    const remarksBoxH = 10
+
+    pdf.setDrawColor(226, 232, 240)
+    pdf.setFillColor(255, 255, 255)
+    // @ts-ignore
+    pdf.roundedRect(remarksBoxX, remarksBoxY, remarksBoxW, remarksBoxH, 2, 2, "FD")
+
+    pdf.setFont("helvetica", "normal")
+    pdf.setFontSize(8)
+    pdf.setTextColor(100, 116, 139)
+    pdf.text("Remarks:", remarksBoxX + 2, remarksBoxY + 6.7)
+
+    const trimmedRemarks = (remarks || "").trim()
+    if (trimmedRemarks) {
+      pdf.setTextColor(17, 24, 39)
+      pdf.setFont("helvetica", "normal")
+
+      const textX = remarksBoxX + 20
+      const textY = remarksBoxY + 4.0
+      const maxTextW = remarksBoxW - 22
+
+      // Available height for remarks text inside the box (in mm)
+      const textTop = textY
+      const textBottom = remarksBoxY + remarksBoxH - 1.2
+      const availableH = Math.max(0, textBottom - textTop)
+
+      const baseFont = 8
+      const minFont = 5
+      const step = 0.25
+      const ptToMm = 0.3527777778
+      const defaultLhf =
+        // @ts-ignore - exists at runtime
+        typeof (pdf as any).getLineHeightFactor === "function" ? (pdf as any).getLineHeightFactor() : 1.15
+
+      let fs = baseFont
+      let lines: string[] = []
+      let lhf = defaultLhf
+
+      while (fs >= minFont) {
+        pdf.setFontSize(fs)
+        lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
+        const lineH = fs * lhf * ptToMm
+        const textH = lines.length * lineH
+        if (textH <= availableH) break
+        fs -= step
+      }
+
+      // If it's still too tall at min font, tighten line height a bit (keeps all text visible)
+      if (fs < minFont) fs = minFont
+      pdf.setFontSize(fs)
+      lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
+      const finalLineH = fs * lhf * ptToMm
+      if (lines.length * finalLineH > availableH) {
+        lhf = 1.0
+      }
+
+      pdf.text(lines, textX, textY, { lineHeightFactor: lhf })
+    }
+
+    // ---- Equipment checklist box ----
+    const equipX = margin
+    const equipY = cardY + cardH + gap
+    const equipW = pageW - margin * 2
+    const equipH = 84
+
+    pdf.setDrawColor(226, 232, 240)
+    pdf.setFillColor(255, 255, 255)
+    pdf.setLineWidth(0.3)
+    // @ts-ignore
+    pdf.roundedRect(equipX, equipY, equipW, equipH, 3, 3, "FD")
+
+    pdf.setFont("helvetica", "bold")
+    pdf.setFontSize(11)
+    pdf.setTextColor(17, 24, 39)
+    pdf.text("Equipment Checklist", equipX + 6, equipY + 8)
+
+    const equipInnerY = equipY + 14
+    const equipInnerX = equipX + 6
+    const equipInnerW = equipW - 12
+    const equipColGap = 10
+    const equipColW = (equipInnerW - equipColGap) / 2
+
+    const allEq = equipmentItems
+    const half = Math.ceil(allEq.length / 2)
+    const eqCols = [allEq.slice(0, half), allEq.slice(half)]
+    const colXs = [equipInnerX, equipInnerX + equipColW + equipColGap]
+
+    const eqRowH = 11
+
+    const onePieceItems = new Set([
+      "Flashlight",
+      "Rubber gloves",
+      "Safety glasses",
+      "Mask + filter (ADR class 6.1/2.3)",
+      "Collection bucket",
+    ])
+
+    for (let c = 0; c < 2; c++) {
+      const col = eqCols[c]
+      for (let i = 0; i < col.length; i++) {
+        const item = col[i]
+        const rowY = equipInnerY + i * eqRowH
+        const x0 = colXs[c]
+
+        const isChecked = !!checkedItems[item.name]
+        const date = expiryDates[item.name]
+
+        let expired = false
+        if (item.hasDate && date?.month && date?.year) {
+          const now = new Date()
+          const expiry = new Date(`${date.year}-${date.month}-01`)
+          expiry.setMonth(expiry.getMonth() + 1)
+          expiry.setDate(0)
+          expired = now > expiry
+        }
+
+        const ok = item.hasDate ? isChecked && !expired : isChecked
+
+        drawStatus(x0, rowY - 4, ok)
+
+        // icon box
+        try {
+          await drawIconBox(x0 + 6.2, rowY - 5.2, 7, item.image)
+        } catch {
+          // ignore missing icon
+        }
+
+        const textX = x0 + 6.2 + 8.5
+        const maxTextW = equipColW - (textX - x0) - 2
+
+        pdf.setFont("helvetica", "bold")
+        pdf.setFontSize(9)
+        pdf.setTextColor(17, 24, 39)
+
+        if (item.hasDate && date?.month && date?.year) {
+          const namePart = `${item.name} - `
+          const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
+
+          const nameFit = truncateToWidth(namePart, maxTextW * 0.65)
+          pdf.text(nameFit, textX, rowY)
+
+          pdf.setFont("helvetica", "bold")
+          pdf.setTextColor(expired ? 185 : 22, expired ? 28 : 101, expired ? 28 : 52)
+          const nameW = pdf.getTextWidth(nameFit)
+          const dateFit = truncateToWidth(dateStr, maxTextW - nameW)
+          pdf.text(dateFit, textX + nameW, rowY)
+
+          pdf.setTextColor(17, 24, 39)
+        } else {
+          const nameFit = truncateToWidth(item.name, maxTextW)
+          pdf.text(nameFit, textX, rowY)
+        }
+
+        // One piece note
+        if (onePieceItems.has(item.name)) {
+          pdf.setFont("helvetica", "normal")
+          pdf.setFontSize(6.5)
+          pdf.setTextColor(185, 28, 28)
+          pdf.text("One piece for each driver!", textX, rowY + 4)
+          pdf.setTextColor(17, 24, 39)
+        }
+      }
+    }
+
+    // ---- Before/After loading (two boxes) ----
+    const loadY = equipY + equipH + gap
+    const loadWTotal = pageW - margin * 2
+    const loadColGap = 10
+    const boxW = (loadWTotal - loadColGap) / 2
+    const boxH = 70
+
+    const beforeX = margin
+    const afterX = margin + boxW + loadColGap
+
+    const drawLoadingBox = (title: string, x: number, y: number, items: string[], checkedMap: Record<string, boolean>) => {
+      pdf.setDrawColor(226, 232, 240)
+      pdf.setFillColor(255, 255, 255)
+      pdf.setLineWidth(0.3)
+      // @ts-ignore
+      pdf.roundedRect(x, y, boxW, boxH, 3, 3, "FD")
+
+      pdf.setFont("helvetica", "bold")
+      pdf.setFontSize(11)
+      pdf.setTextColor(17, 24, 39)
+      pdf.text(title, x + 6, y + 8)
+
+      let yy = y + 16
+      const textX = x + 6 + 6.2
+      const maxW = boxW - 14
+
+      pdf.setFont("helvetica", "bold")
+      pdf.setFontSize(7.8)
+
+      for (const it of items) {
+        const ok = !!checkedMap[it]
+        drawStatus(x + 6, yy - 4, ok)
+        const line = truncateToWidth(it, maxW)
+        pdf.text(line, textX, yy)
+        yy += 7
+      }
+    }
+
+    drawLoadingBox("Before Loading", beforeX, loadY, beforeLoadingItems, beforeLoadingChecked)
+    drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingChecked)
+
+    // ---- Signatures box ----
+    const sigY = loadY + boxH + gap
+    const sigX = margin
+    const sigW = pageW - margin * 2
+    const sigH = 34
+
+    pdf.setDrawColor(226, 232, 240)
+    pdf.setFillColor(255, 255, 255)
+    pdf.setLineWidth(0.3)
+    // @ts-ignore
+    pdf.roundedRect(sigX, sigY, sigW, sigH, 3, 3, "FD")
+
+    const sigInnerPad = 6
+    const sigGap = 12
+    const sigColW = (sigW - sigInnerPad * 2 - sigGap) / 2
+    const leftSigX = sigX + sigInnerPad
+    const rightSigX = sigX + sigInnerPad + sigColW + sigGap
+
+    const sigImgW = sigColW
+    const sigImgH = 16
+
+    const drawSignatureArea = (x: number, title: string, imgData: string | null, extra?: { inspector?: boolean }) => {
+      // signature image / line
+      if (imgData) {
+        try {
+          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+        } catch {
+          // fallback to line
+          pdf.setDrawColor(148, 163, 184)
+          pdf.setLineWidth(0.4)
+          pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
+        }
+      } else {
+        pdf.setDrawColor(148, 163, 184)
+        pdf.setLineWidth(0.4)
+        pdf.line(x, sigY + 22, x + sigImgW, sigY + 22)
+      }
+
+      pdf.setFont("helvetica", "normal")
+      pdf.setFontSize(8)
+      pdf.setTextColor(100, 116, 139)
+      pdf.text(title, x, sigY + 30)
+
+      if (extra?.inspector) {
+        const inspectorColor = (inspectorColorHex || "#111827").trim() || "#111827"
+        const label = "Inspector: "
+        pdf.setFont("helvetica", "bold")
+        pdf.setTextColor(17, 24, 39)
+        pdf.text(label, x, sigY + 30)
+        const lw = pdf.getTextWidth(label)
+        pdf.setTextColor(inspectorColor)
+        pdf.text(inspectorNameText || "Not configured", x + lw, sigY + 30)
+      }
+
+      pdf.setTextColor(17, 24, 39)
+    }
+
+    drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
+    drawSignatureArea(rightSigX, "", inspectorSignatureData, { inspector: true })
+
+    await addWatermark()
+
+
+    return pdf
+  }
+  // Generate ZIP (PDF + photos) and store in Supabase (60-day retention)
+  const generateZIP = async () => {
+    if (!isMounted || typeof window === "undefined") return
+
+    setIsPdfGenerating(true)
+
+    try {
+      const pdf = await buildAdrPdf()
+
+      // Build identity hash (used to dedupe between Download and Email)
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
+
+      const identity = {
+        variant,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+        selectedInspector: inspectorNameText,
+        remarks,
+        drivingLicenseDate,
+        adrCertificateDate,
+        truckDocDate,
+        trailerDocDate,
+        checkedItems,
+        beforeLoadingChecked,
+        afterLoadingChecked,
+        expiryDates,
+        signatureData,
+        inspectorSignatureData,
+        photos: uploadedPhotos,
+      }
+
+      const checklistHash = await sha256Hex(stableStringify(identity))
+
+      const { default: JSZip } = await import("jszip")
+      const zip = new JSZip()
+
+      // PDF in ZIP
+      const pdfBuffer = pdf.output("arraybuffer")
+      const pdfName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
+      zip.file(pdfName, pdfBuffer)
+
+      // Photos in ZIP
+      const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
+      for (let i = 0; i < uploadedPhotos.length; i++) {
+        const ph = uploadedPhotos[i]
+        try {
+          const resp = await fetch(ph.url)
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const arrBuf = await resp.arrayBuffer()
+          const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
+          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
+        } catch (e) {
+          console.warn("Failed to add photo to ZIP", e)
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      })
+
+      // Store ZIP in Supabase (best-effort; app continues even if store fails)
+      try {
+        const zipArr = await zipBlob.arrayBuffer()
+        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
+        const zipBase64 = Buffer.from(zipArr).toString("base64")
+
+        await fetch("/api/adr-store", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+          body: JSON.stringify({
+            variant,
+            checklistHash,
+            zipBase64,
+            emailSent: false,
+            meta: {
+              variant,
+              driverName,
+              truckPlate,
+              trailerPlate,
+              inspectionDate: checkDate,
+              inspectorName: inspectorNameText,
+            },
+          }),
+        })
+      } catch (e) {
+        console.warn("Supabase store failed (download)", e)
+      }
+
+      // Download ZIP
+      const zipName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.zip`
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = zipName
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
     } catch (error) {
-      console.error("Error generating PDF:", error)
+      console.error("Error generating ZIP:", error)
     } finally {
       setIsPdfGenerating(false)
     }
@@ -1283,8 +1643,20 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     clearSignature()
     clearInspectorSignature()
 
-    // Reset inspector
-    setSelectedInspector("")
+    // Reset remarks + photos
+    setRemarks("")
+    setPhotos((prev) => {
+      prev.forEach((p) => {
+        if (p.previewUrl) {
+          try {
+            URL.revokeObjectURL(p.previewUrl)
+          } catch {
+            // ignore
+          }
+        }
+      })
+      return []
+    })
 
     // Reset other states
     setShowResult(false)
@@ -1401,7 +1773,32 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
-        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
+        if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
+
+        // Restore signatures
+        if (typeof parsedData.signatureData === "string") setSignatureData(parsedData.signatureData)
+        if (typeof parsedData.inspectorSignatureData === "string") setInspectorSignatureData(parsedData.inspectorSignatureData)
+
+        // Restore photos (we persist only uploaded photos with URLs)
+        if (Array.isArray(parsedData.photos)) {
+          const restored: UploadedPhoto[] = parsedData.photos
+            .filter((p: any) => p && typeof p === "object" && typeof p.url === "string" && p.url.length > 0)
+            .map((p: any) => ({
+              id:
+                typeof p.id === "string" && p.id.length > 0
+                  ? p.id
+                  : typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `${Date.now()}_${Math.random()}`,
+              name: typeof p.name === "string" ? p.name : "photo.jpg",
+              previewUrl: p.url,
+              status: "done" as const,
+              progress: 100,
+              url: p.url,
+              contentType: typeof p.contentType === "string" ? p.contentType : undefined,
+            }))
+          setPhotos(restored)
+        }
 
         // Validate dates after loading
         if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
@@ -1429,6 +1826,44 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [isMounted])
 
+
+  // Restore signature drawings on the canvases after a refresh
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (!signatureData) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const img = new window.Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#fff"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.src = signatureData
+  }, [isMounted, signatureData])
+
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (!inspectorSignatureData) return
+    const canvas = inspectorCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const img = new window.Image()
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#fff"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.src = inspectorSignatureData
+  }, [isMounted, inspectorSignatureData])
+
   // Add an effect to save data to localStorage whenever relevant state changes
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
@@ -1445,7 +1880,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       beforeLoadingChecked,
       afterLoadingChecked,
       expiryDates,
-      selectedInspector,
+      selectedInspector: inspectorNameText,
+      remarks,
+      signatureData,
+      inspectorSignatureData,
+      photos: photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ id: p.id, name: p.name, url: p.url, contentType: p.contentType })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
@@ -1462,7 +1903,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     beforeLoadingChecked,
     afterLoadingChecked,
     expiryDates,
-    selectedInspector,
+    selectedInspector: inspectorNameText,
+    remarks,
+    signatureData,
+    inspectorSignatureData,
+    photos,
   ])
 
   // Add this right after the return statement
@@ -1522,31 +1967,100 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setEmailStatus("Preparing email...")
 
     try {
-      // Build the same styled 1-page PDF used by Download
-      const pdf = await buildPdfDocument()
-      setEmailStatus("PDF generated, sending email...")
+      setEmailStatus("Generating PDF...")
 
-      const pdfBuffer = pdf.output("arraybuffer")
-      const pdfBase64 = arrayBufferToBase64(pdfBuffer)
+      const pdf = await buildAdrPdf()
 
-      if (!pdfBase64 || pdfBase64.length === 0) {
-        throw new Error("Generated PDF is empty")
+      // IMPORTANT: do NOT send the PDF as base64 in JSON (can exceed Vercel body limits -> HTTP 413).
+      // Instead, upload the PDF directly to Supabase Storage via a signed upload URL, then pass the storage path
+      // to the email API. This keeps the UI/behavior the same while making the request small and reliable.
+      const pdfArrBuf = pdf.output("arraybuffer") as ArrayBuffer
+      if (!pdfArrBuf || (pdfArrBuf as any).byteLength === 0) throw new Error("Generated PDF is empty")
+
+      const uploadedPhotos = photos
+        .filter((p) => p.status === "done" && !!p.url)
+        .map((p) => ({ url: p.url as string, name: p.name, contentType: p.contentType }))
+
+      // Compute the same hash used by Download ZIP (so email updates the same DB entry).
+      const identity = {
+        variant,
+        driverName,
+        truckPlate,
+        trailerPlate,
+        inspectionDate: checkDate,
+        selectedInspector: inspectorNameText,
+        remarks,
+        drivingLicenseDate,
+        adrCertificateDate,
+        truckDocDate,
+        trailerDocDate,
+        checkedItems,
+        beforeLoadingChecked,
+        afterLoadingChecked,
+        expiryDates,
+        signatureData,
+        inspectorSignatureData,
+        photos: uploadedPhotos,
       }
+      const checklistHash = await sha256Hex(stableStringify(identity))
+
+      setEmailStatus("Uploading PDF...")
+      const presignRes = await fetch("/api/presign-pdf-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        body: JSON.stringify({ checklistHash, variant }),
+      })
+      const presignData = await presignRes.json().catch(() => ({}))
+      if (!presignRes.ok || !presignData?.success || !presignData?.bucket || !presignData?.path || !presignData?.token) {
+        throw new Error(presignData?.message || `PDF presign failed (${presignRes.status})`)
+      }
+
+      // Upload to Supabase Storage using the signed upload token.
+      // Use 'any' to stay compatible with supabase-js minor changes.
+      const { getSupabaseClient } = await import("@/lib/supabaseClient")
+      const supabase = getSupabaseClient()
+      const anyBucket: any = supabase.storage.from(presignData.bucket)
+      if (typeof anyBucket.uploadToSignedUrl !== "function") {
+        throw new Error("Supabase client does not support uploadToSignedUrl")
+      }
+
+      const pdfBlob = new Blob([pdfArrBuf], { type: "application/pdf" })
+      const uploadResult = await anyBucket.uploadToSignedUrl(presignData.path, presignData.token, pdfBlob, {
+        contentType: "application/pdf",
+      })
+      if (uploadResult?.error) {
+        throw new Error(uploadResult.error.message || "Failed to upload PDF")
+      }
+
+      setEmailStatus("Sending email...")
 
       const response = await fetch("/api/send-email", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
         body: JSON.stringify({
-          inspectorName: selectedInspector,
-          pdfBase64,
+          inspectorName: inspectorNameText,
+          // Keep the payload small; the server will download from Storage.
+          pdfStoragePath: presignData.path,
           driverName,
           truckPlate,
           trailerPlate,
           inspectionDate: checkDate,
+          remarks,
+          photos: uploadedPhotos,
+          variant,
+          checklistHash,
+          meta: {
+            variant,
+            driverName,
+            truckPlate,
+            trailerPlate,
+            inspectionDate: checkDate,
+            inspectorName: inspectorNameText,
+          },
         }),
       })
 
-      const data = await response.json()
+      const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
         throw new Error(data.message || `Server responded with status ${response.status}`)
@@ -2056,18 +2570,88 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-4">Inspector:</h2>
-        <Select value={selectedInspector} onValueChange={setSelectedInspector}>
-          <SelectTrigger className="bg-black text-white border-gray-700">
-            <SelectValue placeholder="Select inspector" className="text-white" />
-          </SelectTrigger>
-          <SelectContent className="bg-black text-white border-gray-700">
-            {inspectors.map((name) => (
-              <SelectItem key={name} value={name} className="hover:bg-gray-700">
-                {name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="bg-black text-white border border-gray-700 rounded-md px-3 py-2">
+          {inspectorNameText || "Inspector not configured"}
+        </div>
+
+        {/* Remarks + Photos (below inspector select, above signatures) */}
+        <div className="mt-4">
+          <Label htmlFor="remarks" className="block mb-2">
+            Remarks:
+          </Label>
+          <textarea
+            id="remarks"
+            value={remarks}
+            onChange={(e) => setRemarks(e.target.value)}
+            placeholder="Add any remarks here..."
+            className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
+          />
+
+          <div className="mt-4 flex flex-col gap-3">
+            <div className="flex items-start gap-4">
+              <div className="shrink-0">
+                <Button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  className="bg-black text-white hover:brightness-95"
+                >
+                  Upload photos
+                </Button>
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  className="hidden"
+                  onChange={handlePhotoInputChange}
+                />
+                <p className="mt-1 text-xs text-gray-600">Camera will open on mobile.</p>
+              </div>
+
+              {/* Thumbnails */}
+              <div className="flex flex-wrap gap-2">
+                {photos.map((p) => (
+                  <div
+                    key={p.id}
+                    className="group relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 bg-gray-50"
+                    title={p.name}
+                  >
+                    <img
+                      src={p.previewUrl}
+                      alt={p.name}
+                      className={`h-full w-full object-cover transition-opacity ${p.status === "uploading" || p.status === "queued" ? "opacity-60" : "opacity-100"}`}
+                    />
+
+                    {/* Progress bar overlay */}
+                    {(p.status === "uploading" || p.status === "queued") && (
+                      <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
+                        <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
+                      </div>
+                    )}
+
+                    {/* Remove button */}
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(p.id)}
+                      aria-label="Remove photo"
+                      className="absolute right-1 top-1 rounded bg-black/70 px-1 text-xs text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
+                    >
+                      ×
+                    </button>
+
+                    {/* Error badge */}
+                    {p.status === "error" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-red-600/70 text-[10px] font-semibold text-white">
+                        Error
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Container to hold both signature boxes side by side */}
         <div className="flex gap-6 mt-6">
@@ -2105,16 +2689,21 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button onClick={generatePDF} disabled={isPdfGenerating} className="w-full">
-          {isPdfGenerating ? "Generating PDF..." : "Download PDF"}
+        <Button onClick={generateZIP} disabled={isPdfGenerating} className="w-full">
+          {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
         </Button>
         <Button
           onClick={handleSendEmail}
-          disabled={isSendingEmail || isPdfGenerating || !selectedInspector}
+          disabled={
+            isSendingEmail ||
+            isPdfGenerating ||
+            !inspectorEmailText ||
+            photos.some((p) => p.status === "uploading" || p.status === "queued")
+          }
           style={{ backgroundColor: "#0099d0" }}
           className="w-full hover:brightness-90"
         >
-          {isSendingEmail ? "Sending Email..." : "Send PDF via Email"}
+          {isSendingEmail ? "Sending Email..." : "Send ZIP via Email"}
         </Button>
 
         {emailStatus && (
