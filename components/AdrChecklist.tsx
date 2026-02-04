@@ -2085,9 +2085,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       setEmailStatus("Sending email...")
 
-      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
-      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
-
       const response = await fetch("/api/send-email", {
         method: "POST",
         headers: authHeaders,
