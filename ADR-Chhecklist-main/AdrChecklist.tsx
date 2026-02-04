@@ -27,7 +27,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const storageKey = `adrChecklistData_${variant}`
 
 
-  const { inspectorName: authInspectorName, inspectorColor: authInspectorColor, inspectorEmail: authInspectorEmail } = useAuth()
+  const { inspectorName, inspectorEmail } = useAuth()
+  const inspectorNameText = (inspectorName || "").trim()
+  const inspectorEmailText = (inspectorEmail || "").trim()
+
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
   const [driverName, setDriverName] = useState("")
@@ -44,14 +47,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [showResult, setShowResult] = useState(false)
   const [allChecked, setAllChecked] = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
-  const [selectedInspector, setSelectedInspector] = useState("")
-
-  // sync inspector from logged user (admin sets this per account)
-  useEffect(() => {
-    if (authInspectorName && authInspectorName.trim()) {
-      setSelectedInspector(authInspectorName.trim())
-    }
-  }, [authInspectorName])
   const [dateValid, setDateValid] = useState({
     drivingLicense: false,
     adrCertificate: false,
@@ -282,16 +277,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const removed = new Set(["ADR plate front + back are open"])
     return afterLoadingItemsBase.filter((item) => !removed.has(item))
   }, [variant])
-
-  const inspectors = [
-    "Eduard Tudose",
-    "Angela Ilis",
-    "Lucian Sistac",
-    "Alexandru Dogariu",
-    "Martian Gherasim",
-    "Robert Kerekes",
-    "Alexandru Florea",
-  ]
 
   // Initialize canvas for signatures
   const initializeCanvas = () => {
@@ -1204,7 +1189,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     pdf.setTextColor(51, 65, 85)
     pdf.text(driverLabel, driverX + sigW / 2, sigTop + 26, { align: "center" })
 
-    const inspectorColor = (authInspectorColor && authInspectorColor.trim()) ? authInspectorColor.trim() : (inspectorColors[selectedInspector] || "#0F172A")
+    const inspectorColor = inspectorColors[selectedInspector] || "#0F172A"
     const inspectorLabel = safe(selectedInspector) || "Inspector name"
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(8.6)
@@ -1291,9 +1276,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     // Reset signatures (important: these must run with the latest canvas refs)
     clearSignature()
     clearInspectorSignature()
-
-    // Reset inspector
-    setSelectedInspector("")
 
     // Reset other states
     setShowResult(false)
@@ -1410,7 +1392,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
-        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
 
         // Validate dates after loading
         if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
@@ -1454,7 +1435,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       beforeLoadingChecked,
       afterLoadingChecked,
       expiryDates,
-      selectedInspector,
+      selectedInspector: inspectorNameText,
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
@@ -1471,7 +1452,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     beforeLoadingChecked,
     afterLoadingChecked,
     expiryDates,
-    selectedInspector,
+    selectedInspector: inspectorNameText,
   ])
 
   // Add this right after the return statement
@@ -1527,12 +1508,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const handleSendEmail = async () => {
     if (!isMounted || typeof window === "undefined") return
 
-
-    if (!authInspectorEmail || !authInspectorEmail.trim()) {
-      setEmailStatus("Inspector email is missing for this account. Ask admin to set Inspector email (ZIP recipient).")
-      return
-    }
-
     setIsSendingEmail(true)
     setEmailStatus("Preparing email...")
 
@@ -1552,8 +1527,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          inspectorName: selectedInspector,
-          inspectorEmail: authInspectorEmail,
+          inspectorName: inspectorNameText,
           pdfBase64,
           driverName,
           truckPlate,
@@ -2072,16 +2046,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-4">Inspector:</h2>
-        <div className="rounded-md border border-gray-700 bg-black px-3 py-2 text-sm text-white">
-          <div className="flex flex-col gap-1">
-            <span>{selectedInspector || "N/A"}</span>
-            {authInspectorEmail ? (
-              <span className="text-xs text-gray-300 break-all">{authInspectorEmail}</span>
-            ) : null}
-          </div>
+        <div className="bg-black text-white border border-gray-700 rounded-md px-3 py-2">
+          {inspectorNameText || "Inspector not configured"}
         </div>
 
-{/* Container to hold both signature boxes side by side */}
+        {/* Container to hold both signature boxes side by side */}
         <div className="flex gap-6 mt-6">
           <div className="flex-1">
             <Label className="block mb-2">Driver Signature:</Label>
