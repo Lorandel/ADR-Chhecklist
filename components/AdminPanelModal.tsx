@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useAuth } from "@/components/auth/AuthProvider"
-import { getSupabaseBrowser } from "@/lib/supabaseBrowser"
 import { getStoredProvider, providerLabel, setStoredProvider, type StorageProvider } from "@/lib/storageProvider"
+import { getSupabaseBrowser } from "@/lib/supabaseBrowser"
 
 type Props = { open: boolean; onClose: () => void }
 
@@ -26,10 +26,9 @@ function usernameFromEmail(email: string): string {
 export default function AdminPanelModal({ open, onClose }: Props) {
   const { session, role, refreshUser } = useAuth()
 
-  // Always try to use a fresh access token (some browsers can lag behind with state updates).
-  const getAccessToken = async (): Promise<string> => {
-    const direct = session?.access_token
-    if (direct) return direct
+  // Always read a fresh token when making admin calls (prevents 401 if the cached session is stale)
+  const getToken = async (): Promise<string> => {
+    if (session?.access_token) return session.access_token
     const sb = getSupabaseBrowser()
     if (!sb) return ""
     const { data } = await sb.auth.getSession()
@@ -83,9 +82,11 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   }, [open, role])
 
   const loadUsers = async () => {
-    const token = await getAccessToken()
+    const token = await getToken()
     if (!token) {
-      setError("Missing session token. Please sign in again.")
+      setError(
+        "Auth session missing. If you're logged in, check NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY in Vercel env vars.",
+      )
       return
     }
     setLoading(true)
@@ -96,15 +97,7 @@ export default function AdminPanelModal({ open, onClose }: Props) {
         cache: "no-store",
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data?.success) {
-        const base = data?.message || `Failed (${res.status})`
-        if (res.status === 401) {
-          throw new Error(
-            `${base}. If you are logged in, this usually means SUPABASE_SERVICE_ROLE_KEY does not match NEXT_PUBLIC_SUPABASE_URL (wrong project in Vercel env vars).`,
-          )
-        }
-        throw new Error(base)
-      }
+      if (!res.ok || !data?.success) throw new Error(data?.message || `Failed (${res.status})`)
       setUsers(Array.isArray(data.users) ? data.users : [])
     } catch (e: any) {
       setError(e?.message || "Failed to load users")
@@ -114,9 +107,11 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   }
 
   const createUser = async () => {
-    const token = await getAccessToken()
+    const token = await getToken()
     if (!token) {
-      setError("Missing session token. Please sign in again.")
+      setError(
+        "Auth session missing. If you're logged in, check NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY in Vercel env vars.",
+      )
       return
     }
     setLoading(true)
@@ -154,9 +149,11 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   }
 
   const updateUser = async (u: AdminUser, patch: any) => {
-    const token = await getAccessToken()
+    const token = await getToken()
     if (!token) {
-      setError("Missing session token. Please sign in again.")
+      setError(
+        "Auth session missing. If you're logged in, check NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY in Vercel env vars.",
+      )
       return
     }
     setLoading(true)

@@ -321,81 +321,70 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     "Alexandru Florea",
   ]
 
-// Export signature canvas as a compressed image for stable PDF size across devices
-const exportSignatureDataUrl = (srcCanvas: HTMLCanvasElement): string => {
-  try {
-    const maxW = 900
-    const maxH = 300
-    const w0 = Math.max(1, srcCanvas.width || 1)
-    const h0 = Math.max(1, srcCanvas.height || 1)
 
-    // Only downscale if needed
-    const scale = Math.min(1, maxW / w0, maxH / h0)
-    const w = Math.max(1, Math.round(w0 * scale))
-    const h = Math.max(1, Math.round(h0 * scale))
+const resizeSignatureCanvas = (canvas: HTMLCanvasElement) => {
+  // Keep signatures crisp on high-DPI/mobile by decoupling canvas resolution from CSS size.
+  // Also enforce a minimum internal resolution so PDF signatures don't look pixelated on phones.
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return
+
+  const rect = canvas.getBoundingClientRect()
+  if (!rect.width || !rect.height) return
+
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
+
+  // Minimum "virtual" canvas width in CSS pixels (prevents low-res signatures on small screens)
+  const minCssWidth = 600
+  const targetCssW = Math.max(rect.width, minCssWidth)
+  const targetCssH = (targetCssW * rect.height) / rect.width
+
+  canvas.width = Math.round(targetCssW * dpr)
+  canvas.height = Math.round(targetCssH * dpr)
+
+  ctx.fillStyle = "#fff"
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+}
+
+const exportSignaturePng = (canvas: HTMLCanvasElement) => {
+  // Export to a stable resolution image so PDF output looks consistent across devices.
+  try {
+    const targetW = 1600
+    const ratio = canvas.height > 0 ? canvas.width / canvas.height : 5
+    const targetH = Math.max(1, Math.round(targetW / ratio))
 
     const out = document.createElement("canvas")
-    out.width = w
-    out.height = h
+    out.width = targetW
+    out.height = targetH
     const octx = out.getContext("2d")
-    if (!octx) return srcCanvas.toDataURL("image/png")
+    if (!octx) return canvas.toDataURL("image/png")
 
-    // white background so JPEG looks clean
     octx.fillStyle = "#fff"
-    octx.fillRect(0, 0, w, h)
-    octx.imageSmoothingEnabled = true
-    // @ts-ignore
-    octx.imageSmoothingQuality = "high"
+    octx.fillRect(0, 0, out.width, out.height)
+    octx.drawImage(canvas, 0, 0, out.width, out.height)
 
-    octx.drawImage(srcCanvas, 0, 0, w, h)
-
-    // JPEG is much smaller than PNG and prevents huge request bodies
-    return out.toDataURL("image/jpeg", 0.78)
+    return out.toDataURL("image/png")
   } catch {
-    return srcCanvas.toDataURL("image/png")
+    return canvas.toDataURL("image/png")
   }
 }
 
-
   // Initialize canvas for signatures
-  const initializeCanvas = () => {
-    if (!isMounted || typeof window === "undefined") return
+const initializeCanvas = () => {
+  if (!isMounted || typeof window === "undefined") return
+  const canvas = canvasRef.current
+  if (!canvas) return
+  resizeSignatureCanvas(canvas)
+}
 
-    const canvas = canvasRef.current
-    if (!canvas) return
+// Initialize Inspector Canvas
+const initializeInspectorCanvas = () => {
+  if (!isMounted || typeof window === "undefined") return
+  const canvas = inspectorCanvasRef.current
+  if (!canvas) return
+  resizeSignatureCanvas(canvas)
+}
 
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    // Set canvas dimensions to match display size
-    const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width
-    canvas.height = rect.height
-
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-  }
-
-  // Initialize Inspector Canvas
-  const initializeInspectorCanvas = () => {
-    if (!isMounted || typeof window === "undefined") return
-
-    const canvas = inspectorCanvasRef.current
-    if (!canvas) return
-
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    // Set canvas dimensions to match display size
-    const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width
-    canvas.height = rect.height
-
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-  }
-
-  // Signature pad implementation for driver
+// Signature pad implementation for driver
   const setupSignaturePad = () => {
     if (!isMounted || typeof window === "undefined") return
 
@@ -405,8 +394,14 @@ const exportSignatureDataUrl = (srcCanvas: HTMLCanvasElement): string => {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
+    // Ensure the canvas has enough internal resolution (important on phones)
+    resizeSignatureCanvas(canvas)
+
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = rect.width ? canvas.width / rect.width : 1
+
     // Set canvas style
-    ctx.lineWidth = 2
+    ctx.lineWidth = 2 * scaleX
     ctx.lineCap = "round"
     ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
     ctx.fillStyle = "#fff"
@@ -469,7 +464,7 @@ const exportSignatureDataUrl = (srcCanvas: HTMLCanvasElement): string => {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setSignatureData(exportSignatureDataUrl(canvas))
+      setSignatureData(exportSignaturePng(canvas))
     }
 
     // Mouse events
@@ -508,8 +503,14 @@ const exportSignatureDataUrl = (srcCanvas: HTMLCanvasElement): string => {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
+    // Ensure the canvas has enough internal resolution (important on phones)
+    resizeSignatureCanvas(canvas)
+
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = rect.width ? canvas.width / rect.width : 1
+
     // Set canvas style
-    ctx.lineWidth = 2
+    ctx.lineWidth = 2 * scaleX
     ctx.lineCap = "round"
     ctx.strokeStyle = "#0047AB" // Change from "#000" to "#0047AB" (Cobalt Blue)
     ctx.fillStyle = "#fff"
@@ -572,7 +573,7 @@ const exportSignatureDataUrl = (srcCanvas: HTMLCanvasElement): string => {
     const stopDrawing = (e: MouseEvent | TouchEvent) => {
       if (e) e.preventDefault()
       drawing = false
-      setInspectorSignatureData(exportSignatureDataUrl(canvas))
+      setInspectorSignatureData(exportSignaturePng(canvas))
     }
 
     // Mouse events
@@ -1643,28 +1644,35 @@ const formData = new FormData()
       // signature image / line
       if (imgData) {
         try {
-          const imgType = /^data:image\/jpe?g/i.test(imgData) ? "JPEG" : "PNG"
-          // Keep aspect ratio to avoid distortion on any device
-          let drawX = x
-          let drawY = sigY + 6
-          let drawW = sigImgW
-          let drawH = sigImgH
+          // Fit signature image into the box without stretching (prevents distortion across devices)
+try {
+  // @ts-ignore
+  const props = typeof (pdf as any).getImageProperties === "function" ? (pdf as any).getImageProperties(imgData) : null
+  const iw = props?.width || 0
+  const ih = props?.height || 0
+  if (iw > 0 && ih > 0) {
+    const imgRatio = iw / ih
+    const boxRatio = sigImgW / sigImgH
 
-          try {
-            // @ts-ignore - exists at runtime
-            const props = typeof (pdf as any).getImageProperties === "function" ? (pdf as any).getImageProperties(imgData) : null
-            if (props?.width && props?.height) {
-              const s = Math.min(sigImgW / props.width, sigImgH / props.height)
-              drawW = props.width * s
-              drawH = props.height * s
-              drawX = x + (sigImgW - drawW) / 2
-              drawY = sigY + 6 + (sigImgH - drawH) / 2
-            }
-          } catch {
-            // ignore and use default box
-          }
+    let drawW = sigImgW
+    let drawH = sigImgH
+    if (imgRatio > boxRatio) {
+      drawW = sigImgW
+      drawH = sigImgW / imgRatio
+    } else {
+      drawH = sigImgH
+      drawW = sigImgH * imgRatio
+    }
 
-          pdf.addImage(imgData, imgType, drawX, drawY, drawW, drawH)
+    const dx = x + (sigImgW - drawW) / 2
+    const dy = sigY + 6 + (sigImgH - drawH) / 2
+    pdf.addImage(imgData, "PNG", dx, dy, drawW, drawH)
+  } else {
+    pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+  }
+} catch {
+  pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+}
         } catch {
           // fallback to line
           pdf.setDrawColor(148, 163, 184)
@@ -2271,13 +2279,12 @@ pdf.setTextColor(17, 24, 39)
 
       const pdf = await buildAdrPdf()
 
-      // Convert PDF to base64
-      let pdfBase64 = ""
+      // IMPORTANT: Avoid sending large base64 JSON bodies (can trigger HTTP 413 on Vercel).
+      // Send the PDF as multipart/form-data instead.
+      let pdfArrayBuffer: ArrayBuffer
       try {
-        const pdfBuffer = pdf.output("arraybuffer")
-        // @ts-ignore - Buffer is available in Next.js (browser polyfill)
-        pdfBase64 = Buffer.from(pdfBuffer).toString("base64")
-        if (!pdfBase64 || pdfBase64.length === 0) throw new Error("Generated PDF is empty")
+        pdfArrayBuffer = pdf.output("arraybuffer") as ArrayBuffer
+        if (!pdfArrayBuffer || pdfArrayBuffer.byteLength === 0) throw new Error("Generated PDF is empty")
       } catch (convError: any) {
         console.error("Error processing PDF:", convError)
         throw new Error(`PDF processing error: ${convError.message}`)
@@ -2312,30 +2319,36 @@ pdf.setTextColor(17, 24, 39)
       }
       const checklistHash = await sha256Hex(stableStringify(identity))
 
-      const response = await fetch("/api/send-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          inspectorName: selectedInspector,
-          inspectorEmail: authInspectorEmail,
-          pdfBase64,
+      const pdfBlob = new Blob([pdfArrayBuffer], { type: "application/pdf" })
+      const pdfFileName = `ADR-Checklist_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
+
+      const form = new FormData()
+      form.append("inspectorName", selectedInspector)
+      if (authInspectorEmail) form.append("inspectorEmail", Array.isArray(authInspectorEmail) ? authInspectorEmail.join(",") : String(authInspectorEmail))
+      form.append("driverName", driverName)
+      form.append("truckPlate", truckPlate)
+      form.append("trailerPlate", trailerPlate)
+      form.append("inspectionDate", checkDate)
+      if (typeof remarks === "string") form.append("remarks", remarks)
+      form.append("variant", variant)
+      form.append("checklistHash", checklistHash)
+      form.append("photos", JSON.stringify(uploadedPhotos))
+      form.append(
+        "meta",
+        JSON.stringify({
+          variant,
           driverName,
           truckPlate,
           trailerPlate,
           inspectionDate: checkDate,
-          remarks,
-          photos: uploadedPhotos,
-          variant,
-          checklistHash,
-          meta: {
-            variant,
-            driverName,
-            truckPlate,
-            trailerPlate,
-            inspectionDate: checkDate,
-            inspectorName: selectedInspector,
-          },
+          inspectorName: selectedInspector,
         }),
+      )
+      form.append("pdf", pdfBlob, pdfFileName)
+
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        body: form,
       })
 
       const data = await response.json().catch(() => ({}))
