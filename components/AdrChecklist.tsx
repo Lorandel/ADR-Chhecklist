@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useAuth } from "@/components/auth/AuthProvider"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
@@ -43,6 +43,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
   const storageKey = `adrChecklistData_${variant}`
 
+  const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, session } = useAuth()
+
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
   const [driverName, setDriverName] = useState("")
@@ -60,6 +62,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [allChecked, setAllChecked] = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
   const [selectedInspector, setSelectedInspector] = useState("")
+
+  // Inspector is always the logged-in inspector (no manual selector).
+  useEffect(() => {
+    if (!loggedInspectorName) return
+    if (selectedInspector !== loggedInspectorName) {
+      setSelectedInspector(loggedInspectorName)
+    }
+  }, [loggedInspectorName, selectedInspector])
   const [dateValid, setDateValid] = useState({
     drivingLicense: false,
     adrCertificate: false,
@@ -302,16 +312,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const removed = new Set(["ADR plate front + back are open"])
     return afterLoadingItemsBase.filter((item) => !removed.has(item))
   }, [variant])
-
-  const inspectors = [
-    "Eduard Tudose",
-    "Angela Ilis",
-    "Lucian Sistac",
-    "Alexandru Dogariu",
-    "Martian Gherasim",
-    "Robert Kerekes",
-    "Alexandru Florea",
-  ]
 
   // Initialize canvas for signatures
   const initializeCanvas = () => {
@@ -1566,7 +1566,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         await fetch("/api/adr-store", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders,
           body: JSON.stringify({
             variant,
             checklistHash,
@@ -1578,7 +1578,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
               truckPlate,
               trailerPlate,
               inspectionDate: checkDate,
-              inspectorName: selectedInspector,
+              inspectorName: loggedInspectorName || selectedInspector,
+          inspectorEmail: loggedInspectorEmail || undefined,
             },
           }),
         })
@@ -1660,7 +1661,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     clearInspectorSignature()
 
     // Reset inspector
-    setSelectedInspector("")
+    setSelectedInspector(loggedInspectorName || "")
 
     // Reset remarks + photos
     setRemarks("")
@@ -1686,7 +1687,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (typeof window !== "undefined") {
       localStorage.removeItem(storageKey)
     }
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, storageKey])
+  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey])
 
   // Initialize component
   useEffect(() => {
@@ -2054,11 +2055,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       setEmailStatus("Sending email...")
 
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
+      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
+
       const response = await fetch("/api/send-email", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({
-          inspectorName: selectedInspector,
+          inspectorName: loggedInspectorName || selectedInspector,
+          inspectorEmail: loggedInspectorEmail || undefined,
           // Keep the payload small; the server will download from Storage.
           pdfStoragePath: presignData.path,
           driverName,
@@ -2075,7 +2080,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             truckPlate,
             trailerPlate,
             inspectionDate: checkDate,
-            inspectorName: selectedInspector,
+            inspectorName: loggedInspectorName || selectedInspector,
           },
         }),
       })
@@ -2589,19 +2594,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       )}
 
       <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-4">Inspector:</h2>
-        <Select value={selectedInspector} onValueChange={setSelectedInspector}>
-          <SelectTrigger className="bg-black text-white border-gray-700">
-            <SelectValue placeholder="Select inspector" className="text-white" />
-          </SelectTrigger>
-          <SelectContent className="bg-black text-white border-gray-700">
-            {inspectors.map((name) => (
-              <SelectItem key={name} value={name} className="hover:bg-gray-700">
-                {name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <h2 className="text-xl font-semibold mb-4">
+          Inspector:{" "}
+          <span className="inline-flex items-center rounded-md bg-black px-3 py-1 text-sm font-semibold text-white">
+            {loggedInspectorName || selectedInspector || "Inspector not configured"}
+          </span>
+        </h2>
 
         {/* Remarks + Photos (below inspector select, above signatures) */}
         <div className="mt-4">
