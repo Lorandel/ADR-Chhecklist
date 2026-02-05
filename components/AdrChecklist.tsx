@@ -10,7 +10,7 @@ import { useAuth } from "@/components/auth/AuthProvider"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
-import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
+import { idbPutPhoto, idbGetPhoto, idbDeletePhoto, idbListPhotos } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
 
 const INSPECTOR_COLORS: Record<string, string> = {
@@ -114,6 +114,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const lastProgRef = useRef<Record<string, { t: number; p: number }>>({})
   const uploadingRunnerRef = useRef(false)
   const lastAttemptRef = useRef<Record<string, number>>({})
+  const idbPreviewUrlRef = useRef<Record<string, string>>({})
 
 
   // Refs for signatures and inputs
@@ -828,6 +829,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         xhr.onload = () => {
           const res = xhr.response
+          // Some browsers report status 0 on network interruption.
+          if (xhr.status === 0) {
+            const message = "Upload paused (connection lost). Will retry automatically."
+            setPhotos((prev) =>
+              prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
+            )
+            reject(new Error(message))
+            return
+          }
           if (xhr.status >= 200 && xhr.status < 300 && res?.success && res?.url) {
             setPhotos((prev) =>
               prev.map((p) =>
@@ -839,24 +849,27 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             resolve({ url: res.url, contentType: res.contentType || file.type })
             return
           }
-          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          // Treat server errors as retryable to avoid getting stuck in a permanent "error" state.
+          const message = res?.message || res?.error || `Upload failed (${xhr.status}). Will retry automatically.`
+          setPhotos((prev) =>
+            prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
+          )
           reject(new Error(message))
         }
 
         xhr.onerror = () => {
-          const message = "Upload failed (network error)"
-          const offline = typeof navigator !== "undefined" ? !navigator.onLine : false
+          // Network interruptions can occur without navigator.onLine flipping immediately.
+          // Keep the photo in "queued" so it retries automatically when the connection stabilizes.
+          const message = "Upload paused (network issue). Will retry automatically."
           setPhotos((prev) =>
-            prev.map((p) =>
-              p.id === photoId
-                ? offline
-                  ? { ...p, status: "queued", progress: 0, error: message }
-                  : { ...p, status: "error", error: message }
-                : p,
-            ),
+            prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
           )
           reject(new Error(message))
+        }
+
+        xhr.onabort = () => {
+          // If an upload is aborted (e.g. connection lost or user removed the photo),
+          // we do nothing here. removePhoto() updates state explicitly.
         }
 
         const formData = new FormData()
@@ -938,6 +951,58 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     e.target.value = ""
   }
 
+  // Restore any offline-queued photos from IndexedDB (e.g. if the user refreshed while offline).
+  // These should stay in "queued" and retry automatically when the connection returns.
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    let cancelled = false
+
+    ;(async () => {
+      const recs = await idbListPhotos().catch(() => [])
+      if (cancelled || !Array.isArray(recs) || recs.length === 0) return
+
+      // Keep a stable order (oldest first).
+      const sorted = [...recs].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+
+      setPhotos((prev) => {
+        const existing = new Set(prev.map((p) => p.id))
+        const toAdd: UploadedPhoto[] = []
+        for (const r of sorted) {
+          if (!r?.id || existing.has(r.id)) continue
+          const url = URL.createObjectURL(r.blob)
+          idbPreviewUrlRef.current[r.id] = url
+          toAdd.push({
+            id: r.id,
+            name: r.name || "photo.jpg",
+            previewUrl: url,
+            status: "queued",
+            progress: 0,
+            contentType: r.contentType || "image/jpeg",
+          })
+        }
+        return toAdd.length ? [...prev, ...toAdd] : prev
+      })
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isMounted])
+
+  // Cleanup any object URLs created from IndexedDB blobs.
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(idbPreviewUrlRef.current)) {
+        try {
+          URL.revokeObjectURL(url)
+        } catch {
+          // ignore
+        }
+      }
+      idbPreviewUrlRef.current = {}
+    }
+  }, [])
+
   // Retry queued photos automatically when the connection comes back.
   const tryUploadPendingPhotos = useCallback(async () => {
     if (uploadingRunnerRef.current) return
@@ -974,6 +1039,35 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [photos, uploadPhoto])
 
+  // Some mobile browsers don't reliably emit the "online" event in all network transitions.
+  // As a safety net, periodically retry queued uploads while there are pending items.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const hasPending = photos.some((p) => p.status === "queued")
+    if (!hasPending) return
+
+    const tick = () => {
+      if (typeof navigator !== "undefined" && navigator.onLine) {
+        void tryUploadPendingPhotos()
+      }
+    }
+
+    const intervalId = window.setInterval(tick, 8000)
+    const onFocus = () => tick()
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick()
+    }
+
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVis)
+
+    return () => {
+      window.clearInterval(intervalId)
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVis)
+    }
+  }, [photos, tryUploadPendingPhotos])
+
   useEffect(() => {
     const onOnline = () => {
       void tryUploadPendingPhotos()
@@ -993,6 +1087,25 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         // ignore
       }
     }
+
+    // Ensure this photo won't be retried after removal.
+    delete uploadXhrRefs.current[photoId]
+    delete lastAttemptRef.current[photoId]
+    delete lastProgRef.current[photoId]
+    try {
+      const idbUrl = idbPreviewUrlRef.current[photoId]
+      if (idbUrl) {
+        try {
+          URL.revokeObjectURL(idbUrl)
+        } catch {
+          // ignore
+        }
+        delete idbPreviewUrlRef.current[photoId]
+      }
+    } catch {
+      // ignore
+    }
+    void idbDeletePhoto(photoId).catch(() => {})
 
     setPhotos((prev) => {
       const toRemove = prev.find((p) => p.id === photoId)
