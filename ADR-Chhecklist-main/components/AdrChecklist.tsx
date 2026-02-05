@@ -2250,7 +2250,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           <div className="absolute inset-0 bg-black/40" onClick={() => setConfirmAction(null)} />
           <div className="relative w-[min(92vw,420px)] rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
             <div className="font-semibold mb-2">Confirm</div>
-            <div className="text-sm text-gray-600 mb-5">Send ZIP via Email or Download ZIP via Email?</div>
+            <div className="text-sm text-gray-600 mb-5">
+              {confirmAction === "download" ? "Download ZIP?" : "Send ZIP via Email?"}
+            </div>
             <div className="flex items-center justify-end gap-3">
               <Button type="button" variant="outline" className="bg-transparent" onClick={() => setConfirmAction(null)}>
                 No

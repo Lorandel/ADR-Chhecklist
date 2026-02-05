@@ -7,13 +7,18 @@ import { Label } from "@/components/ui/label"
 import { useAuth } from "@/components/auth/AuthProvider"
 
 export default function LoginGate({ children }: { children: React.ReactNode }) {
-  const { session, signIn, configured, configError } = useAuth()
+  const { session, signIn, configured, configError, authReady } = useAuth()
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   if (session) return <>{children}</>
+
+  // Avoid flashing the login screen during the initial session check on refresh.
+  if (!authReady) {
+    return <div className="min-h-[100vh] bg-white" />
+  }
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

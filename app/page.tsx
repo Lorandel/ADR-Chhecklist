@@ -16,21 +16,33 @@ function HomePageInner() {
   const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
   const activeVariantKey = `adrActiveVariant_${userId}`
 
-  const [variant, setVariant] = useState<ChecklistVariant | null>(() => {
-    if (typeof window === "undefined") return null
-    const saved = window.localStorage.getItem(activeVariantKey)
-    return saved === "full" || saved === "under1000" ? (saved as ChecklistVariant) : null
-  })
+  // On some devices/browsers the first paint can happen before localStorage is read,
+  // which briefly shows the menu before returning to the checklist. We avoid that by
+  // rendering a white placeholder until we've checked the saved variant.
+  const [variant, setVariant] = useState<ChecklistVariant | null | "loading">("loading")
   const [historyOpen, setHistoryOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
+
+  // Load persisted active variant on mount (per user).
+  useEffect(() => {
+    if (!session) return
+    if (typeof window === "undefined") return
+    const saved = window.localStorage.getItem(activeVariantKey)
+    setVariant(saved === "full" || saved === "under1000" ? (saved as ChecklistVariant) : null)
+  }, [session, activeVariantKey])
 
   // Persist active variant whenever it changes.
   useEffect(() => {
     if (!session) return
     if (typeof window === "undefined") return
+    if (variant === "loading") return
     if (variant) window.localStorage.setItem(activeVariantKey, variant)
     else window.localStorage.removeItem(activeVariantKey)
   }, [session, activeVariantKey, variant])
+
+  if (variant === "loading") {
+    return <div className="min-h-[100vh] bg-white" />
+  }
 
   if (variant) {
     return (

@@ -7,6 +7,8 @@ import { getSupabaseBrowser, hasSupabaseBrowserEnv, normalizeLoginToEmail } from
 type AuthContextValue = {
   configured: boolean
   configError: string | null
+  // True once we have checked Supabase for an existing session (prevents UI flicker on refresh)
+  authReady: boolean
   session: Session | null
   user: User | null
   role: "admin" | "user" | null
@@ -34,22 +36,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
+  const [authReady, setAuthReady] = useState(false)
 
   useEffect(() => {
     if (!configured || !supabase) {
       setConfigError(
         "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your environment.",
       )
+      // Even if not configured, we are "ready" from the UI perspective.
+      setAuthReady(true)
       return
     }
 
     let mounted = true
 
     ;(async () => {
-      const { data } = await supabase.auth.getSession()
-      if (!mounted) return
-      setSession(data.session ?? null)
-      setUser(data.session?.user ?? null)
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (!mounted) return
+        setSession(data.session ?? null)
+        setUser(data.session?.user ?? null)
+      } finally {
+        if (mounted) setAuthReady(true)
+      }
     })()
 
     const {
@@ -57,6 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession)
       setUser(newSession?.user ?? null)
+      setAuthReady(true)
     })
 
     return () => {
@@ -105,6 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value: AuthContextValue = {
     configured,
     configError,
+    authReady,
     session,
     user,
     role,
