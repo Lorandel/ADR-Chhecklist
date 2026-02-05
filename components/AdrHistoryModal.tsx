@@ -183,9 +183,18 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
   }
 
   const onDownloadZip = (it: HistoryItem) => {
-    if (!it.downloadUrl) return
-    window.open(it.downloadUrl, "_blank", "noopener,noreferrer")
-  }
+  // Download via same-origin API so we can control the filename (no random storage keys).
+  const url = `/api/adr-history/download?id=${encodeURIComponent(it.id)}&ts=${Date.now()}`
+  const a = document.createElement("a")
+  a.href = url
+  a.rel = "noopener noreferrer"
+  // iOS Safari can navigate the current page when downloading; open in a new tab to avoid losing state.
+  a.target = "_blank"
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
 
   const isIOS = () => {
     if (typeof navigator === "undefined") return false
