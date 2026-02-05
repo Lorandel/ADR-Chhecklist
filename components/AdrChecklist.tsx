@@ -13,16 +13,6 @@ import { stableStringify } from "@/lib/stableStringify"
 import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
 
-const INSPECTOR_COLORS: Record<string, string> = {
-  "Alexandru Dogariu": "#FF8C00",
-  "Robert Kerekes": "#8B4513",
-  "Eduard Tudose": "#000000",
-  "Angela Ilis": "#FF69B4",
-  "Lucian Sistac": "#1E90FF",
-  "Martian Gherasim": "#008000",
-  "Alexandru Florea": "#DAA520",
-}
-
 const capitalizeWords = (str: string) =>
   str
     .split(" ")
@@ -51,9 +41,18 @@ type ADRChecklistProps = {
 
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
-  const storageKey = `adrChecklistData_${variant}`
 
+  // Obtain the current session and inspector info.  We will use the user's unique ID (if present)
+  // to scope any persisted form data.  Without scoping, a different user on the same device would
+  // inadvertently pick up another user's in‑progress checklist.  If the session is not yet available
+  // or the user object does not have an id, fall back to a constant string so that localStorage
+  // operations still work.
   const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, session } = useAuth()
+  const userId = session?.user?.id || session?.user?.user_metadata?.sub || "anonymous"
+  // Compose a per‑user storage key by appending the userId.  This ensures each user has their
+  // own independent draft per checklist variant on the same device.  Without this suffix the
+  // browser would overwrite or read the wrong draft when multiple users share a device.
+  const storageKey = `adrChecklistData_${variant}_${userId}`
 
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
@@ -828,28 +827,22 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             resolve({ url: res.url, contentType: res.contentType || file.type })
             return
           }
-
-          const status = xhr.status || 0
-          const message = res?.message || res?.error || `Upload failed (${status})`
-
-          // If the internet drops mid-upload, some browsers keep navigator.onLine=true but XHR fails (status 0).
-          // We never hard-fail on network/server hiccups; keep the photo queued and retry automatically.
-          if (status === 0 || status >= 500) {
-            setPhotos((prev) =>
-              prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
-            )
-          } else {
-            // For 4xx errors (bad request), surface the error.
-            setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
-          }
-
+          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
           reject(new Error(message))
         }
 
         xhr.onerror = () => {
-          const message = "Upload paused (network issue). Will retry automatically when online."
+          const message = "Upload failed (network error)"
+          const offline = typeof navigator !== "undefined" ? !navigator.onLine : false
           setPhotos((prev) =>
-            prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
+            prev.map((p) =>
+              p.id === photoId
+                ? offline
+                  ? { ...p, status: "queued", progress: 0, error: message }
+                  : { ...p, status: "error", error: message }
+                : p,
+            ),
           )
           reject(new Error(message))
         }
@@ -870,7 +863,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (files.length === 0) return
 
     const newPhotos: UploadedPhoto[] = files.map((file) => {
-      const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      // Generate a unique identifier for the photo.  Prefix it with the current userId so that
+      // any offline uploads (stored in IndexedDB) can be associated with the correct user.  This
+      // prevents queued uploads from one user being retried under a different user's session.
+      const uuidPart = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      const id = `${userId}_${uuidPart}`
       return {
         id,
         name: file.name || `photo_${Date.now()}.jpg`,
@@ -921,6 +918,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       try {
         await uploadPhoto(fileToUpload, p.id)
+        try {
+          await idbDeletePhoto(p.id)
+        } catch {}
       } catch {
         // State already updated in uploadPhoto
       }
@@ -954,6 +954,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         try {
           await uploadPhoto(file, p.id)
+          try {
+            await idbDeletePhoto(p.id)
+          } catch {}
         } catch {
           // keep queued/error as set by uploadPhoto
         }
@@ -982,8 +985,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         // ignore
       }
     }
-
-    void idbDeletePhoto(photoId).catch(() => {})
 
     setPhotos((prev) => {
       const toRemove = prev.find((p) => p.id === photoId)
@@ -1544,55 +1545,23 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       const { default: JSZip } = await import("jszip")
       const zip = new JSZip()
 
-      const baseName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}`
-
       // PDF in ZIP
       const pdfBuffer = pdf.output("arraybuffer")
-      zip.file(`${baseName}.pdf`, pdfBuffer)
+      const pdfName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
+      zip.file(pdfName, pdfBuffer)
 
-      // Photos in ZIP (prefer IndexedDB blobs to avoid CORS issues with public storage URLs)
+      // Photos in ZIP
       const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
-      const photosForZip = photos.slice()
-
-      for (let i = 0; i < photosForZip.length; i++) {
-        const ph = photosForZip[i]
-        let arrBuf: ArrayBuffer | null = null
-        let fileName = safeFileName(ph.name || `photo_${i + 1}.jpg`)
-
-        // 1) Try local IndexedDB (most reliable, works offline)
+      for (let i = 0; i < uploadedPhotos.length; i++) {
+        const ph = uploadedPhotos[i]
         try {
-          const rec = await idbGetPhoto(ph.id)
-          if (rec?.blob) {
-            arrBuf = await rec.blob.arrayBuffer()
-            if (rec.name) fileName = safeFileName(rec.name)
-          }
-        } catch {
-          // ignore
-        }
-
-        // 2) Fallback: fetch uploaded URL (may fail on some storages due to CORS)
-        if (!arrBuf && ph.url) {
-          try {
-            const resp = await fetch(ph.url)
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-            arrBuf = await resp.arrayBuffer()
-          } catch {
-            // ignore
-          }
-        }
-
-        // 3) Fallback: fetch preview blob URL (if still present)
-        if (!arrBuf && ph.previewUrl) {
-          try {
-            const resp = await fetch(ph.previewUrl)
-            if (resp.ok) arrBuf = await resp.arrayBuffer()
-          } catch {
-            // ignore
-          }
-        }
-
-        if (arrBuf) {
-          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${fileName}`, arrBuf)
+          const resp = await fetch(ph.url)
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const arrBuf = await resp.arrayBuffer()
+          const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
+          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
+        } catch (e) {
+          console.warn("Failed to add photo to ZIP", e)
         }
       }
 
@@ -1602,17 +1571,19 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         compressionOptions: { level: 6 },
       })
 
-      // Save to ADR Checklists History (DB row + upload ZIP to Supabase Storage when needed)
+      // Store ZIP in Supabase (best-effort; app continues even if store fails)
       try {
-        const storeHeaders: Record<string, string> = { "Content-Type": "application/json" }
-        if (session?.access_token) storeHeaders.Authorization = `Bearer ${session.access_token}`
+        const zipArr = await zipBlob.arrayBuffer()
+        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
+        const zipBase64 = Buffer.from(zipArr).toString("base64")
 
-        const storeRes = await fetch("/api/adr-store", {
+        await fetch("/api/adr-store", {
           method: "POST",
-          headers: storeHeaders,
+          headers: authHeaders,
           body: JSON.stringify({
             variant,
             checklistHash,
+            zipBase64,
             emailSent: false,
             meta: {
               variant,
@@ -1621,70 +1592,24 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
               trailerPlate,
               inspectionDate: checkDate,
               inspectorName: loggedInspectorName || selectedInspector,
-              inspectorEmail: loggedInspectorEmail || undefined,
-              photos: photos.map((p) => ({
-                id: p.id,
-                name: p.name,
-                url: p.url || null,
-                contentType: p.contentType || null,
-                status: p.status,
-              })),
+          inspectorEmail: loggedInspectorEmail || undefined,
             },
           }),
         })
-
-        const storeData = await storeRes.json().catch(() => ({}))
-
-        if (storeRes.ok && storeData?.success && storeData?.upload && storeData?.path && storeData?.token) {
-          const { getSupabaseClient } = await import("@/lib/supabaseClient")
-          const supabase = getSupabaseClient()
-          const anyBucket: any = supabase.storage.from("adr-checklists")
-
-          if (typeof anyBucket.uploadToSignedUrl === "function") {
-            const zipUploadBlob = zipBlob.slice(0, zipBlob.size, "application/zip")
-            const uploadResult = await anyBucket.uploadToSignedUrl(storeData.path, storeData.token, zipUploadBlob, {
-              contentType: "application/zip",
-            })
-            if (uploadResult?.error) {
-              console.warn("Supabase ZIP upload failed (download)", uploadResult.error)
-            }
-          } else {
-            console.warn("Supabase client does not support uploadToSignedUrl (ZIP)")
-          }
-        } else if (!storeRes.ok || !storeData?.success) {
-          console.warn("Supabase store failed (download)", storeData?.message || `HTTP ${storeRes.status}`)
-        }
       } catch (e) {
         console.warn("Supabase store failed (download)", e)
       }
 
       // Download ZIP
-      const zipName = `${baseName}.zip`
+      const zipName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.zip`
       const url = URL.createObjectURL(zipBlob)
       const a = document.createElement("a")
       a.href = url
       a.download = zipName
-
-      // iOS Safari sometimes navigates instead of downloading; open in a new tab to avoid wiping the current page.
-      const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : ""
-      const iOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && (navigator as any).maxTouchPoints > 1)
-      if (iOS) {
-        a.target = "_blank"
-        a.rel = "noopener noreferrer"
-      }
-
       document.body.appendChild(a)
       a.click()
       a.remove()
-
-      // Keep the same behavior as Send Email: after generating/downloading, reset the checklist.
-      resetForm()
-
-      setTimeout(() => {
-        try {
-          URL.revokeObjectURL(url)
-        } catch {}
-      }, 10_000)
+      URL.revokeObjectURL(url)
     } catch (error) {
       console.error("Error generating ZIP:", error)
     } finally {
@@ -1755,7 +1680,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setRemarks("")
     setPhotos((prev) => {
       prev.forEach((p) => {
-        void idbDeletePhoto(p.id).catch(() => {})
         if (p.previewUrl) {
           try {
             URL.revokeObjectURL(p.previewUrl)
@@ -1860,11 +1784,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [isMounted])
 
-  // Separate useEffect for localStorage operations
+  // Separate useEffect for localStorage operations.  This runs whenever the component
+  // becomes mounted or the storage key changes (e.g. when a new user logs in or the variant changes).
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
 
-    // Try to load saved data from localStorage
+    // Try to load saved data from localStorage scoped to this user + variant.
     const savedData = localStorage.getItem(storageKey)
     if (savedData) {
       try {
@@ -1934,7 +1859,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         console.error("Error loading saved data:", error)
       }
     }
-  }, [isMounted])
+  }, [isMounted, storageKey])
 
 
   // Restore signature drawings on the canvases after a refresh
@@ -2018,6 +1943,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     signatureData,
     inspectorSignatureData,
     photos,
+    storageKey,
   ])
 
   // Add this right after the return statement
@@ -2203,19 +2129,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       </div>
 
       {onBack && (
-        <div className="flex items-center justify-between mb-4">
-          <Button type="button" variant="outline" className="bg-transparent" onClick={onBack}>
+        <div className="flex justify-start mb-4">
+          <Button variant="outline" className="bg-transparent" onClick={onBack}>
             ← Back
           </Button>
-
-          {selectedInspector && (
-            <div
-              className="rounded-md px-3 py-1 text-sm font-semibold text-white"
-              style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
-            >
-              {selectedInspector}
-            </div>
-          )}
         </div>
       )}
 

@@ -41,9 +41,13 @@ type ADRChecklistProps = {
 
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
-  const storageKey = `adrChecklistData_${variant}`
 
+  // Build a per‑user storage key.  Without scoping draft data to the current user, a new
+  // user logging into the same device would pick up another user's incomplete checklist.  Use
+  // the user ID from the session if available, or fall back to a placeholder string.
   const { inspectorName, inspectorColor, inspectorEmail, session } = useAuth()
+  const userId = session?.user?.id || session?.user?.user_metadata?.sub || "anonymous"
+  const storageKey = `adrChecklistData_${variant}_${userId}`
   const inspectorNameText = (inspectorName || "").trim()
   const inspectorEmailText = (inspectorEmail || "").trim()
   const inspectorColorHex = (inspectorColor || "").trim()
@@ -848,7 +852,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (files.length === 0) return
 
     const newPhotos: UploadedPhoto[] = files.map((file) => {
-      const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      // Generate a unique identifier for the photo scoped to this user.  Prefixing with
+      // userId prevents queued uploads from being associated with the wrong user when
+      // multiple users share a device.  If crypto.randomUUID is unavailable, fall back
+      // to a timestamp/random suffix.
+      const uuidPart = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      const id = `${userId}_${uuidPart}`
       return {
         id,
         name: file.name || `photo_${Date.now()}.jpg`,
@@ -1751,7 +1760,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [isMounted])
 
-  // Separate useEffect for localStorage operations
+  // Separate useEffect for localStorage operations.  Reloads saved draft whenever the
+  // component becomes mounted or the storage key changes (e.g. user or variant changed).
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
 
@@ -1824,7 +1834,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         console.error("Error loading saved data:", error)
       }
     }
-  }, [isMounted])
+  }, [isMounted, storageKey])
 
 
   // Restore signature drawings on the canvases after a refresh
@@ -1908,6 +1918,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     signatureData,
     inspectorSignatureData,
     photos,
+    storageKey,
   ])
 
   // Add this right after the return statement
