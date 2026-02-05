@@ -1511,6 +1511,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     try {
       const pdf = await buildAdrPdf()
 
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
+      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
+
       // Build identity hash (used to dedupe between Download and Email)
       const uploadedPhotos = photos
         .filter((p) => p.status === "done" && !!p.url)
@@ -1568,19 +1571,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         compressionOptions: { level: 6 },
       })
 
-      // Store ZIP in Supabase (best-effort; app continues even if store fails)
+      // Store ZIP in Supabase (so it appears in ADR Checklist History).
+      // Uses /api/adr-store to create/update the DB row and (if needed) returns a signed upload token.
+      let historyStored = false
       try {
-        const zipArr = await zipBlob.arrayBuffer()
-        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
-        const zipBase64 = Buffer.from(zipArr).toString("base64")
-
-        await fetch("/api/adr-store", {
+        const storeRes = await fetch("/api/adr-store", {
           method: "POST",
           headers: authHeaders,
           body: JSON.stringify({
             variant,
             checklistHash,
-            zipBase64,
             emailSent: false,
             meta: {
               variant,
@@ -1589,10 +1589,35 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
               trailerPlate,
               inspectionDate: checkDate,
               inspectorName: loggedInspectorName || selectedInspector,
-          inspectorEmail: loggedInspectorEmail || undefined,
+              inspectorEmail: loggedInspectorEmail || undefined,
             },
           }),
         })
+
+        const storeData = await storeRes.json().catch(() => ({}))
+        if (!storeRes.ok || !storeData?.success) {
+          throw new Error(storeData?.message || `adr-store failed (${storeRes.status})`)
+        }
+
+        // If this is a new row, upload ZIP to Storage via signed upload token so History downloads work too.
+        if (storeData?.upload && storeData?.path && storeData?.token) {
+          const { getSupabaseClient } = await import("@/lib/supabaseClient")
+          const supabase = getSupabaseClient()
+          const bucket: any = supabase.storage.from("adr-checklists")
+          if (typeof bucket.uploadToSignedUrl === "function") {
+            const blobForUpload = zipBlob.slice(0, zipBlob.size, "application/zip")
+            const up = await bucket.uploadToSignedUrl(storeData.path, storeData.token, blobForUpload, {
+              contentType: "application/zip",
+            })
+            if (up?.error) {
+              console.warn("Supabase ZIP upload failed (download)", up.error)
+            }
+          } else {
+            console.warn("Supabase client does not support uploadToSignedUrl for ZIP upload")
+          }
+        }
+
+        historyStored = true
       } catch (e) {
         console.warn("Supabase store failed (download)", e)
       }
@@ -1619,6 +1644,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           // ignore
         }
       }, 10000)
+
+
+      if (historyStored) {
+        resetForm()
+      }
 } catch (error) {
       console.error("Error generating ZIP:", error)
     } finally {
@@ -2013,6 +2043,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       setEmailStatus("Generating PDF...")
 
       const pdf = await buildAdrPdf()
+
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
+      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
 
       // IMPORTANT: do NOT send the PDF as base64 in JSON (can exceed Vercel body limits -> HTTP 413).
       // Instead, upload the PDF directly to Supabase Storage via a signed upload URL, then pass the storage path
