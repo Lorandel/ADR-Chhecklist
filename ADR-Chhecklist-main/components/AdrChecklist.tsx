@@ -10,8 +10,18 @@ import { useAuth } from "@/components/auth/AuthProvider"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
-import { idbPutPhoto, idbGetPhoto, idbDeletePhoto, idbListPhotos } from "@/lib/offlinePhotos"
+import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
+
+const INSPECTOR_COLORS: Record<string, string> = {
+  "Alexandru Dogariu": "#FF8C00",
+  "Robert Kerekes": "#8B4513",
+  "Eduard Tudose": "#000000",
+  "Angela Ilis": "#FF69B4",
+  "Lucian Sistac": "#1E90FF",
+  "Martian Gherasim": "#008000",
+  "Alexandru Florea": "#DAA520",
+}
 
 const capitalizeWords = (str: string) =>
   str
@@ -34,14 +44,6 @@ type UploadedPhoto = {
   error?: string
 }
 
-type PersistedPhotoMeta = {
-  id: string
-  name?: string
-  url?: string
-  contentType?: string
-  status?: PhotoUploadStatus
-}
-
 type ADRChecklistProps = {
   variant: ChecklistVariant
   onBack?: () => void
@@ -49,16 +51,9 @@ type ADRChecklistProps = {
 
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
-
-  // Build a per‑user storage key.  Without scoping draft data to the current user, a new
-  // user logging into the same device would pick up another user's incomplete checklist.  Use
-  // the user ID from the session if available, or fall back to a placeholder string.
-  const { inspectorName, inspectorColor, inspectorEmail, session } = useAuth()
-  const userId = session?.user?.id || session?.user?.user_metadata?.sub || "anonymous"
+  const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, session } = useAuth()
+  const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
   const storageKey = `adrChecklistData_${variant}_${userId}`
-  const inspectorNameText = (inspectorName || "").trim()
-  const inspectorEmailText = (inspectorEmail || "").trim()
-  const inspectorColorHex = (inspectorColor || "").trim()
 
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
@@ -76,6 +71,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [showResult, setShowResult] = useState(false)
   const [allChecked, setAllChecked] = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
+  const [selectedInspector, setSelectedInspector] = useState("")
+
+  // Inspector is always the logged-in inspector (no manual selector).
+  useEffect(() => {
+    if (!loggedInspectorName) return
+    if (selectedInspector !== loggedInspectorName) {
+      setSelectedInspector(loggedInspectorName)
+    }
+  }, [loggedInspectorName, selectedInspector])
   const [dateValid, setDateValid] = useState({
     drivingLicense: false,
     adrCertificate: false,
@@ -824,23 +828,29 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             resolve({ url: res.url, contentType: res.contentType || file.type })
             return
           }
-          const message = res?.message || res?.error || `Upload failed (${xhr.status})`
-          const transient = xhr.status === 0 || xhr.status === 408 || xhr.status === 429 || xhr.status >= 500
-          setPhotos((prev) =>
-            prev.map((p) =>
-              p.id === photoId
-                ? transient
-                  ? { ...p, status: "queued", progress: 0, error: message }
-                  : { ...p, status: "error", error: message }
-                : p,
-            ),
-          )
+
+          const status = xhr.status || 0
+          const message = res?.message || res?.error || `Upload failed (${status})`
+
+          // If the internet drops mid-upload, some browsers keep navigator.onLine=true but XHR fails (status 0).
+          // We never hard-fail on network/server hiccups; keep the photo queued and retry automatically.
+          if (status === 0 || status >= 500) {
+            setPhotos((prev) =>
+              prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
+            )
+          } else {
+            // For 4xx errors (bad request), surface the error.
+            setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
+          }
+
           reject(new Error(message))
         }
 
         xhr.onerror = () => {
-          const message = "Upload failed (network error)"
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)))
+          const message = "Upload paused (network issue). Will retry automatically when online."
+          setPhotos((prev) =>
+            prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)),
+          )
           reject(new Error(message))
         }
 
@@ -860,12 +870,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (files.length === 0) return
 
     const newPhotos: UploadedPhoto[] = files.map((file) => {
-      // Generate a unique identifier for the photo scoped to this user.  Prefixing with
-      // userId prevents queued uploads from being associated with the wrong user when
-      // multiple users share a device.  If crypto.randomUUID is unavailable, fall back
-      // to a timestamp/random suffix.
-      const uuidPart = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
-      const id = `${userId}_${uuidPart}`
+      const rawId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      const id = `${userId}_${rawId}`
       return {
         id,
         name: file.name || `photo_${Date.now()}.jpg`,
@@ -916,9 +922,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       try {
         await uploadPhoto(fileToUpload, p.id)
-        try {
-          await idbDeletePhoto(p.id)
-        } catch {}
       } catch {
         // State already updated in uploadPhoto
       }
@@ -952,9 +955,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
         try {
           await uploadPhoto(file, p.id)
-          try {
-            await idbDeletePhoto(p.id)
-          } catch {}
         } catch {
           // keep queued/error as set by uploadPhoto
         }
@@ -965,28 +965,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   }, [photos, uploadPhoto])
 
   useEffect(() => {
-    const kick = () => {
+    const onOnline = () => {
       void tryUploadPendingPhotos()
     }
-    window.addEventListener("online", kick)
-    window.addEventListener("focus", kick)
-    const onVis = () => {
-      if (typeof document !== "undefined" && !document.hidden) kick()
-    }
-    document.addEventListener("visibilitychange", onVis)
-
+    window.addEventListener("online", onOnline)
     // attempt once on mount (if there are queued photos restored)
-    kick()
-
-    // Safety net: some browsers miss the online event; periodically retry while mounted.
-    const t = window.setInterval(kick, 8000)
-
-    return () => {
-      window.removeEventListener("online", kick)
-      window.removeEventListener("focus", kick)
-      document.removeEventListener("visibilitychange", onVis)
-      window.clearInterval(t)
-    }
+    void tryUploadPendingPhotos()
+    return () => window.removeEventListener("online", onOnline)
   }, [tryUploadPendingPhotos])
 
   const removePhoto = (photoId: string) => {
@@ -999,6 +984,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       }
     }
 
+    void idbDeletePhoto(photoId).catch(() => {})
+
     setPhotos((prev) => {
       const toRemove = prev.find((p) => p.id === photoId)
       if (toRemove?.previewUrl) {
@@ -1010,9 +997,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       }
       return prev.filter((p) => p.id !== photoId)
     })
-
-    // Best-effort: remove the offline blob too (so it doesn't reappear after refresh).
-    void idbDeletePhoto(photoId).catch(() => {})
   }
 
 
@@ -1028,6 +1012,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const margin = 10
     const gap = 6
     const headerH = 18
+
+    const inspectorColors: Record<string, string> = {
+      "Alexandru Dogariu": "#FF8C00",
+      "Robert Kerekes": "#8B4513",
+      "Eduard Tudose": "#000000",
+      "Angela Ilis": "#FF69B4",
+      "Lucian Sistac": "#1E90FF",
+      "Martian Gherasim": "#008000",
+      "Alexandru Florea": "#DAA520",
+    }
 
     const safeVal = (v: string) => {
       const s = (v || "").toString().trim()
@@ -1490,14 +1484,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.text(title, x, sigY + 30)
 
       if (extra?.inspector) {
-        const inspectorColor = (inspectorColorHex || "#111827").trim() || "#111827"
+        const inspectorColor = inspectorColors[selectedInspector] || "#111827"
         const label = "Inspector: "
         pdf.setFont("helvetica", "bold")
         pdf.setTextColor(17, 24, 39)
         pdf.text(label, x, sigY + 30)
         const lw = pdf.getTextWidth(label)
         pdf.setTextColor(inspectorColor)
-        pdf.text(inspectorNameText || "Not configured", x + lw, sigY + 30)
+        pdf.text(selectedInspector || "Not selected", x + lw, sigY + 30)
       }
 
       pdf.setTextColor(17, 24, 39)
@@ -1531,7 +1525,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         truckPlate,
         trailerPlate,
         inspectionDate: checkDate,
-        selectedInspector: inspectorNameText,
+        selectedInspector,
         remarks,
         drivingLicenseDate,
         adrCertificateDate,
@@ -1551,23 +1545,55 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       const { default: JSZip } = await import("jszip")
       const zip = new JSZip()
 
+      const baseName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}`
+
       // PDF in ZIP
       const pdfBuffer = pdf.output("arraybuffer")
-      const pdfName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.pdf`
-      zip.file(pdfName, pdfBuffer)
+      zip.file(`${baseName}.pdf`, pdfBuffer)
 
-      // Photos in ZIP
+      // Photos in ZIP (prefer IndexedDB blobs to avoid CORS issues with public storage URLs)
       const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
-      for (let i = 0; i < uploadedPhotos.length; i++) {
-        const ph = uploadedPhotos[i]
+      const photosForZip = photos.slice()
+
+      for (let i = 0; i < photosForZip.length; i++) {
+        const ph = photosForZip[i]
+        let arrBuf: ArrayBuffer | null = null
+        let fileName = safeFileName(ph.name || `photo_${i + 1}.jpg`)
+
+        // 1) Try local IndexedDB (most reliable, works offline)
         try {
-          const resp = await fetch(ph.url)
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-          const arrBuf = await resp.arrayBuffer()
-          const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
-          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
-        } catch (e) {
-          console.warn("Failed to add photo to ZIP", e)
+          const rec = await idbGetPhoto(ph.id)
+          if (rec?.blob) {
+            arrBuf = await rec.blob.arrayBuffer()
+            if (rec.name) fileName = safeFileName(rec.name)
+          }
+        } catch {
+          // ignore
+        }
+
+        // 2) Fallback: fetch uploaded URL (may fail on some storages due to CORS)
+        if (!arrBuf && ph.url) {
+          try {
+            const resp = await fetch(ph.url)
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+            arrBuf = await resp.arrayBuffer()
+          } catch {
+            // ignore
+          }
+        }
+
+        // 3) Fallback: fetch preview blob URL (if still present)
+        if (!arrBuf && ph.previewUrl) {
+          try {
+            const resp = await fetch(ph.previewUrl)
+            if (resp.ok) arrBuf = await resp.arrayBuffer()
+          } catch {
+            // ignore
+          }
+        }
+
+        if (arrBuf) {
+          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${fileName}`, arrBuf)
         }
       }
 
@@ -1577,19 +1603,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         compressionOptions: { level: 6 },
       })
 
-      // Store ZIP in Supabase (best-effort; app continues even if store fails)
+      // Save to ADR Checklists History (DB row + upload ZIP to Supabase Storage when needed)
       try {
-        const zipArr = await zipBlob.arrayBuffer()
-        // @ts-ignore - Buffer polyfill exists in Next.js client bundles
-        const zipBase64 = Buffer.from(zipArr).toString("base64")
+        const storeHeaders: Record<string, string> = { "Content-Type": "application/json" }
+        if (session?.access_token) storeHeaders.Authorization = `Bearer ${session.access_token}`
 
-        await fetch("/api/adr-store", {
+        const storeRes = await fetch("/api/adr-store", {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+          headers: storeHeaders,
           body: JSON.stringify({
             variant,
             checklistHash,
-            zipBase64,
             emailSent: false,
             meta: {
               variant,
@@ -1597,24 +1621,71 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
               truckPlate,
               trailerPlate,
               inspectionDate: checkDate,
-              inspectorName: inspectorNameText,
+              inspectorName: loggedInspectorName || selectedInspector,
+              inspectorEmail: loggedInspectorEmail || undefined,
+              photos: photos.map((p) => ({
+                id: p.id,
+                name: p.name,
+                url: p.url || null,
+                contentType: p.contentType || null,
+                status: p.status,
+              })),
             },
           }),
         })
+
+        const storeData = await storeRes.json().catch(() => ({}))
+
+        if (storeRes.ok && storeData?.success && storeData?.upload && storeData?.path && storeData?.token) {
+          const { getSupabaseClient } = await import("@/lib/supabaseClient")
+          const supabase = getSupabaseClient()
+          const anyBucket: any = supabase.storage.from("adr-checklists")
+
+          if (typeof anyBucket.uploadToSignedUrl === "function") {
+            const zipUploadBlob = zipBlob.slice(0, zipBlob.size, "application/zip")
+            const uploadResult = await anyBucket.uploadToSignedUrl(storeData.path, storeData.token, zipUploadBlob, {
+              contentType: "application/zip",
+            })
+            if (uploadResult?.error) {
+              console.warn("Supabase ZIP upload failed (download)", uploadResult.error)
+            }
+          } else {
+            console.warn("Supabase client does not support uploadToSignedUrl (ZIP)")
+          }
+        } else if (!storeRes.ok || !storeData?.success) {
+          console.warn("Supabase store failed (download)", storeData?.message || `HTTP ${storeRes.status}`)
+        }
       } catch (e) {
         console.warn("Supabase store failed (download)", e)
       }
 
       // Download ZIP
-      const zipName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.zip`
+      const zipName = `${baseName}.zip`
       const url = URL.createObjectURL(zipBlob)
       const a = document.createElement("a")
       a.href = url
       a.download = zipName
+
+      // iOS Safari sometimes navigates instead of downloading; open in a new tab to avoid wiping the current page.
+      const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : ""
+      const iOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && (navigator as any).maxTouchPoints > 1)
+      if (iOS) {
+        a.target = "_blank"
+        a.rel = "noopener noreferrer"
+      }
+
       document.body.appendChild(a)
       a.click()
       a.remove()
-      URL.revokeObjectURL(url)
+
+      // Keep the same behavior as Send Email: after generating/downloading, reset the checklist.
+      resetForm()
+
+      setTimeout(() => {
+        try {
+          URL.revokeObjectURL(url)
+        } catch {}
+      }, 10_000)
     } catch (error) {
       console.error("Error generating ZIP:", error)
     } finally {
@@ -1678,11 +1749,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     clearSignature()
     clearInspectorSignature()
 
+    // Reset inspector
+    setSelectedInspector(loggedInspectorName || "")
+
     // Reset remarks + photos
     setRemarks("")
     setPhotos((prev) => {
       prev.forEach((p) => {
-        // Best-effort: also clear the offline blob for this photo.
         void idbDeletePhoto(p.id).catch(() => {})
         if (p.previewUrl) {
           try {
@@ -1704,7 +1777,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (typeof window !== "undefined") {
       localStorage.removeItem(storageKey)
     }
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, storageKey])
+  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey])
 
   // Initialize component
   useEffect(() => {
@@ -1786,87 +1859,18 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       if (cleanupDriver) cleanupDriver()
       if (cleanupInspector) cleanupInspector()
     }
-  }, [isMounted])
+  }, [isMounted, storageKey, includeAdrCertificate])
 
-  // Separate useEffect for localStorage operations. This runs whenever the component becomes
-  // mounted or the storage key changes (e.g. user switches accounts on the same device).
-  // IMPORTANT: we reset in-memory state first so drafts do NOT leak across users.
+  // Separate useEffect for localStorage operations
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
 
-    // Reset to a clean slate for this user/variant before restoring.
-    setDriverName("")
-    setTruckPlate("")
-    setTrailerPlate("")
-    setDrivingLicenseDate({ month: "", year: "" })
-    setAdrCertificateDate({ month: "", year: "" })
-    setTruckDocDate({ month: "", year: "" })
-    setTrailerDocDate({ month: "", year: "" })
-    setRemarks("")
-    setSignatureData(null)
-    setInspectorSignatureData(null)
-    setShowResult(false)
-    setMissingItems([])
-    setAllChecked(false)
+    // Try to load saved data from localStorage
+    const savedData = localStorage.getItem(storageKey)
+    if (savedData) {
+      try {
+        const parsedData = JSON.parse(savedData)
 
-    // Reset checklist toggles (so a different user starts from 0 if they have no draft).
-    const initialEquipmentState: Record<string, boolean> = {}
-    equipmentItems.forEach((item) => {
-      initialEquipmentState[item.name] = false
-    })
-    setCheckedItems(initialEquipmentState)
-
-    const initialBeforeLoadingState: Record<string, boolean> = {}
-    beforeLoadingItems.forEach((item) => {
-      initialBeforeLoadingState[item] = false
-    })
-    setBeforeLoadingChecked(initialBeforeLoadingState)
-
-    const initialAfterLoadingState: Record<string, boolean> = {}
-    afterLoadingItems.forEach((item) => {
-      initialAfterLoadingState[item] = false
-    })
-    setAfterLoadingChecked(initialAfterLoadingState)
-
-    // Reset expiry dates
-    const initialDates: Record<string, { month: string; year: string }> = {}
-    const initialExpiredItems: Record<string, boolean> = {}
-    equipmentItems.forEach((item) => {
-      if (item.hasDate) {
-        initialDates[item.name] = { month: "", year: "" }
-        initialExpiredItems[item.name] = false
-      }
-    })
-    setExpiryDates(initialDates)
-    setExpiredItems(initialExpiredItems)
-
-    // Clear any previous photo previews in memory (object URLs) before restoring.
-    setPhotos((prev) => {
-      prev.forEach((p) => {
-        if (p.previewUrl && p.previewUrl.startsWith("blob:")) {
-          try {
-            URL.revokeObjectURL(p.previewUrl)
-          } catch {
-            // ignore
-          }
-        }
-      })
-      return []
-    })
-
-    const restore = async () => {
-      const savedData = localStorage.getItem(storageKey)
-      let parsedData: any = null
-      if (savedData) {
-        try {
-          parsedData = JSON.parse(savedData)
-        } catch (error) {
-          console.error("Error loading saved data:", error)
-          parsedData = null
-        }
-      }
-
-      if (parsedData) {
         // Restore form data
         if (parsedData.driverName) setDriverName(parsedData.driverName)
         if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
@@ -1879,99 +1883,106 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
+        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
-        // Signatures
+        // Restore signatures
         if (typeof parsedData.signatureData === "string") setSignatureData(parsedData.signatureData)
         if (typeof parsedData.inspectorSignatureData === "string") setInspectorSignatureData(parsedData.inspectorSignatureData)
-      }
 
-      // Restore photos for this user:
-      // - uploaded photos use their public URL
-      // - queued photos rehydrate from IndexedDB blob and resume upload when online
-      const restoredPhotos: UploadedPhoto[] = []
-      const seen = new Set<string>()
+        // Restore photos (metadata for both uploaded + pending). Image blobs live in IndexedDB.
+        if (Array.isArray(parsedData.photos)) {
+          const restored: UploadedPhoto[] = parsedData.photos
+            .filter((p: any) => p && typeof p === "object" && typeof p.id === "string" && p.id.length > 0)
+            .map((p: any) => {
+              const status: UploadedPhoto["status"] = p.status === "done" ? "done" : "queued"
+              const url = typeof p.url === "string" && p.url.length > 0 ? p.url : undefined
+              return {
+                id: p.id,
+                name: typeof p.name === "string" ? p.name : "photo.jpg",
+                previewUrl: url || "",
+                status,
+                progress: status === "done" ? 100 : 0,
+                url,
+                contentType: typeof p.contentType === "string" ? p.contentType : undefined,
+                error: typeof p.error === "string" ? p.error : undefined,
+              }
+            })
 
-      const persisted: PersistedPhotoMeta[] = Array.isArray(parsedData?.photos) ? parsedData.photos : []
-      for (const meta of persisted) {
-        if (!meta || typeof meta !== "object") continue
-        const id = typeof meta.id === "string" ? meta.id : ""
-        if (!id || !id.startsWith(`${userId}_`)) continue
-        seen.add(id)
+          setPhotos(restored)
 
-        const name = typeof meta.name === "string" && meta.name ? meta.name : "photo.jpg"
-        const contentType = typeof meta.contentType === "string" ? meta.contentType : undefined
-        const url = typeof meta.url === "string" && meta.url ? meta.url : undefined
+          // Hydrate preview thumbnails from IndexedDB (works offline, avoids CORS)
+          ;(async () => {
+            try {
+              const hydrated = await Promise.all(
+                restored.map(async (ph) => {
+                  try {
+                    const rec = await idbGetPhoto(ph.id)
+                    if (rec?.blob) {
+                      return {
+                        id: ph.id,
+                        previewUrl: URL.createObjectURL(rec.blob),
+                        name: rec.name,
+                        contentType: rec.contentType,
+                      }
+                    }
+                  } catch {
+                    // ignore
+                  }
+                  return null
+                }),
+              )
 
-        if (url) {
-          restoredPhotos.push({
-            id,
-            name,
-            previewUrl: url,
-            status: "done",
-            progress: 100,
-            url,
-            contentType,
-          })
-          continue
+              setPhotos((prev) =>
+                prev.map((ph) => {
+                  const hit = hydrated.find((h) => h && h.id === ph.id)
+                  if (!hit) return ph
+                  if (ph.previewUrl && ph.previewUrl.startsWith("blob:") && ph.previewUrl !== hit.previewUrl) {
+                    try {
+                      URL.revokeObjectURL(ph.previewUrl)
+                    } catch {
+                      // ignore
+                    }
+                  }
+                  return {
+                    ...ph,
+                    previewUrl: hit.previewUrl,
+                    name: hit.name || ph.name,
+                    contentType: hit.contentType || ph.contentType,
+                  }
+                }),
+              )
+            } catch {
+              // ignore
+            }
+          })()
         }
 
-        const rec = await idbGetPhoto(id).catch(() => null)
-        if (!rec?.blob) continue
-        const previewUrl = URL.createObjectURL(rec.blob)
-        restoredPhotos.push({
-          id,
-          name: rec.name || name,
-          previewUrl,
-          status: "queued",
-          progress: 0,
-          contentType: rec.contentType || contentType,
-        })
-      }
+        // Validate dates after loading
+        if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
+          setTimeout(() => validateLicenseDate("drivingLicense"), 0)
+        }
+        if (includeAdrCertificate && parsedData.adrCertificateDate?.month && parsedData.adrCertificateDate?.year) {
+          setTimeout(() => validateLicenseDate("adrCertificate"), 0)
+        }
+        if (parsedData.truckDocDate?.month && parsedData.truckDocDate?.year) {
+          setTimeout(() => validateTruckDocDate(), 0)
+        }
+        if (parsedData.trailerDocDate?.month && parsedData.trailerDocDate?.year) {
+          setTimeout(() => validateTrailerDocDate(), 0)
+        }
 
-      // If localStorage did not yet include some queued photos (e.g. crash/refresh), recover them from IndexedDB.
-      const idb = await idbListPhotos().catch(() => [])
-      for (const rec of idb) {
-        if (!rec?.id || !rec.id.startsWith(`${userId}_`)) continue
-        if (seen.has(rec.id)) continue
-        const previewUrl = URL.createObjectURL(rec.blob)
-        restoredPhotos.push({
-          id: rec.id,
-          name: rec.name || "photo.jpg",
-          previewUrl,
-          status: "queued",
-          progress: 0,
-          contentType: rec.contentType || "image/jpeg",
-        })
-      }
-
-      if (restoredPhotos.length) {
-        setPhotos(restoredPhotos)
-      }
-
-      // Validate dates after loading (best-effort)
-      if (parsedData?.drivingLicenseDate?.month && parsedData?.drivingLicenseDate?.year) {
-        setTimeout(() => validateLicenseDate("drivingLicense"), 0)
-      }
-      if (includeAdrCertificate && parsedData?.adrCertificateDate?.month && parsedData?.adrCertificateDate?.year) {
-        setTimeout(() => validateLicenseDate("adrCertificate"), 0)
-      }
-      if (parsedData?.truckDocDate?.month && parsedData?.truckDocDate?.year) {
-        setTimeout(() => validateTruckDocDate(), 0)
-      }
-      if (parsedData?.trailerDocDate?.month && parsedData?.trailerDocDate?.year) {
-        setTimeout(() => validateTrailerDocDate(), 0)
-      }
-
-      if (parsedData?.expiryDates) {
-        Object.keys(parsedData.expiryDates).forEach((itemName) => {
-          setTimeout(() => checkIfDateIsExpired(itemName), 0)
-        })
+        // Validate equipment expiry dates
+        if (parsedData.expiryDates) {
+          Object.keys(parsedData.expiryDates).forEach((itemName) => {
+            setTimeout(() => checkIfDateIsExpired(itemName), 0)
+          })
+        }
+      } catch (error) {
+        console.error("Error loading saved data:", error)
       }
     }
-
-    void restore()
-  }, [isMounted, storageKey, includeAdrCertificate, userId, equipmentItems, beforeLoadingItems, afterLoadingItems])
+  }, [isMounted, storageKey, includeAdrCertificate])
 
 
   // Restore signature drawings on the canvases after a refresh
@@ -2027,23 +2038,25 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       beforeLoadingChecked,
       afterLoadingChecked,
       expiryDates,
-      selectedInspector: inspectorNameText,
+      selectedInspector,
       remarks,
       signatureData,
       inspectorSignatureData,
-      // Persist photo metadata (IDs) for both uploaded and queued photos.
-      // The actual image blobs for queued uploads live in IndexedDB.
+      // Persist photo metadata for both uploaded and pending photos.
+      // Actual image data is kept in IndexedDB (idbPutPhoto) so drafts survive refresh/offline.
       photos: photos.map((p) => ({
         id: p.id,
         name: p.name,
-        url: p.url,
-        contentType: p.contentType,
+        url: p.url || null,
+        contentType: p.contentType || null,
         status: p.status,
+        error: p.error || null,
       })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
   }, [
+    storageKey,
     isMounted,
     driverName,
     truckPlate,
@@ -2056,12 +2069,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     beforeLoadingChecked,
     afterLoadingChecked,
     expiryDates,
-    selectedInspector: inspectorNameText,
+    selectedInspector,
     remarks,
     signatureData,
     inspectorSignatureData,
     photos,
-    storageKey,
   ])
 
   // Add this right after the return statement
@@ -2142,7 +2154,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         truckPlate,
         trailerPlate,
         inspectionDate: checkDate,
-        selectedInspector: inspectorNameText,
+        selectedInspector,
         remarks,
         drivingLicenseDate,
         adrCertificateDate,
@@ -2161,7 +2173,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       setEmailStatus("Uploading PDF...")
       const presignRes = await fetch("/api/presign-pdf-upload", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ checklistHash, variant }),
       })
       const presignData = await presignRes.json().catch(() => ({}))
@@ -2188,11 +2200,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       setEmailStatus("Sending email...")
 
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
+      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
+
       const response = await fetch("/api/send-email", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        headers: authHeaders,
         body: JSON.stringify({
-          inspectorName: inspectorNameText,
+          inspectorName: loggedInspectorName || selectedInspector,
+          inspectorEmail: loggedInspectorEmail || undefined,
           // Keep the payload small; the server will download from Storage.
           pdfStoragePath: presignData.path,
           driverName,
@@ -2209,7 +2225,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             truckPlate,
             trailerPlate,
             inspectionDate: checkDate,
-            inspectorName: inspectorNameText,
+            inspectorName: loggedInspectorName || selectedInspector,
           },
         }),
       })
@@ -2236,17 +2252,28 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
   return (
     <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
-      <div className="text-center mb-6">
+      <div className="relative text-center mb-6">
         <h1 id="adr-title" className="text-2xl font-bold">
           ADR Checklist{variant === "under1000" ? " (Under 1000 pts)" : ""}
         </h1>
+
+        {selectedInspector && (
+          <div
+            className="absolute right-0 top-0 rounded-md px-3 py-1 text-sm font-semibold text-white"
+            style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
+          >
+            {selectedInspector}
+          </div>
+        )}
       </div>
 
       {onBack && (
-        <div className="flex justify-start mb-4">
-          <Button variant="outline" className="bg-transparent" onClick={onBack}>
+        <div className="flex items-center justify-between mb-4">
+          <Button type="button" variant="outline" className="bg-transparent" onClick={onBack}>
             ← Back
           </Button>
+
+          <div />
         </div>
       )}
 
@@ -2723,12 +2750,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       )}
 
       <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-4">Inspector:</h2>
-        <div className="bg-black text-white border border-gray-700 rounded-md px-3 py-2">
-          {inspectorNameText || "Inspector not configured"}
-        </div>
-
-        {/* Remarks + Photos (below inspector select, above signatures) */}
+        {/* Remarks + Photos (above signatures) */}
         <div className="mt-4">
           <Label htmlFor="remarks" className="block mb-2">
             Remarks:
@@ -2851,7 +2873,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           disabled={
             isSendingEmail ||
             isPdfGenerating ||
-            !inspectorEmailText ||
+            !selectedInspector ||
             photos.some((p) => p.status === "uploading" || p.status === "queued")
           }
           style={{ backgroundColor: "#0099d0" }}
