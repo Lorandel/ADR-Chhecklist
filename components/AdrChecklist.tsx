@@ -1552,17 +1552,34 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       // Photos in ZIP
       const safeFileName = (name: string) => (name || "").replace(/[^a-zA-Z0-9._-]/g, "_")
-      for (let i = 0; i < uploadedPhotos.length; i++) {
-        const ph = uploadedPhotos[i]
-        try {
-          const resp = await fetch(ph.url)
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-          const arrBuf = await resp.arrayBuffer()
-          const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
-          zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
-        } catch (e) {
-          console.warn("Failed to add photo to ZIP", e)
+      const photosForZip = photos.filter((p) => p.status === "done" && (!!p.url || !!p.previewUrl))
+
+      for (let i = 0; i < photosForZip.length; i++) {
+        const ph = photosForZip[i]
+
+        // Prefer the uploaded URL (usually the compressed version). If the browser blocks reading it (CORS),
+        // fall back to the local preview Blob URL so the photos still end up in the ZIP.
+        const candidates = [ph.url, ph.previewUrl].filter((u, idx, arr) => typeof u === "string" && u.length > 0 && arr.indexOf(u) === idx) as string[]
+
+        let arrBuf: ArrayBuffer | null = null
+        for (const u of candidates) {
+          try {
+            const resp = await fetch(u)
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+            arrBuf = await resp.arrayBuffer()
+            break
+          } catch {
+            // try next candidate
+          }
         }
+
+        if (!arrBuf) {
+          console.warn("Failed to add photo to ZIP", ph.name)
+          continue
+        }
+
+        const original = safeFileName(ph.name || `photo_${i + 1}.jpg`)
+        zip.file(`photos/${String(i + 1).padStart(2, "0")}_${original}`, arrBuf)
       }
 
       const zipBlob = await zip.generateAsync({
