@@ -40,7 +40,7 @@ export default function AdminPanelModal({ open, onClose }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
 
-  // terminal output for full system test
+  // Terminal output for full system test
   const [terminalText, setTerminalText] = useState("")
   const [terminalRunning, setTerminalRunning] = useState(false)
 
@@ -210,7 +210,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     }
   }
 
-
   const runSystemTest = async (send: boolean) => {
     const token = await getToken()
     if (!token) {
@@ -355,7 +354,6 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                 <div className="mt-3 text-xs text-gray-500">
                   These endpoints are safe during build. Actions that create external side effects run only when you click a "Run" button (query params).
                 </div>
-
                 <div className="mt-5 border-t border-gray-200 pt-4">
                   <div className="text-sm font-semibold mb-2">Full system test (terminal)</div>
                   <div className="flex flex-wrap gap-2">
@@ -383,12 +381,12 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                   <div className="mt-3 h-60 overflow-auto rounded-lg bg-black p-3 font-mono text-xs text-green-100 whitespace-pre-wrap">
                     {terminalText || (terminalRunning ? "Running..." : "No output yet.")}
                   </div>
-
                   <div className="mt-2 text-xs text-gray-600">
                     Uses <span className="font-mono">/api/system-test</span> (stream). For real email pipeline append{" "}
                     <span className="font-mono">?send=1</span>.
                   </div>
                 </div>
+
               </div>
             </div>
 

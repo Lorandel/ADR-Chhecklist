@@ -13,6 +13,17 @@ import { stableStringify } from "@/lib/stableStringify"
 import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
 
+const INSPECTOR_COLORS: Record<string, string> = {
+  "Alexandru Dogariu": "#FF8C00",
+  "Robert Kerekes": "#8B4513",
+  "Eduard Tudose": "#000000",
+  "Angela Ilis": "#FF69B4",
+  "Lucian Sistac": "#1E90FF",
+  "Martian Gherasim": "#008000",
+  "Alexandru Florea": "#DAA520",
+}
+
+
 const capitalizeWords = (str: string) =>
   str
     .split(" ")
@@ -64,7 +75,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [selectedInspector, setSelectedInspector] = useState("")
 
   // iOS/iPadOS Safari sometimes ignores the download attribute and navigates to the Blob URL.
-  // We avoid "page reset / history navigation" by opening the Blob URL in a new tab on iOS.
+  // To prevent "page reset / history navigation" we open the Blob URL in a new tab on iOS.
   const isIOSDevice = () => {
     if (typeof navigator === "undefined") return false
     const ua = navigator.userAgent || ""
@@ -72,7 +83,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const iPadOS = /Macintosh/.test(ua) && (navigator as any).maxTouchPoints > 1
     return iOS || iPadOS
   }
-
 
   // Inspector is always the logged-in inspector (no manual selector).
   useEffect(() => {
@@ -1010,17 +1020,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const margin = 10
     const gap = 6
     const headerH = 18
-
-    const inspectorColors: Record<string, string> = {
-      "Alexandru Dogariu": "#FF8C00",
-      "Robert Kerekes": "#8B4513",
-      "Eduard Tudose": "#000000",
-      "Angela Ilis": "#FF69B4",
-      "Lucian Sistac": "#1E90FF",
-      "Martian Gherasim": "#008000",
-      "Alexandru Florea": "#DAA520",
-    }
-
     const safeVal = (v: string) => {
       const s = (v || "").toString().trim()
       return s.length ? s : "-"
@@ -1482,7 +1481,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.text(title, x, sigY + 30)
 
       if (extra?.inspector) {
-        const inspectorColor = inspectorColors[selectedInspector] || "#111827"
+        const inspectorColor = INSPECTOR_COLORS[selectedInspector] || "#111827"
         const label = "Inspector: "
         pdf.setFont("helvetica", "bold")
         pdf.setTextColor(17, 24, 39)
@@ -1511,9 +1510,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     try {
       const pdf = await buildAdrPdf()
-
-      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
-      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
 
       // Build identity hash (used to dedupe between Download and Email)
       const uploadedPhotos = photos
@@ -1603,7 +1599,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       // Download ZIP
       const zipName = `ADR-Check_${driverName.replace(/\s+/g, "_")}_${checkDate.replace(/-/g, ".")}.zip`
-      const url = URL.createObjectURL(zipBlob)
+      const blobForDownload = zipBlob.slice(0, zipBlob.size, "application/zip")
+      const url = URL.createObjectURL(blobForDownload)
       const a = document.createElement("a")
       a.href = url
       a.download = zipName
@@ -1615,7 +1612,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       document.body.appendChild(a)
       a.click()
       a.remove()
-      // Delay revoke so Safari has time to start the download/open.
       setTimeout(() => {
         try {
           URL.revokeObjectURL(url)
@@ -1623,8 +1619,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           // ignore
         }
       }, 10000)
-
-    } catch (error) {
+} catch (error) {
       console.error("Error generating ZIP:", error)
     } finally {
       setIsPdfGenerating(false)
@@ -2019,9 +2014,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       const pdf = await buildAdrPdf()
 
-      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
-      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
-
       // IMPORTANT: do NOT send the PDF as base64 in JSON (can exceed Vercel body limits -> HTTP 413).
       // Instead, upload the PDF directly to Supabase Storage via a signed upload URL, then pass the storage path
       // to the email API. This keeps the UI/behavior the same while making the request small and reliable.
@@ -2085,6 +2077,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       setEmailStatus("Sending email...")
 
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" }
+      if (session?.access_token) authHeaders.Authorization = `Bearer ${session.access_token}`
+
       const response = await fetch("/api/send-email", {
         method: "POST",
         headers: authHeaders,
@@ -2134,10 +2129,22 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
   return (
     <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
-      <div className="text-center mb-6">
-        <h1 id="adr-title" className="text-2xl font-bold">
+      <div className="relative mb-6">
+        <h1 id="adr-title" className="text-2xl font-bold text-center">
           ADR Checklist{variant === "under1000" ? " (Under 1000 pts)" : ""}
         </h1>
+        {(loggedInspectorName || selectedInspector) && (
+          <div className="absolute right-0 top-0">
+            <span
+              className="inline-flex max-w-[48vw] items-center truncate rounded-md px-3 py-1 text-sm font-semibold text-white md:max-w-[16rem]"
+              style={{
+                backgroundColor: INSPECTOR_COLORS[loggedInspectorName || selectedInspector] || "#111827",
+              }}
+            >
+              {loggedInspectorName || selectedInspector}
+            </span>
+          </div>
+        )}
       </div>
 
       {onBack && (
@@ -2621,13 +2628,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       )}
 
       <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-4">
-          Inspector:{" "}
-          <span className="inline-flex items-center rounded-md bg-black px-3 py-1 text-sm font-semibold text-white">
-            {loggedInspectorName || selectedInspector || "Inspector not configured"}
-          </span>
-        </h2>
-
         {/* Remarks + Photos (below inspector select, above signatures) */}
         <div className="mt-4">
           <Label htmlFor="remarks" className="block mb-2">
@@ -2642,7 +2642,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           />
 
           <div className="mt-4 flex flex-col gap-3">
-            <div className="flex flex-col sm:flex-row items-start gap-4">
+            <div className="flex items-start gap-4">
               <div className="shrink-0">
                 <Button
                   type="button"
@@ -2708,7 +2708,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         </div>
 
         {/* Container to hold both signature boxes side by side */}
-        <div className="flex flex-col md:flex-row gap-6 mt-6">
+        <div className="flex gap-6 mt-6">
           <div className="flex-1">
             <Label className="block mb-2">Driver Signature:</Label>
             <div className="border rounded-md p-2">
@@ -2717,7 +2717,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
                 className="w-full border border-gray-300 rounded"
                 style={{ height: "150px", touchAction: "none" }}
               />
-              <Button type="button" variant="outline" className="mt-2 bg-transparent" onClick={clearSignature}>
+              <Button variant="outline" className="mt-2 bg-transparent" onClick={clearSignature}>
                 Clear Signature
               </Button>
             </div>
@@ -2731,7 +2731,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
                 className="w-full border border-gray-300 rounded"
                 style={{ height: "150px", touchAction: "none" }}
               />
-              <Button type="button" variant="outline" className="mt-2 bg-transparent" onClick={clearInspectorSignature}>
+              <Button variant="outline" className="mt-2 bg-transparent" onClick={clearInspectorSignature}>
                 Clear Signature
               </Button>
             </div>
@@ -2740,14 +2740,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       </div>
 
       <div className="flex flex-col space-y-4 mb-6">
-        <Button type="button" onClick={checkMissingItems} className="w-full">
+        <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
         <Button type="button" onClick={generateZIP} disabled={isPdfGenerating} className="w-full">
           {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
         </Button>
         <Button
-          type="button"
           onClick={handleSendEmail}
           disabled={
             isSendingEmail ||
