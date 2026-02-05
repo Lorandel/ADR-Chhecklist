@@ -10,7 +10,7 @@ import { useAuth } from "@/components/auth/AuthProvider"
 import Image from "next/image"
 import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
-import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
+import { idbPutPhoto, idbGetPhoto, idbDeletePhoto, idbListPhotos } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
 
 const capitalizeWords = (str: string) =>
@@ -32,6 +32,14 @@ type UploadedPhoto = {
   url?: string // public blob url when uploaded
   contentType?: string
   error?: string
+}
+
+type PersistedPhotoMeta = {
+  id: string
+  name?: string
+  url?: string
+  contentType?: string
+  status?: PhotoUploadStatus
 }
 
 type ADRChecklistProps = {
@@ -828,22 +836,25 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             return
           }
           const message = res?.message || res?.error || `Upload failed (${xhr.status})`
-          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "error", error: message } : p)))
-          reject(new Error(message))
-        }
-
-        xhr.onerror = () => {
-          const message = "Upload failed (network error)"
-          const offline = typeof navigator !== "undefined" ? !navigator.onLine : false
+          // If the request was interrupted (status 0) or the server is temporarily unavailable,
+          // keep the photo queued so it can retry automatically when network/server recovers.
+          const transient = xhr.status === 0 || xhr.status === 408 || xhr.status === 429 || xhr.status >= 500
           setPhotos((prev) =>
             prev.map((p) =>
               p.id === photoId
-                ? offline
+                ? transient
                   ? { ...p, status: "queued", progress: 0, error: message }
                   : { ...p, status: "error", error: message }
                 : p,
             ),
           )
+          reject(new Error(message))
+        }
+
+        xhr.onerror = () => {
+          const message = "Upload failed (network error)"
+          // Always keep queued on network errors; it will retry when online.
+          setPhotos((prev) => prev.map((p) => (p.id === photoId ? { ...p, status: "queued", progress: 0, error: message } : p)))
           reject(new Error(message))
         }
 
@@ -967,13 +978,28 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   }, [photos, uploadPhoto])
 
   useEffect(() => {
-    const onOnline = () => {
+    const kick = () => {
       void tryUploadPendingPhotos()
     }
-    window.addEventListener("online", onOnline)
+    window.addEventListener("online", kick)
+    window.addEventListener("focus", kick)
+    const onVis = () => {
+      if (typeof document !== "undefined" && !document.hidden) kick()
+    }
+    document.addEventListener("visibilitychange", onVis)
+
     // attempt once on mount (if there are queued photos restored)
-    void tryUploadPendingPhotos()
-    return () => window.removeEventListener("online", onOnline)
+    kick()
+
+    // Safety net: some browsers miss the online event; periodically retry while mounted.
+    const t = window.setInterval(kick, 8000)
+
+    return () => {
+      window.removeEventListener("online", kick)
+      window.removeEventListener("focus", kick)
+      document.removeEventListener("visibilitychange", onVis)
+      window.clearInterval(t)
+    }
   }, [tryUploadPendingPhotos])
 
   const removePhoto = (photoId: string) => {
@@ -997,6 +1023,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       }
       return prev.filter((p) => p.id !== photoId)
     })
+
+    // Best-effort: remove the offline blob too (so it doesn't reappear after refresh).
+    void idbDeletePhoto(photoId).catch(() => {})
   }
 
 
@@ -1680,6 +1709,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     setRemarks("")
     setPhotos((prev) => {
       prev.forEach((p) => {
+        // Best-effort: also clear the offline blob for this photo.
+        void idbDeletePhoto(p.id).catch(() => {})
         if (p.previewUrl) {
           try {
             URL.revokeObjectURL(p.previewUrl)
@@ -1784,17 +1815,86 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     }
   }, [isMounted])
 
-  // Separate useEffect for localStorage operations.  This runs whenever the component
-  // becomes mounted or the storage key changes (e.g. when a new user logs in or the variant changes).
+  // Separate useEffect for localStorage operations. This runs whenever the component becomes
+  // mounted or the storage key changes (e.g. user switches accounts on the same device).
+  // IMPORTANT: we reset in-memory state first so drafts do NOT leak across users.
   useEffect(() => {
     if (!isMounted || typeof window === "undefined") return
 
-    // Try to load saved data from localStorage scoped to this user + variant.
-    const savedData = localStorage.getItem(storageKey)
-    if (savedData) {
-      try {
-        const parsedData = JSON.parse(savedData)
+    // Reset to a clean slate for this user/variant before restoring.
+    setDriverName("")
+    setTruckPlate("")
+    setTrailerPlate("")
+    setDrivingLicenseDate({ month: "", year: "" })
+    setAdrCertificateDate({ month: "", year: "" })
+    setTruckDocDate({ month: "", year: "" })
+    setTrailerDocDate({ month: "", year: "" })
+    setRemarks("")
+    setSignatureData(null)
+    setInspectorSignatureData(null)
+    setShowResult(false)
+    setMissingItems([])
+    setAllChecked(false)
+    setSelectedInspector(loggedInspectorName || "")
 
+    // Reset checklist toggles (so a different user starts from 0 if they have no draft).
+    const initialEquipmentState: Record<string, boolean> = {}
+    equipmentItems.forEach((item) => {
+      initialEquipmentState[item.name] = false
+    })
+    setCheckedItems(initialEquipmentState)
+
+    const initialBeforeLoadingState: Record<string, boolean> = {}
+    beforeLoadingItems.forEach((item) => {
+      initialBeforeLoadingState[item] = false
+    })
+    setBeforeLoadingChecked(initialBeforeLoadingState)
+
+    const initialAfterLoadingState: Record<string, boolean> = {}
+    afterLoadingItems.forEach((item) => {
+      initialAfterLoadingState[item] = false
+    })
+    setAfterLoadingChecked(initialAfterLoadingState)
+
+    // Reset expiry dates
+    const initialDates: Record<string, { month: string; year: string }> = {}
+    const initialExpiredItems: Record<string, boolean> = {}
+    equipmentItems.forEach((item) => {
+      if (item.hasDate) {
+        initialDates[item.name] = { month: "", year: "" }
+        initialExpiredItems[item.name] = false
+      }
+    })
+    setExpiryDates(initialDates)
+    setExpiredItems(initialExpiredItems)
+
+    // Clear any previous photo previews in memory (object URLs) before restoring.
+    setPhotos((prev) => {
+      prev.forEach((p) => {
+        if (p.previewUrl && p.previewUrl.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(p.previewUrl)
+          } catch {
+            // ignore
+          }
+        }
+      })
+      return []
+    })
+
+    const restore = async () => {
+      const savedData = localStorage.getItem(storageKey)
+      let parsedData: any = null
+      if (savedData) {
+        try {
+          parsedData = JSON.parse(savedData)
+        } catch (error) {
+          console.error("Error loading saved data:", error)
+          parsedData = null
+        }
+      }
+
+      if (parsedData) {
         // Restore form data
         if (parsedData.driverName) setDriverName(parsedData.driverName)
         if (parsedData.truckPlate) setTruckPlate(parsedData.truckPlate)
@@ -1807,59 +1907,99 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.beforeLoadingChecked) setBeforeLoadingChecked(parsedData.beforeLoadingChecked)
         if (parsedData.afterLoadingChecked) setAfterLoadingChecked(parsedData.afterLoadingChecked)
         if (parsedData.expiryDates) setExpiryDates(parsedData.expiryDates)
-        if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
-        // Restore signatures
+        // Signatures
         if (typeof parsedData.signatureData === "string") setSignatureData(parsedData.signatureData)
         if (typeof parsedData.inspectorSignatureData === "string") setInspectorSignatureData(parsedData.inspectorSignatureData)
+      }
 
-        // Restore photos (we persist only uploaded photos with URLs)
-        if (Array.isArray(parsedData.photos)) {
-          const restored: UploadedPhoto[] = parsedData.photos
-            .filter((p: any) => p && typeof p === "object" && typeof p.url === "string" && p.url.length > 0)
-            .map((p: any) => ({
-              id:
-                typeof p.id === "string" && p.id.length > 0
-                  ? p.id
-                  : typeof crypto !== "undefined" && "randomUUID" in crypto
-                    ? crypto.randomUUID()
-                    : `${Date.now()}_${Math.random()}`,
-              name: typeof p.name === "string" ? p.name : "photo.jpg",
-              previewUrl: p.url,
-              status: "done" as const,
-              progress: 100,
-              url: p.url,
-              contentType: typeof p.contentType === "string" ? p.contentType : undefined,
-            }))
-          setPhotos(restored)
-        }
+      // Restore photos for this user:
+      // - uploaded photos use their public URL
+      // - queued photos rehydrate from IndexedDB blob and resume upload when online
+      const restoredPhotos: UploadedPhoto[] = []
+      const seen = new Set<string>()
 
-        // Validate dates after loading
-        if (parsedData.drivingLicenseDate?.month && parsedData.drivingLicenseDate?.year) {
-          setTimeout(() => validateLicenseDate("drivingLicense"), 0)
-        }
-        if (includeAdrCertificate && parsedData.adrCertificateDate?.month && parsedData.adrCertificateDate?.year) {
-          setTimeout(() => validateLicenseDate("adrCertificate"), 0)
-        }
-        if (parsedData.truckDocDate?.month && parsedData.truckDocDate?.year) {
-          setTimeout(() => validateTruckDocDate(), 0)
-        }
-        if (parsedData.trailerDocDate?.month && parsedData.trailerDocDate?.year) {
-          setTimeout(() => validateTrailerDocDate(), 0)
-        }
+      const persisted: PersistedPhotoMeta[] = Array.isArray(parsedData?.photos) ? parsedData.photos : []
+      for (const meta of persisted) {
+        if (!meta || typeof meta !== "object") continue
+        const id = typeof meta.id === "string" ? meta.id : ""
+        if (!id || !id.startsWith(`${userId}_`)) continue
+        seen.add(id)
 
-        // Validate equipment expiry dates
-        if (parsedData.expiryDates) {
-          Object.keys(parsedData.expiryDates).forEach((itemName) => {
-            setTimeout(() => checkIfDateIsExpired(itemName), 0)
+        const name = typeof meta.name === "string" && meta.name ? meta.name : "photo.jpg"
+        const contentType = typeof meta.contentType === "string" ? meta.contentType : undefined
+        const url = typeof meta.url === "string" && meta.url ? meta.url : undefined
+
+        if (url) {
+          restoredPhotos.push({
+            id,
+            name,
+            previewUrl: url,
+            status: "done",
+            progress: 100,
+            url,
+            contentType,
           })
+          continue
         }
-      } catch (error) {
-        console.error("Error loading saved data:", error)
+
+        const rec = await idbGetPhoto(id).catch(() => null)
+        if (!rec?.blob) continue
+        const previewUrl = URL.createObjectURL(rec.blob)
+        restoredPhotos.push({
+          id,
+          name: rec.name || name,
+          previewUrl,
+          status: "queued",
+          progress: 0,
+          contentType: rec.contentType || contentType,
+        })
+      }
+
+      // If localStorage did not yet include some queued photos (e.g. crash/refresh), recover them from IndexedDB.
+      const idb = await idbListPhotos().catch(() => [])
+      for (const rec of idb) {
+        if (!rec?.id || !rec.id.startsWith(`${userId}_`)) continue
+        if (seen.has(rec.id)) continue
+        const previewUrl = URL.createObjectURL(rec.blob)
+        restoredPhotos.push({
+          id: rec.id,
+          name: rec.name || "photo.jpg",
+          previewUrl,
+          status: "queued",
+          progress: 0,
+          contentType: rec.contentType || "image/jpeg",
+        })
+      }
+
+      if (restoredPhotos.length) {
+        setPhotos(restoredPhotos)
+      }
+
+      // Validate dates after loading (best-effort)
+      if (parsedData?.drivingLicenseDate?.month && parsedData?.drivingLicenseDate?.year) {
+        setTimeout(() => validateLicenseDate("drivingLicense"), 0)
+      }
+      if (includeAdrCertificate && parsedData?.adrCertificateDate?.month && parsedData?.adrCertificateDate?.year) {
+        setTimeout(() => validateLicenseDate("adrCertificate"), 0)
+      }
+      if (parsedData?.truckDocDate?.month && parsedData?.truckDocDate?.year) {
+        setTimeout(() => validateTruckDocDate(), 0)
+      }
+      if (parsedData?.trailerDocDate?.month && parsedData?.trailerDocDate?.year) {
+        setTimeout(() => validateTrailerDocDate(), 0)
+      }
+
+      if (parsedData?.expiryDates) {
+        Object.keys(parsedData.expiryDates).forEach((itemName) => {
+          setTimeout(() => checkIfDateIsExpired(itemName), 0)
+        })
       }
     }
-  }, [isMounted, storageKey])
+
+    void restore()
+  }, [isMounted, storageKey, includeAdrCertificate, userId, loggedInspectorName, equipmentItems, beforeLoadingItems, afterLoadingItems])
 
 
   // Restore signature drawings on the canvases after a refresh
@@ -1919,9 +2059,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       remarks,
       signatureData,
       inspectorSignatureData,
-      photos: photos
-        .filter((p) => p.status === "done" && !!p.url)
-        .map((p) => ({ id: p.id, name: p.name, url: p.url, contentType: p.contentType })),
+      // Persist photo metadata (IDs) for both uploaded and queued photos.
+      // The actual image blobs for queued uploads live in IndexedDB.
+      photos: photos.map((p) => ({
+        id: p.id,
+        name: p.name,
+        url: p.url,
+        contentType: p.contentType,
+        status: p.status,
+      })),
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
