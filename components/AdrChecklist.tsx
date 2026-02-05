@@ -2163,8 +2163,19 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         <h1 id="adr-title" className="text-2xl font-bold text-center">
           ADR Checklist{variant === "under1000" ? " (Under 1000 pts)" : ""}
         </h1>
-        {(loggedInspectorName || selectedInspector) && (
-          <div className="absolute right-0 top-0">
+      </div>
+
+      {(onBack || loggedInspectorName || selectedInspector) && (
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            {onBack && (
+              <Button type="button" variant="outline" className="bg-transparent" onClick={onBack}>
+                ← Back
+              </Button>
+            )}
+          </div>
+
+          {(loggedInspectorName || selectedInspector) && (
             <span
               className="inline-flex max-w-[48vw] items-center truncate rounded-md px-3 py-1 text-sm font-semibold text-white md:max-w-[16rem]"
               style={{
@@ -2173,15 +2184,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             >
               {loggedInspectorName || selectedInspector}
             </span>
-          </div>
-        )}
-      </div>
-
-      {onBack && (
-        <div className="flex justify-start mb-4">
-          <Button variant="outline" className="bg-transparent" onClick={onBack}>
-            ← Back
-          </Button>
+          )}
         </div>
       )}
 
