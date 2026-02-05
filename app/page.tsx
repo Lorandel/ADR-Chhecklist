@@ -1,7 +1,7 @@
 // app/page.tsx
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import ADRChecklist, { type ChecklistVariant } from "@/components/AdrChecklist"
 import AdrHistoryModal from "@/components/AdrHistoryModal"
 import AdminPanelModal from "@/components/AdminPanelModal"
@@ -10,13 +10,38 @@ import LoginGate from "@/components/auth/LoginGate"
 import { Button } from "@/components/ui/button"
 
 function HomePageInner() {
-  const { role, signOut, inspectorName } = useAuth()
-  const [variant, setVariant] = useState<ChecklistVariant | null>(null)
+  const { role, signOut, inspectorName, session } = useAuth()
+
+  // Keep the user on the same checklist page after refresh (per user).
+  const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
+  const activeVariantKey = `adrActiveVariant_${userId}`
+
+  const [variant, setVariant] = useState<ChecklistVariant | null>(() => {
+    if (typeof window === "undefined") return null
+    const saved = window.localStorage.getItem(activeVariantKey)
+    return saved === "full" || saved === "under1000" ? (saved as ChecklistVariant) : null
+  })
   const [historyOpen, setHistoryOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
 
+  // Persist active variant whenever it changes.
+  useEffect(() => {
+    if (!session) return
+    if (typeof window === "undefined") return
+    if (variant) window.localStorage.setItem(activeVariantKey, variant)
+    else window.localStorage.removeItem(activeVariantKey)
+  }, [session, activeVariantKey, variant])
+
   if (variant) {
-    return <ADRChecklist variant={variant} onBack={() => setVariant(null)} />
+    return (
+      <ADRChecklist
+        variant={variant}
+        onBack={() => {
+          // Clear the persisted "active" screen only when the user explicitly goes back.
+          setVariant(null)
+        }}
+      />
+    )
   }
 
   return (

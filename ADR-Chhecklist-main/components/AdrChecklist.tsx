@@ -73,6 +73,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
   const [selectedInspector, setSelectedInspector] = useState("")
 
+  // Confirmation popup for Send/Download actions
+  const [confirmAction, setConfirmAction] = useState<"download" | "send" | null>(null)
+
   // Inspector is always the logged-in inspector (no manual selector).
   useEffect(() => {
     if (!loggedInspectorName) return
@@ -1461,7 +1464,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const sigImgW = sigColW
     const sigImgH = 16
 
-    const drawSignatureArea = (x: number, title: string, imgData: string | null, extra?: { inspector?: boolean }) => {
+    const drawSignatureArea = (x: number, imgData: string | null, labelText: string) => {
       // signature image / line
       if (imgData) {
         try {
@@ -1480,25 +1483,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       pdf.setFont("helvetica", "normal")
       pdf.setFontSize(8)
-      pdf.setTextColor(100, 116, 139)
-      pdf.text(title, x, sigY + 30)
-
-      if (extra?.inspector) {
-        const inspectorColor = inspectorColors[selectedInspector] || "#111827"
-        const label = "Inspector: "
-        pdf.setFont("helvetica", "bold")
-        pdf.setTextColor(17, 24, 39)
-        pdf.text(label, x, sigY + 30)
-        const lw = pdf.getTextWidth(label)
-        pdf.setTextColor(inspectorColor)
-        pdf.text(selectedInspector || "Not selected", x + lw, sigY + 30)
-      }
-
       pdf.setTextColor(17, 24, 39)
+      const line = truncateToWidth(labelText, sigColW)
+      const w = pdf.getTextWidth(line)
+      const cx = x + Math.max(0, (sigColW - w) / 2)
+      pdf.text(line, cx, sigY + 30)
     }
 
-    drawSignatureArea(leftSigX, signatureData ? "Driver signature" : "Driver signature (not signed)", signatureData)
-    drawSignatureArea(rightSigX, "", inspectorSignatureData, { inspector: true })
+    drawSignatureArea(leftSigX, signatureData, `Driver: ${safeVal(driverName)}`)
+    drawSignatureArea(rightSigX, inspectorSignatureData, `Inspector: ${safeVal(selectedInspector)}`)
 
     await addWatermark()
 
@@ -2251,13 +2244,42 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   }
 
   return (
-    <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
+    <>
+      {confirmAction && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setConfirmAction(null)} />
+          <div className="relative w-[min(92vw,420px)] rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
+            <div className="font-semibold mb-2">Confirm</div>
+            <div className="text-sm text-gray-600 mb-5">Send ZIP via Email or Download ZIP via Email?</div>
+            <div className="flex items-center justify-end gap-3">
+              <Button type="button" variant="outline" className="bg-transparent" onClick={() => setConfirmAction(null)}>
+                No
+              </Button>
+              <Button
+                type="button"
+                onClick={async () => {
+                  const action = confirmAction
+                  setConfirmAction(null)
+                  if (action === "send") await handleSendEmail()
+                  else if (action === "download") await generateZIP()
+                }}
+                disabled={isSendingEmail || isPdfGenerating}
+              >
+                Yes
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
       <div className="relative text-center mb-6">
         <h1 id="adr-title" className="text-2xl font-bold">
           ADR Checklist{variant === "under1000" ? " (Under 1000 pts)" : ""}
         </h1>
 
-        {selectedInspector && (
+        {/* If we ever render without a Back button, keep the inspector badge visible (same style). */}
+        {!onBack && selectedInspector && (
           <div
             className="absolute right-0 top-0 rounded-md px-3 py-1 text-sm font-semibold text-white"
             style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
@@ -2273,7 +2295,16 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
             ← Back
           </Button>
 
-          <div />
+          {selectedInspector ? (
+            <div
+              className="rounded-md px-3 py-1 text-sm font-semibold text-white"
+              style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
+            >
+              {selectedInspector}
+            </div>
+          ) : (
+            <div />
+          )}
         </div>
       )}
 
@@ -2865,11 +2896,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button onClick={generateZIP} disabled={isPdfGenerating} className="w-full">
+        <Button type="button" onClick={() => setConfirmAction("download")} disabled={isPdfGenerating} className="w-full">
           {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
         </Button>
         <Button
-          onClick={handleSendEmail}
+          type="button"
+          onClick={() => setConfirmAction("send")}
           disabled={
             isSendingEmail ||
             isPdfGenerating ||
@@ -2893,5 +2925,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         )}
       </div>
     </div>
+    </>
   )
 }
