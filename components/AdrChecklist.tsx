@@ -15,11 +15,11 @@ import { sha256Hex } from "@/lib/hash"
 
 const INSPECTOR_COLORS: Record<string, string> = {
   "Alexandru Dogariu": "#FF8C00",
-  "Robert Kerekes": "#8B4513",
-  "Eduard Tudose": "#000000",
-  "Angela Ilis": "#FF69B4",
-  "Lucian Sistac": "#1E90FF",
-  "Martian Gherasim": "#008000",
+  "Robert Kerekes": "#A47332",
+  "Eduard Tudose": "#474747",
+  "Angela Ilis": "#E48BB5",
+  "Lucian Sistac": "#55ABE5",
+  "Martian Gherasim": "#5FBE7D",
   "Alexandru Florea": "#DAA520",
 }
 
@@ -1017,13 +1017,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const headerH = 18
 
     const inspectorColors: Record<string, string> = {
-      "Alexandru Dogariu": "#FF8C00",
-      "Robert Kerekes": "#8B4513",
-      "Eduard Tudose": "#000000",
-      "Angela Ilis": "#FF69B4",
-      "Lucian Sistac": "#1E90FF",
-      "Martian Gherasim": "#008000",
-      "Alexandru Florea": "#DAA520",
+       "Alexandru Dogariu": "#FF8C00",
+       "Robert Kerekes": "#A47332",
+       "Eduard Tudose": "#474747",
+       "Angela Ilis": "#E48BB5",
+       "Lucian Sistac": "#55ABE5",
+       "Martian Gherasim": "#5FBE7D",
+       "Alexandru Florea": "#DAA520",
     }
 
     const safeVal = (v: string) => {
