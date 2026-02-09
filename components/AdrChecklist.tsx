@@ -1291,7 +1291,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     pdf.setFont("helvetica", "normal")
     pdf.setFontSize(8)
     pdf.setTextColor(100, 116, 139)
-    pdf.text("Remarks:", remarksBoxX + 2, remarksBoxY + 6.7)
+    const remarksLabelY = remarksBoxY + 6.7
+    pdf.text("Remarks:", remarksBoxX + 2, remarksLabelY)
 
     const trimmedRemarks = (remarks || "").trim()
     if (trimmedRemarks) {
@@ -1299,13 +1300,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setFont("helvetica", "normal")
 
       const textX = remarksBoxX + 20
-      const textY = remarksBoxY + 4.0
+      const textY = remarksLabelY
       const maxTextW = remarksBoxW - 22
 
-      // Available height for remarks text inside the box (in mm)
-      const textTop = textY
-      const textBottom = remarksBoxY + remarksBoxH - 1.2
-      const availableH = Math.max(0, textBottom - textTop)
+      // Fit text vertically within the remarks box while keeping it aligned with the "Remarks:" label
+      const topPad = 1.8
+      const bottomPad = 1.2
+      const textTop = remarksBoxY + topPad
+      const textBottom = remarksBoxY + remarksBoxH - bottomPad
 
       const baseFont = 8
       const minFont = 5
@@ -1319,22 +1321,33 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       let lines: string[] = []
       let lhf = defaultLhf
 
+      const fits = (fontSize: number, lineHeightFactor: number) => {
+        pdf.setFontSize(fontSize)
+        const lns = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
+        const lineH = fontSize * lineHeightFactor * ptToMm
+        const ascent = fontSize * 0.8 * ptToMm
+        const descent = fontSize * 0.25 * ptToMm
+        const topNeeded = textY - ascent
+        const bottomNeeded = textY + Math.max(0, lns.length - 1) * lineH + descent
+        return { ok: topNeeded >= textTop && bottomNeeded <= textBottom, lns }
+      }
+
       while (fs >= minFont) {
-        pdf.setFontSize(fs)
-        lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
-        const lineH = fs * lhf * ptToMm
-        const textH = lines.length * lineH
-        if (textH <= availableH) break
+        const res = fits(fs, lhf)
+        lines = res.lns
+        if (res.ok) break
         fs -= step
       }
 
-      // If it's still too tall at min font, tighten line height a bit (keeps all text visible)
       if (fs < minFont) fs = minFont
       pdf.setFontSize(fs)
       lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
-      const finalLineH = fs * lhf * ptToMm
-      if (lines.length * finalLineH > availableH) {
+
+      // If still overflowing, tighten line height slightly (keeps alignment with label)
+      const final = fits(fs, lhf)
+      if (!final.ok) {
         lhf = 1.0
+        lines = fits(fs, lhf).lns
       }
 
       pdf.text(lines, textX, textY, { lineHeightFactor: lhf })
@@ -1355,11 +1368,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(11)
     pdf.setTextColor(17, 24, 39)
-    pdf.text("Equipment Checklist", equipX + 6, equipY + 8)
+    pdf.text("Equipment Checklist", equipX + equipW / 2, equipY + 8, { align: "center" })
 
-    const equipInnerY = equipY + 14
-    const equipInnerX = equipX + 6
-    const equipInnerW = equipW - 12
+    const equipInnerY = equipY + 18
+    const equipInnerX = equipX + 12
+    const equipInnerW = equipW - 24
     const equipColGap = 10
     const equipColW = (equipInnerW - equipColGap) / 2
 
@@ -1384,10 +1397,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         const item = col[i]
         const rowY = equipInnerY + i * eqRowH
         const colLeft = colXs[c]
-        const colRight = colLeft + equipColW
         // Nudge both columns slightly toward the center for a nicer framing
         const nudge = 1.3
-        const x0 = c === 0 ? colLeft + nudge : colLeft - nudge
+        const colLeftAdj = c === 0 ? colLeft + nudge : colLeft - nudge
+        const colRightAdj = colLeftAdj + equipColW
+        const x0 = colLeftAdj
 
         const keyName = item.name
         const displayName = keyName === "Mask + filter (ADR class 6.1/2.3)" ? "Mask + filter" : keyName
@@ -1416,7 +1430,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         }
 
         const textX = x0 + 6.2 + 8.5
-        const maxTextW = colRight - textX - 2
+        const maxTextW = colRightAdj - textX - 2
 
         pdf.setFont("helvetica", "bold")
         pdf.setFontSize(9)
@@ -1472,7 +1486,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setFont("helvetica", "bold")
       pdf.setFontSize(11)
       pdf.setTextColor(17, 24, 39)
-      pdf.text(title, x + 6, y + 8)
+      pdf.text(title, x + boxW / 2, y + 8, { align: "center" })
 
       let yy = y + 16
       const textX = x + 6 + 6.2
