@@ -188,7 +188,9 @@ export default function AdminPanelModal({ open, onClose }: Props) {
     setError(null)
     setInfo(null)
     try {
-      const res = await fetch(path, { cache: "no-store" })
+      const token = await getToken()
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+      const res = await fetch(path, { cache: "no-store", headers })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || data?.message || `HTTP ${res.status}`)
       if (data?.success === false) {
@@ -198,6 +200,40 @@ export default function AdminPanelModal({ open, onClose }: Props) {
       }
     } catch (e: any) {
       setError(`${path}: ${e?.message || "Failed"}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const sendTestEmailsToAllUsers = async () => {
+    const ok = confirm(
+      "This will send a test email to every NON-admin user's configured Inspector email (ZIP recipient). Continue?",
+    )
+    if (!ok) return
+
+    const token = await getToken()
+    if (!token) {
+      setError("Missing admin session token.")
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    setInfo(null)
+    try {
+      const res = await fetch("/api/admin/test-user-emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.success === false) throw new Error(data?.message || data?.error || `HTTP ${res.status}`)
+
+      const sent = data?.sentCount ?? 0
+      const total = data?.targetUsers ?? 0
+      const missing = data?.missingInspectorEmailCount ?? 0
+      setInfo(`Bulk test complete. Sent: ${sent}/${total}. Missing inspectorEmail: ${missing}.`)
+    } catch (e: any) {
+      setError(e?.message || "Bulk email test failed")
     } finally {
       setLoading(false)
     }
@@ -349,6 +385,14 @@ export default function AdminPanelModal({ open, onClose }: Props) {
                   ))}
                   <Button onClick={() => void runAll()} disabled={loading}>
                     Run all
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="bg-transparent"
+                    onClick={() => void sendTestEmailsToAllUsers()}
+                    disabled={loading}
+                  >
+                    Send test email to all users
                   </Button>
                 </div>
                 <div className="mt-3 text-xs text-gray-500">

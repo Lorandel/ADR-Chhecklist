@@ -20,7 +20,7 @@ async function assertAdmin(req: NextRequest) {
   const role = (data.user.user_metadata as any)?.role
   if (role !== "admin") return { ok: false, status: 403, message: "Forbidden" }
 
-  return { ok: true as const, supabase, user: data.user }
+  return { ok: true as const, supabase }
 }
 
 function splitEmails(raw: string): string[] {
