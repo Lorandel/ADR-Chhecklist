@@ -51,7 +51,7 @@ type ADRChecklistProps = {
 
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
-  const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, session } = useAuth()
+  const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, inspectorColor: loggedInspectorColor, session } = useAuth()
   const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
   const storageKey = `adrChecklistData_${variant}_${userId}`
 
@@ -2354,7 +2354,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         {!onBack && selectedInspector && (
           <div
             className="absolute right-0 top-0 rounded-md px-3 py-1 text-sm font-semibold text-white"
-            style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
+            style={{ backgroundColor: loggedInspectorColor || INSPECTOR_COLORS[selectedInspector] || "#111827" }}
           >
             {selectedInspector}
           </div>
@@ -2370,7 +2370,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           {selectedInspector ? (
             <div
               className="rounded-md px-3 py-1 text-sm font-semibold text-white"
-              style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
+              style={{ backgroundColor: loggedInspectorColor || INSPECTOR_COLORS[selectedInspector] || "#111827" }}
             >
               {selectedInspector}
             </div>
