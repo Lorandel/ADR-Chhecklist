@@ -1109,6 +1109,47 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setDrawColor(203, 213, 225)
     }
 
+    // Draw an image into a box without stretching (preserve aspect ratio, centered).
+    const addImageContained = (
+      imgData: string,
+      imgType: "PNG" | "JPEG",
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+    ) => {
+      try {
+        // @ts-ignore - available in jsPDF at runtime
+        const props = (pdf as any).getImageProperties ? (pdf as any).getImageProperties(imgData) : null
+        const iw = props?.width || 0
+        const ih = props?.height || 0
+
+        if (!iw || !ih) throw new Error("missing image size")
+
+        const boxRatio = w / h
+        const imgRatio = iw / ih
+
+        let dw = w
+        let dh = h
+
+        if (imgRatio > boxRatio) {
+          // image is wider -> fit width
+          dh = w / imgRatio
+        } else if (imgRatio < boxRatio) {
+          // image is taller -> fit height
+          dw = h * imgRatio
+        }
+
+        const dx = x + (w - dw) / 2
+        const dy = y + (h - dh) / 2
+
+        pdf.addImage(imgData, imgType, dx, dy, dw, dh)
+      } catch {
+        // Fallback: draw as-is (may stretch) if properties are unavailable
+        pdf.addImage(imgData, imgType, x, y, w, h)
+      }
+    }
+
     const drawIconBox = async (x: number, y: number, size: number, imgUrl: string) => {
       const img = await getImage(imgUrl)
       pdf.setLineWidth(0.2)
@@ -1119,7 +1160,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       const padding = 0.6
       const imgType = isJpeg(imgUrl) ? "JPEG" : "PNG"
-      pdf.addImage(img, imgType, x + padding, y + padding, size - padding * 2, size - padding * 2)
+      const inner = size - padding * 2
+      addImageContained(img, imgType, x + padding, y + padding, inner, inner)
     }
 
     // Preload all icons + watermark (faster and consistent)
@@ -1154,7 +1196,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           ;(pdf as any).setGState(gs)
         }
 
-        pdf.addImage(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
+        // Keep aspect ratio and center inside a fixed watermark box (prevents stretch)
+        addImageContained(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
 
         // reset opacity
         // @ts-ignore
@@ -1340,10 +1383,17 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       for (let i = 0; i < col.length; i++) {
         const item = col[i]
         const rowY = equipInnerY + i * eqRowH
-        const x0 = colXs[c]
+        const colLeft = colXs[c]
+        const colRight = colLeft + equipColW
+        // Nudge both columns slightly toward the center for a nicer framing
+        const nudge = 1.3
+        const x0 = c === 0 ? colLeft + nudge : colLeft - nudge
 
-        const isChecked = !!checkedItems[item.name]
-        const date = expiryDates[item.name]
+        const keyName = item.name
+        const displayName = keyName === "Mask + filter (ADR class 6.1/2.3)" ? "Mask + filter" : keyName
+
+        const isChecked = !!checkedItems[keyName]
+        const date = expiryDates[keyName]
 
         let expired = false
         if (item.hasDate && date?.month && date?.year) {
@@ -1366,14 +1416,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         }
 
         const textX = x0 + 6.2 + 8.5
-        const maxTextW = equipColW - (textX - x0) - 2
+        const maxTextW = colRight - textX - 2
 
         pdf.setFont("helvetica", "bold")
         pdf.setFontSize(9)
         pdf.setTextColor(17, 24, 39)
 
         if (item.hasDate && date?.month && date?.year) {
-          const namePart = `${item.name} - `
+          const namePart = `${displayName} - `
           const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
 
           const nameFit = truncateToWidth(namePart, maxTextW * 0.65)
@@ -1387,12 +1437,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
           pdf.setTextColor(17, 24, 39)
         } else {
-          const nameFit = truncateToWidth(item.name, maxTextW)
+          const nameFit = truncateToWidth(displayName, maxTextW)
           pdf.text(nameFit, textX, rowY)
         }
 
         // One piece note
-        if (onePieceItems.has(item.name)) {
+        if (onePieceItems.has(keyName)) {
           pdf.setFont("helvetica", "normal")
           pdf.setFontSize(6.5)
           pdf.setTextColor(185, 28, 28)
@@ -1468,7 +1518,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       // signature image / line
       if (imgData) {
         try {
-          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+          // Keep aspect ratio and center inside the signature box (prevents stretch)
+          addImageContained(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
         } catch {
           // fallback to line
           pdf.setDrawColor(148, 163, 184)
