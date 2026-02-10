@@ -18,6 +18,16 @@ async function isAdmin(req: NextRequest): Promise<boolean> {
   return (data.user.user_metadata as any)?.role === "admin"
 }
 
+function normalizePath(p?: string | null) {
+  if (!p) return ""
+  return String(p).replace(/^\/+/, "").replace(/^adr-checklists\//, "")
+}
+
+function isNotFoundStorageError(err: unknown): boolean {
+  const msg = String((err as any)?.message ?? "").toLowerCase()
+  return msg.includes("not found") || msg.includes("404") || msg.includes("no such")
+}
+
 type DeleteBody = {
   id: string
 }
@@ -45,8 +55,20 @@ export async function POST(req: NextRequest) {
     }
 
     const bucket = "adr-checklists"
-    if (row.data.file_path) {
-      await supabase.storage.from(bucket).remove([row.data.file_path])
+
+    // IMPORTANT: nu ștergem rândul din DB dacă ștergerea din Storage eșuează.
+    const storedPath = normalizePath(row.data.file_path as any)
+    if (storedPath) {
+      const rem = await supabase.storage.from(bucket).remove([storedPath])
+      if (rem.error && !isNotFoundStorageError(rem.error)) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: `Failed to delete file from storage: ${rem.error.message}`,
+          },
+          { status: 502 },
+        )
+      }
     }
 
     const del = await supabase.from("adr_checklists").delete().eq("id", id)

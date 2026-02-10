@@ -220,20 +220,34 @@ export async function POST(req: NextRequest) {
             upsert: false,
           })
 
-          if (!up.error) {
-            await supabase.from("adr_checklists").insert({
+          if (up.error) {
+            console.error("Supabase ZIP upload failed:", up.error.message)
+          } else {
+            // IMPORTANT: meta este NOT NULL în schema DB; evităm insert cu null.
+            const ins = await supabase.from("adr_checklists").insert({
               checklist_type: checklistType,
               checklist_hash: hash,
               file_path: objectPath,
               expires_at: expiresAt,
               email_sent: true,
-              meta: meta ?? null,
+              meta: meta ?? {},
             })
+
+            // Dacă insert-ul în DB eșuează după upload, facem cleanup ca să nu rămână obiect orfan în Storage.
+            if (ins.error) {
+              console.error("DB insert failed after upload; removing uploaded ZIP:", ins.error.message)
+              try {
+                await supabase.storage.from(bucket).remove([objectPath])
+              } catch (cleanupErr: any) {
+                console.error("Cleanup of uploaded ZIP failed:", cleanupErr?.message || String(cleanupErr))
+              }
+            }
           }
         } else {
           const updatePayload: Record<string, unknown> = { email_sent: true, expires_at: expiresAt }
           if (meta) updatePayload.meta = meta
-          await supabase.from("adr_checklists").update(updatePayload).eq("checklist_hash", hash)
+          const upd = await supabase.from("adr_checklists").update(updatePayload).eq("checklist_hash", hash)
+          if (upd.error) console.error("DB update failed:", upd.error.message)
         }
 
         const signed = await supabase.storage.from(bucket).createSignedUrl(objectPath, 60 * 60)
