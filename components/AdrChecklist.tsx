@@ -149,7 +149,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "rs - Апарат за гашење",
       ],
       hasDate: true,
-      image: "/images/fire-extinguisher.jpg",
+      image: "/images/fire-extinguisher.png",
     },
     {
       name: "Wheel chock",
@@ -161,7 +161,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Cal pentru roți",
         "rs - Клизач",
       ],
-      image: "/images/wheel-chock.jpg",
+      image: "/images/wheel-chock.png",
     },
     {
       name: "2 lamps/warning triangle",
@@ -173,7 +173,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - 2 lampi/triunghi de avertizare",
         "rs - 2 лампе/упозоравајући троугао",
       ],
-      image: "/images/warning-triangle.jpg",
+      image: "/images/warning-triangle.png",
     },
     {
       name: "Eye wash",
@@ -185,7 +185,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Soluție pentru spălarea ochilor",
         "rs - Течност за испирање очију",
       ],
-      image: "/images/eye-wash.jpg",
+      image: "/images/eye-wash.png",
     },
     {
       name: "Written ADR instructions",
@@ -197,12 +197,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Instrucțiuni ADR scrise",
         "rs - Писане упутства ADR",
       ],
-      image: "/images/adr-instructions.jpg",
+      image: "/images/adr-instructions.png",
     },
     {
       name: "Shovel",
       translations: ["de - Schaufel", "nl - Schep", "pl - Łopata", "ru - Лопата", "ro - Lopată", "rs - Лопата"],
-      image: "/images/shovel.jpg",
+      image: "/images/shovel.png",
     },
     {
       name: "Drain seal",
@@ -214,7 +214,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Sigilant pentru scurgere",
         "rs - Бртвљење одвода",
       ],
-      image: "/images/drain-seal.jpg",
+      image: "/images/drain-seal.png",
     },
     {
       name: "Flashlight",
@@ -226,7 +226,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Lanternă",
         "rs - Батеријска лампа",
       ],
-      image: "/images/flashlight.jpg",
+      image: "/images/flashlight.png",
     },
     {
       name: "Rubber gloves",
@@ -238,7 +238,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Mănuși de cauciuc",
         "rs - Гумене рукавице",
       ],
-      image: "/images/rubber-gloves.jpg",
+      image: "/images/rubber-gloves.png",
     },
     {
       name: "Safety glasses",
@@ -250,7 +250,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Ochelari de protecție",
         "rs - Заштитне наочаре",
       ],
-      image: "/images/safety-glasses.jpg",
+      image: "/images/safety-glasses.png",
     },
     {
       name: "Mask + filter (ADR class 6.1/2.3)",
@@ -263,7 +263,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "rs - Маска + филтер",
       ],
       hasDate: true,
-      image: "/images/mask-filter.jpg",
+      image: "/images/mask-filter.png",
     },
     {
       name: "Collection bucket",
@@ -275,7 +275,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Găleată de colectare",
         "rs - Канта за прикупљање",
       ],
-      image: "/images/collection-bucket.jpg",
+      image: "/images/collection-bucket.png",
     },
   ]
 
@@ -1495,59 +1495,31 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setFont("helvetica", "bold")
       pdf.setFontSize(7.8)
 
-      const baseRowStep = 7
-      const wrapLineStep = 4
-
       for (const it of items) {
         const ok = !!checkedMap[it]
         drawStatus(x + 6, yy - 4, ok)
 
-        // Special case: do NOT ellipsize; wrap the long "Goods correctly secured: ..." item to the next line(s)
+        // Special-case: allow this long item to wrap instead of showing an ellipsis.
+        // We keep "Goods correctly secured:" on the first line and wrap the remainder below.
         if (it.startsWith("Goods correctly secured:")) {
-          const idx = it.indexOf(":")
-          const first = idx >= 0 ? it.slice(0, idx + 1).trim() : it
-          const rest = idx >= 0 ? it.slice(idx + 1).trim() : ""
+          const prefix = "Goods correctly secured:"
+          const rest = it.slice(prefix.length).trim()
 
-          // Wrap by words to the next line(s) without adding any ellipsis
-          const wrapNoEllipsis = (s: string, width: number) => {
-            const words = (s || "").split(/\s+/).filter(Boolean)
-            const out: string[] = []
-            let cur = ""
-            for (const w of words) {
-              const test = cur ? `${cur} ${w}` : w
-              if (!cur || pdf.getTextWidth(test) <= width) {
-                cur = test
-              } else {
-                out.push(cur)
-                cur = w
-              }
-            }
-            if (cur) out.push(cur)
-            return out
+          pdf.text(prefix, textX, yy)
+          yy += 7
+
+          const splitToSize = (pdf as any).splitTextToSize
+          const lines: string[] = typeof splitToSize === "function" ? splitToSize(rest, maxW) : [rest]
+          for (const l of lines) {
+            pdf.text(l, textX, yy)
+            yy += 7
           }
-
-          const firstLines = wrapNoEllipsis(first, maxW)
-          for (let j = 0; j < firstLines.length; j++) {
-            pdf.text(firstLines[j], textX, yy + j * wrapLineStep)
-          }
-
-          let extra = Math.max(0, (firstLines.length - 1) * wrapLineStep)
-
-          if (rest) {
-            const restLines = wrapNoEllipsis(rest, maxW)
-            for (let j = 0; j < restLines.length; j++) {
-              pdf.text(restLines[j], textX, yy + (firstLines.length + j) * wrapLineStep)
-            }
-            extra = Math.max(extra, (firstLines.length + restLines.length - 1) * wrapLineStep)
-          }
-
-          yy += baseRowStep + extra
           continue
         }
 
         const line = truncateToWidth(it, maxW)
         pdf.text(line, textX, yy)
-        yy += baseRowStep
+        yy += 7
       }
     }
 
