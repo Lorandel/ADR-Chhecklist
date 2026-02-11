@@ -51,7 +51,7 @@ type ADRChecklistProps = {
 
 export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
-  const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, inspectorColor: loggedInspectorColor, session } = useAuth()
+  const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, session } = useAuth()
   const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
   const storageKey = `adrChecklistData_${variant}_${userId}`
 
@@ -149,7 +149,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "rs - Апарат за гашење",
       ],
       hasDate: true,
-      image: "/images/fire-extinguisher.jpg",
+      image: "/images/fire-extinguisher.png",
     },
     {
       name: "Wheel chock",
@@ -161,7 +161,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Cal pentru roți",
         "rs - Клизач",
       ],
-      image: "/images/wheel-chock.jpg",
+      image: "/images/wheel-chock.png",
     },
     {
       name: "2 lamps/warning triangle",
@@ -173,7 +173,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - 2 lampi/triunghi de avertizare",
         "rs - 2 лампе/упозоравајући троугао",
       ],
-      image: "/images/warning-triangle.jpg",
+      image: "/images/warning-triangle.png",
     },
     {
       name: "Eye wash",
@@ -185,7 +185,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Soluție pentru spălarea ochilor",
         "rs - Течност за испирање очију",
       ],
-      image: "/images/eye-wash.jpg",
+      image: "/images/eye-wash.png",
     },
     {
       name: "Written ADR instructions",
@@ -197,12 +197,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Instrucțiuni ADR scrise",
         "rs - Писане упутства ADR",
       ],
-      image: "/images/adr-instructions.jpg",
+      image: "/images/adr-instructions.png",
     },
     {
       name: "Shovel",
       translations: ["de - Schaufel", "nl - Schep", "pl - Łopata", "ru - Лопата", "ro - Lopată", "rs - Лопата"],
-      image: "/images/shovel.jpg",
+      image: "/images/shovel.png",
     },
     {
       name: "Drain seal",
@@ -214,7 +214,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Sigilant pentru scurgere",
         "rs - Бртвљење одвода",
       ],
-      image: "/images/drain-seal.jpg",
+      image: "/images/drain-seal.png",
     },
     {
       name: "Flashlight",
@@ -226,7 +226,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Lanternă",
         "rs - Батеријска лампа",
       ],
-      image: "/images/flashlight.jpg",
+      image: "/images/flashlight.png",
     },
     {
       name: "Rubber gloves",
@@ -238,7 +238,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Mănuși de cauciuc",
         "rs - Гумене рукавице",
       ],
-      image: "/images/rubber-gloves.jpg",
+      image: "/images/rubber-gloves.png",
     },
     {
       name: "Safety glasses",
@@ -250,7 +250,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Ochelari de protecție",
         "rs - Заштитне наочаре",
       ],
-      image: "/images/safety-glasses.jpg",
+      image: "/images/safety-glasses.png",
     },
     {
       name: "Mask + filter (ADR class 6.1/2.3)",
@@ -263,7 +263,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "rs - Маска + филтер",
       ],
       hasDate: true,
-      image: "/images/mask-filter.jpg",
+      image: "/images/mask-filter.png",
     },
     {
       name: "Collection bucket",
@@ -275,7 +275,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Găleată de colectare",
         "rs - Канта за прикупљање",
       ],
-      image: "/images/collection-bucket.jpg",
+      image: "/images/collection-bucket.png",
     },
   ]
 
@@ -1109,47 +1109,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setDrawColor(203, 213, 225)
     }
 
-    // Draw an image into a box without stretching (preserve aspect ratio, centered).
-    const addImageContained = (
-      imgData: string,
-      imgType: "PNG" | "JPEG",
-      x: number,
-      y: number,
-      w: number,
-      h: number,
-    ) => {
-      try {
-        // @ts-ignore - available in jsPDF at runtime
-        const props = (pdf as any).getImageProperties ? (pdf as any).getImageProperties(imgData) : null
-        const iw = props?.width || 0
-        const ih = props?.height || 0
-
-        if (!iw || !ih) throw new Error("missing image size")
-
-        const boxRatio = w / h
-        const imgRatio = iw / ih
-
-        let dw = w
-        let dh = h
-
-        if (imgRatio > boxRatio) {
-          // image is wider -> fit width
-          dh = w / imgRatio
-        } else if (imgRatio < boxRatio) {
-          // image is taller -> fit height
-          dw = h * imgRatio
-        }
-
-        const dx = x + (w - dw) / 2
-        const dy = y + (h - dh) / 2
-
-        pdf.addImage(imgData, imgType, dx, dy, dw, dh)
-      } catch {
-        // Fallback: draw as-is (may stretch) if properties are unavailable
-        pdf.addImage(imgData, imgType, x, y, w, h)
-      }
-    }
-
     const drawIconBox = async (x: number, y: number, size: number, imgUrl: string) => {
       const img = await getImage(imgUrl)
       pdf.setLineWidth(0.2)
@@ -1160,8 +1119,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
       const padding = 0.6
       const imgType = isJpeg(imgUrl) ? "JPEG" : "PNG"
-      const inner = size - padding * 2
-      addImageContained(img, imgType, x + padding, y + padding, inner, inner)
+      pdf.addImage(img, imgType, x + padding, y + padding, size - padding * 2, size - padding * 2)
     }
 
     // Preload all icons + watermark (faster and consistent)
@@ -1196,8 +1154,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           ;(pdf as any).setGState(gs)
         }
 
-        // Keep aspect ratio and center inside a fixed watermark box (prevents stretch)
-        addImageContained(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
+        pdf.addImage(watermark, "PNG", pageW / 2 - 55, pageH / 2 - 55, 110, 110)
 
         // reset opacity
         // @ts-ignore
@@ -1291,8 +1248,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     pdf.setFont("helvetica", "normal")
     pdf.setFontSize(8)
     pdf.setTextColor(100, 116, 139)
-    const remarksLabelY = remarksBoxY + 6.7
-    pdf.text("Remarks:", remarksBoxX + 2, remarksLabelY)
+    pdf.text("Remarks:", remarksBoxX + 2, remarksBoxY + 6.7)
 
     const trimmedRemarks = (remarks || "").trim()
     if (trimmedRemarks) {
@@ -1300,14 +1256,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setFont("helvetica", "normal")
 
       const textX = remarksBoxX + 20
-      const textY = remarksLabelY
+      const textY = remarksBoxY + 4.0
       const maxTextW = remarksBoxW - 22
 
-      // Fit text vertically within the remarks box while keeping it aligned with the "Remarks:" label
-      const topPad = 1.8
-      const bottomPad = 1.2
-      const textTop = remarksBoxY + topPad
-      const textBottom = remarksBoxY + remarksBoxH - bottomPad
+      // Available height for remarks text inside the box (in mm)
+      const textTop = textY
+      const textBottom = remarksBoxY + remarksBoxH - 1.2
+      const availableH = Math.max(0, textBottom - textTop)
 
       const baseFont = 8
       const minFont = 5
@@ -1321,33 +1276,22 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       let lines: string[] = []
       let lhf = defaultLhf
 
-      const fits = (fontSize: number, lineHeightFactor: number) => {
-        pdf.setFontSize(fontSize)
-        const lns = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
-        const lineH = fontSize * lineHeightFactor * ptToMm
-        const ascent = fontSize * 0.8 * ptToMm
-        const descent = fontSize * 0.25 * ptToMm
-        const topNeeded = textY - ascent
-        const bottomNeeded = textY + Math.max(0, lns.length - 1) * lineH + descent
-        return { ok: topNeeded >= textTop && bottomNeeded <= textBottom, lns }
-      }
-
       while (fs >= minFont) {
-        const res = fits(fs, lhf)
-        lines = res.lns
-        if (res.ok) break
+        pdf.setFontSize(fs)
+        lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
+        const lineH = fs * lhf * ptToMm
+        const textH = lines.length * lineH
+        if (textH <= availableH) break
         fs -= step
       }
 
+      // If it's still too tall at min font, tighten line height a bit (keeps all text visible)
       if (fs < minFont) fs = minFont
       pdf.setFontSize(fs)
       lines = pdf.splitTextToSize(trimmedRemarks, maxTextW) as string[]
-
-      // If still overflowing, tighten line height slightly (keeps alignment with label)
-      const final = fits(fs, lhf)
-      if (!final.ok) {
+      const finalLineH = fs * lhf * ptToMm
+      if (lines.length * finalLineH > availableH) {
         lhf = 1.0
-        lines = fits(fs, lhf).lns
       }
 
       pdf.text(lines, textX, textY, { lineHeightFactor: lhf })
@@ -1368,11 +1312,11 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     pdf.setFont("helvetica", "bold")
     pdf.setFontSize(11)
     pdf.setTextColor(17, 24, 39)
-    pdf.text("Equipment Checklist", equipX + equipW / 2, equipY + 8, { align: "center" })
+    pdf.text("Equipment Checklist", equipX + 6, equipY + 8)
 
-    const equipInnerY = equipY + 18
-    const equipInnerX = equipX + 12
-    const equipInnerW = equipW - 24
+    const equipInnerY = equipY + 14
+    const equipInnerX = equipX + 6
+    const equipInnerW = equipW - 12
     const equipColGap = 10
     const equipColW = (equipInnerW - equipColGap) / 2
 
@@ -1396,18 +1340,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       for (let i = 0; i < col.length; i++) {
         const item = col[i]
         const rowY = equipInnerY + i * eqRowH
-        const colLeft = colXs[c]
-        // Nudge both columns slightly toward the center for a nicer framing
-        const nudge = 1.3
-        const colLeftAdj = c === 0 ? colLeft + nudge : colLeft - nudge
-        const colRightAdj = colLeftAdj + equipColW
-        const x0 = colLeftAdj
+        const x0 = colXs[c]
 
-        const keyName = item.name
-        const displayName = keyName === "Mask + filter (ADR class 6.1/2.3)" ? "Mask + filter" : keyName
-
-        const isChecked = !!checkedItems[keyName]
-        const date = expiryDates[keyName]
+        const isChecked = !!checkedItems[item.name]
+        const date = expiryDates[item.name]
 
         let expired = false
         if (item.hasDate && date?.month && date?.year) {
@@ -1430,14 +1366,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         }
 
         const textX = x0 + 6.2 + 8.5
-        const maxTextW = colRightAdj - textX - 2
+        const maxTextW = equipColW - (textX - x0) - 2
 
         pdf.setFont("helvetica", "bold")
         pdf.setFontSize(9)
         pdf.setTextColor(17, 24, 39)
 
         if (item.hasDate && date?.month && date?.year) {
-          const namePart = `${displayName} - `
+          const namePart = `${item.name} - `
           const dateStr = `${date.month}/${date.year}${expired ? " (EXPIRED)" : ""}`
 
           const nameFit = truncateToWidth(namePart, maxTextW * 0.65)
@@ -1451,12 +1387,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
           pdf.setTextColor(17, 24, 39)
         } else {
-          const nameFit = truncateToWidth(displayName, maxTextW)
+          const nameFit = truncateToWidth(item.name, maxTextW)
           pdf.text(nameFit, textX, rowY)
         }
 
         // One piece note
-        if (onePieceItems.has(keyName)) {
+        if (onePieceItems.has(item.name)) {
           pdf.setFont("helvetica", "normal")
           pdf.setFontSize(6.5)
           pdf.setTextColor(185, 28, 28)
@@ -1486,7 +1422,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setFont("helvetica", "bold")
       pdf.setFontSize(11)
       pdf.setTextColor(17, 24, 39)
-      pdf.text(title, x + boxW / 2, y + 8, { align: "center" })
+      pdf.text(title, x + 6, y + 8)
 
       let yy = y + 16
       const textX = x + 6 + 6.2
@@ -1495,12 +1431,36 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setFont("helvetica", "bold")
       pdf.setFontSize(7.8)
 
+      // Line height used for checklist rows (keeps spacing consistent with existing layout)
+      const rowH = 7
+
       for (const it of items) {
         const ok = !!checkedMap[it]
         drawStatus(x + 6, yy - 4, ok)
+
+        // Special case: keep the "Goods correctly secured" item readable by wrapping after the colon
+        // instead of truncating with an ellipsis.
+        if (it.startsWith("Goods correctly secured:") && pdf.getTextWidth(it) > maxW) {
+          const idx = it.indexOf(":")
+          const head = idx >= 0 ? it.slice(0, idx + 1).trim() : "Goods correctly secured:"
+          const tail = idx >= 0 ? it.slice(idx + 1).trim() : it
+
+          // First line (label)
+          pdf.text(truncateToWidth(head, maxW), textX, yy)
+
+          // Following line(s) (description)
+          const tailLines = (pdf as any).splitTextToSize ? (pdf as any).splitTextToSize(tail, maxW) : [tail]
+          for (let j = 0; j < tailLines.length; j++) {
+            pdf.text(String(tailLines[j]), textX, yy + rowH * (j + 1))
+          }
+
+          yy += rowH * (1 + tailLines.length)
+          continue
+        }
+
         const line = truncateToWidth(it, maxW)
         pdf.text(line, textX, yy)
-        yy += 7
+        yy += rowH
       }
     }
 
@@ -1532,8 +1492,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       // signature image / line
       if (imgData) {
         try {
-          // Keep aspect ratio and center inside the signature box (prevents stretch)
-          addImageContained(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
         } catch {
           // fallback to line
           pdf.setDrawColor(148, 163, 184)
@@ -2354,7 +2313,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         {!onBack && selectedInspector && (
           <div
             className="absolute right-0 top-0 rounded-md px-3 py-1 text-sm font-semibold text-white"
-            style={{ backgroundColor: loggedInspectorColor || INSPECTOR_COLORS[selectedInspector] || "#111827" }}
+            style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
           >
             {selectedInspector}
           </div>
@@ -2370,7 +2329,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           {selectedInspector ? (
             <div
               className="rounded-md px-3 py-1 text-sm font-semibold text-white"
-              style={{ backgroundColor: loggedInspectorColor || INSPECTOR_COLORS[selectedInspector] || "#111827" }}
+              style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
             >
               {selectedInspector}
             </div>
