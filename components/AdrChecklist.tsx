@@ -107,7 +107,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const uploadingRunnerRef = useRef(false)
   const lastAttemptRef = useRef<Record<string, number>>({})
 
-
   // Refs for signatures and inputs
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [signatureData, setSignatureData] = useState<string | null>(null)
@@ -297,7 +296,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     "ADR plate front + back are open",
     "Markings and Labels in Case of IMO",
   ]
-
 
   const equipmentItems = useMemo(() => {
     if (variant !== "under1000") return equipmentItemsBase
@@ -873,7 +871,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (files.length === 0) return
 
     const newPhotos: UploadedPhoto[] = files.map((file) => {
-      const rawId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
+      const rawId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`
       const id = `${userId}_${rawId}`
       return {
         id,
@@ -1002,8 +1001,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     })
   }
 
-
-
   // Build a single-page, stylized ADR PDF (used for both Download ZIP and Send Email)
   const buildAdrPdf = async () => {
     const { jsPDF } = await import("jspdf")
@@ -1017,13 +1014,13 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     const headerH = 18
 
     const inspectorColors: Record<string, string> = {
-       "Alexandru Dogariu": "#FF8C00",
-       "Robert Kerekes": "#A47332",
-       "Eduard Tudose": "#474747",
-       "Angela Ilis": "#E48BB5",
-       "Lucian Sistac": "#55ABE5",
-       "Martian Gherasim": "#5FBE7D",
-       "Alexandru Florea": "#DAA520",
+      "Alexandru Dogariu": "#FF8C00",
+      "Robert Kerekes": "#A47332",
+      "Eduard Tudose": "#474747",
+      "Angela Ilis": "#E48BB5",
+      "Lucian Sistac": "#55ABE5",
+      "Martian Gherasim": "#5FBE7D",
+      "Alexandru Florea": "#DAA520",
     }
 
     const safeVal = (v: string) => {
@@ -1495,31 +1492,42 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       pdf.setFont("helvetica", "bold")
       pdf.setFontSize(7.8)
 
+      const rowStepLocal = 7 // standard spacing between items
+
       for (const it of items) {
         const ok = !!checkedMap[it]
         drawStatus(x + 6, yy - 4, ok)
 
-        // Special-case: allow this long item to wrap instead of showing an ellipsis.
-        // We keep "Goods correctly secured:" on the first line and wrap the remainder below.
+        // Special-case: force this long item onto two lines:
+        // 1) "Goods correctly secured:" on first line
+        // 2) rest starts on the next line aligned under "Goods" (same textX),
+        //    with a SMALLER gap between the two lines (not a full row step).
         if (it.startsWith("Goods correctly secured:")) {
           const prefix = "Goods correctly secured:"
           const rest = it.slice(prefix.length).trim()
 
+          // line 1
           pdf.text(prefix, textX, yy)
-          yy += 7
 
+          // tight gap between line 1 and line 2 (so it doesn't look like a blank row)
+          const tightGap = 5.0
+          yy += tightGap
+
+          // line 2 (and potential wraps)
           const splitToSize = (pdf as any).splitTextToSize
           const lines: string[] = typeof splitToSize === "function" ? splitToSize(rest, maxW) : [rest]
+
           for (const l of lines) {
             pdf.text(l, textX, yy)
-            yy += 7
+            yy += rowStepLocal // keep normal step so the following items move down enough
           }
+
           continue
         }
 
         const line = truncateToWidth(it, maxW)
         pdf.text(line, textX, yy)
-        yy += 7
+        yy += rowStepLocal
       }
     }
 
@@ -1579,9 +1587,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
 
     await addWatermark()
 
-
     return pdf
   }
+
   // Generate ZIP (PDF + photos) and store in Supabase (60-day retention)
   const generateZIP = async () => {
     if (!isMounted || typeof window === "undefined") return
@@ -1854,7 +1862,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     if (typeof window !== "undefined") {
       localStorage.removeItem(storageKey)
     }
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey])
+  }, [
+    equipmentItems,
+    beforeLoadingItems,
+    afterLoadingItems,
+    clearSignature,
+    clearInspectorSignature,
+    loggedInspectorName,
+    storageKey,
+  ])
 
   // Initialize component
   useEffect(() => {
@@ -2060,7 +2076,6 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       }
     }
   }, [isMounted, storageKey, includeAdrCertificate])
-
 
   // Restore signature drawings on the canvases after a refresh
   useEffect(() => {
@@ -2338,12 +2353,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
               {confirmAction === "download" ? "Download ZIP?" : "Send ZIP via Email?"}
             </div>
             <div className="flex items-center justify-end gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                className="bg-transparent"
-                onClick={() => setConfirmAction(null)}
-              >
+              <Button type="button" variant="outline" className="bg-transparent" onClick={() => setConfirmAction(null)}>
                 No
               </Button>
               <Button
@@ -2364,658 +2374,609 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       )}
 
       <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
-      <div className="relative text-center mb-6">
-        <h1 id="adr-title" className="text-2xl font-bold">
-          ADR Checklist{variant === "under1000" ? " (Under 1000 pts)" : ""}
-        </h1>
+        <div className="relative text-center mb-6">
+          <h1 id="adr-title" className="text-2xl font-bold">
+            ADR Checklist{variant === "under1000" ? " (Under 1000 pts)" : ""}
+          </h1>
 
-        {/* If we ever render without a Back button, keep the inspector badge visible (same style). */}
-        {!onBack && selectedInspector && (
-          <div
-            className="absolute right-0 top-0 rounded-md px-3 py-1 text-sm font-semibold text-white"
-            style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
-          >
-            {selectedInspector}
-          </div>
-        )}
-      </div>
-
-      {onBack && (
-        <div className="flex items-center justify-between mb-4">
-          <Button type="button" variant="outline" className="bg-transparent" onClick={onBack}>
-            ← Back
-          </Button>
-
-          {selectedInspector ? (
+          {/* If we ever render without a Back button, keep the inspector badge visible (same style). */}
+          {!onBack && selectedInspector && (
             <div
-              className="rounded-md px-3 py-1 text-sm font-semibold text-white"
+              className="absolute right-0 top-0 rounded-md px-3 py-1 text-sm font-semibold text-white"
               style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
             >
               {selectedInspector}
             </div>
-          ) : (
-            <div />
           )}
         </div>
-      )}
 
-      <div className="mb-6">
-        {/* Centered Inspection Date */}
-        <div className="flex flex-col items-center mb-6">
-          <Label htmlFor="checkDate" className="text-lg font-semibold mb-2">
-            Inspection Date:
-          </Label>
-          <Input
-            id="checkDate"
-            value={checkDate}
-            onChange={(e) => setCheckDate(e.target.value)}
-            className="w-40 text-center"
-            placeholder="dd-mm-yyyy"
-            inputMode="numeric"
-            pattern="[0-9-]*"
-          />
-        </div>
+        {onBack && (
+          <div className="flex items-center justify-between mb-4">
+            <Button type="button" variant="outline" className="bg-transparent" onClick={onBack}>
+              ← Back
+            </Button>
 
-        <div className="mb-4">
-          <Label htmlFor="driverName">Driver's Name:</Label>
-          <Input
-            id="driverName"
-            value={driverName}
-            onChange={(e) => {
-              const value = e.target.value
-              const formatted = capitalizeWords(value)
-              setDriverName(formatted)
-            }}
-            className="w-full"
-          />
-        </div>
-
-        <div className="mb-4">
-          <Label htmlFor="truckPlate">Truck License Plate:</Label>
-          <Input
-            id="truckPlate"
-            value={truckPlate}
-            onChange={(e) => setTruckPlate(e.target.value.toUpperCase())}
-            className="w-full uppercase"
-          />
-        </div>
-
-        <div className="mb-4">
-          <Label htmlFor="trailerPlate">Trailer License Plate:</Label>
-          <Input
-            id="trailerPlate"
-            value={trailerPlate}
-            onChange={(e) => setTrailerPlate(e.target.value.toUpperCase())}
-            className="w-full uppercase"
-          />
-        </div>
-
-        {/* Document Boxes Section */}
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold mb-4">Driver and Vehicle Documents:</h2>
-
-          {/* Driving License Document Box */}
-          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
-            <Image
-              src="/images/driving-license.jpg"
-              alt="Driving License"
-              fill
-              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
-            />
-            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
-              <div className="flex items-center justify-between mb-2 min-h-[120px]">
-                <div className="flex-1">
-                  <div className="flex items-center">
-                    <Label className="font-medium">Driving License</Label>
-                  </div>
-                  <div className="text-sm text-gray-600 mt-1">
-                    <div>de - Führerschein</div>
-                    <div>nl - Rijbewijs</div>
-                    <div>pl - Prawo jazdy</div>
-                    <div>ru - Водительское удостоверение</div>
-                    <div>ro - Permis de conducere</div>
-                    <div>rs - Возачка дозвола</div>
-                  </div>
-                </div>
+            {selectedInspector ? (
+              <div
+                className="rounded-md px-3 py-1 text-sm font-semibold text-white"
+                style={{ backgroundColor: INSPECTOR_COLORS[selectedInspector] || "#111827" }}
+              >
+                {selectedInspector}
               </div>
-              <div className="mt-2">
-                <Label className="text-sm">Expiry (MM/YYYY):</Label>
-                <div className="flex items-center">
-                  <Input
-                    value={drivingLicenseDate.month}
-                    onChange={(e) => handleLicenseDateChange("drivingLicense", "month", e.target.value)}
-                    placeholder="MM"
-                    maxLength={2}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    className={`w-16 h-10 mr-1 ${
-                      drivingLicenseExpired
-                        ? "border-red-500 border-2"
-                        : dateValid.drivingLicense
-                          ? "border-green-500 border-2"
-                          : ""
-                    }`}
-                  />
-                  <span>/</span>
-                  <Input
-                    ref={drivingLicenseYearRef}
-                    value={drivingLicenseDate.year}
-                    onChange={(e) => handleLicenseDateChange("drivingLicense", "year", e.target.value)}
-                    placeholder="YYYY"
-                    maxLength={4}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    className={`w-20 h-10 ml-1 ${
-                      drivingLicenseExpired
-                        ? "border-red-500 border-2"
-                        : dateValid.drivingLicense
-                          ? "border-green-500 border-2"
-                          : ""
-                    }`}
-                  />
-                  {drivingLicenseExpired && <span className="ml-2 text-red-500">Expired</span>}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {includeAdrCertificate && (
-            <>
-              {/* ADR Certificate Document Box */}
-          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
-            <Image
-              src="/images/adr-certificate.jpg"
-              alt="ADR Certificate"
-              fill
-              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
-            />
-            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
-              <div className="flex items-center justify-between mb-2 min-h-[120px]">
-                <div className="flex-1">
-                  <div className="flex items-center">
-                    <Label className="font-medium">ADR Certificate</Label>
-                  </div>
-                  <div className="text-sm text-gray-600 mt-1">
-                    <div>de - ADR-Bescheinigung</div>
-                    <div>nl - ADR-certificaat</div>
-                    <div>pl - Świadectwo ADR</div>
-                    <div>ru - Свидетельство ADR</div>
-                    <div>ro - Certificat ADR</div>
-                    <div>rs - АДР сертификат</div>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-2">
-                <Label className="text-sm">Expiry (MM/YYYY):</Label>
-                <div className="flex items-center">
-                  <Input
-                    value={adrCertificateDate.month}
-                    onChange={(e) => handleLicenseDateChange("adrCertificate", "month", e.target.value)}
-                    placeholder="MM"
-                    maxLength={2}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    className={`w-16 h-10 mr-1 ${
-                      adrCertificateExpired
-                        ? "border-red-500 border-2"
-                        : dateValid.adrCertificate
-                          ? "border-green-500 border-2"
-                          : ""
-                    }`}
-                  />
-                  <span>/</span>
-                  <Input
-                    ref={adrCertificateYearRef}
-                    value={adrCertificateDate.year}
-                    onChange={(e) => handleLicenseDateChange("adrCertificate", "year", e.target.value)}
-                    placeholder="YYYY"
-                    maxLength={4}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    className={`w-20 h-10 ml-1 ${
-                      adrCertificateExpired
-                        ? "border-red-500 border-2"
-                        : dateValid.adrCertificate
-                          ? "border-green-500 border-2"
-                          : ""
-                    }`}
-                  />
-                  {adrCertificateExpired && <span className="ml-2 text-red-500">Expired</span>}
-                </div>
-              </div>
-            </div>
-          </div>
-            </>
-          )}
-
-          
-
-          {/* Combined Vehicle Documents Box */}
-          <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
-            <Image
-              src="/images/truck-document.jpg"
-              alt="Vehicle Documents"
-              fill
-              className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
-            />
-            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[160px]">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex-1">
-                  <div className="flex items-center">
-                    <Label className="font-medium">Vehicle Documents</Label>
-                  </div>
-                  <div className="text-sm text-gray-600 mt-1">
-                    <div>de - Fahrzeugschein</div>
-                    <div>nl - Kentekenbewijs</div>
-                    <div>pl - Dowód rejestracyjny</div>
-                    <div>ru - Свидетельство о регистрации</div>
-                    <div>ro - Certificat de înmatriculare</div>
-                    <div>rs - Саобраћајна дозвола</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Truck Document Expiry */}
-              <div className="mt-2">
-                <Label className="text-sm font-medium">Truck Document Expiry (MM/YYYY):</Label>
-                <div className="flex items-center">
-                  <Input
-                    value={truckDocDate.month}
-                    onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
-                    placeholder="MM"
-                    maxLength={2}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    className={`w-16 h-10 mr-1 ${
-                      truckDocExpired
-                        ? "border-red-500 border-2"
-                        : dateValid.truckDoc
-                          ? "border-green-500 border-2"
-                          : ""
-                    }`}
-                  />
-                  <span>/</span>
-                  <Input
-                    ref={truckDocYearRef}
-                    value={truckDocDate.year}
-                    onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
-                    placeholder="YYYY"
-                    maxLength={4}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    className={`w-20 h-10 ml-1 ${
-                      truckDocExpired
-                        ? "border-red-500 border-2"
-                        : dateValid.truckDoc
-                          ? "border-green-500 border-2"
-                          : ""
-                    }`}
-                  />
-                  {truckDocExpired && <span className="ml-2 text-red-500">Expired</span>}
-                </div>
-              </div>
-
-              {/* Trailer Document Expiry */}
-              <div className="mt-3">
-                <Label className="text-sm font-medium">Trailer Document Expiry (MM/YYYY):</Label>
-                <div className="flex items-center">
-                  <Input
-                    value={trailerDocDate.month}
-                    onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
-                    placeholder="MM"
-                    maxLength={2}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    className={`w-16 h-10 mr-1 ${
-                      trailerDocExpired
-                        ? "border-red-500 border-2"
-                        : dateValid.trailerDoc
-                          ? "border-green-500 border-2"
-                          : ""
-                    }`}
-                  />
-                  <span>/</span>
-                  <Input
-                    ref={trailerDocYearRef}
-                    value={trailerDocDate.year}
-                    onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
-                    placeholder="YYYY"
-                    maxLength={4}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    className={`w-20 h-10 ml-1 ${
-                      trailerDocExpired
-                        ? "border-red-500 border-2"
-                        : dateValid.trailerDoc
-                          ? "border-green-500 border-2"
-                          : ""
-                    }`}
-                  />
-                  {trailerDocExpired && <span className="ml-2 text-red-500">Expired</span>}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Inspection Date */}
-      </div>
-
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-4">Select the equipment the driver has:</h2>
-        {equipmentItems.map((item, index) => (
-          <div key={index} className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
-            {/* Faded background image */}
-            {item.image && (
-              <Image
-                src={item.image || "/placeholder.svg"}
-                alt={item.name}
-                fill
-                className={`absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none ${
-                  item.name === "Safety glasses" || item.name === "Flashlight" || item.name === "Drain seal"
-                    ? "scale-50"
-                    : ""
-                }`}
-              />
+            ) : (
+              <div />
             )}
+          </div>
+        )}
 
-            <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
-              <div className="flex items-center justify-between mb-2 min-h-[120px]">
-                <div className="flex-1">
-                  <div className="flex items-center">
-                    <Label htmlFor={`equipment-${index}`} className="font-medium">
-                      {item.name}
-                    </Label>
-                  </div>
-                  {/* Add red text for items from Flashlight to Collection bucket */}
-                  {(item.name === "Flashlight" ||
-                    item.name === "Rubber gloves" ||
-                    item.name === "Safety glasses" ||
-                    item.name === "Mask + filter (ADR class 6.1/2.3)" ||
-                    item.name === "Collection bucket") && (
-                    <div className="text-sm font-medium mt-1" style={{ color: "#FF0000" }}>
-                      One piece for each driver!
+        <div className="mb-6">
+          {/* Centered Inspection Date */}
+          <div className="flex flex-col items-center mb-6">
+            <Label htmlFor="checkDate" className="text-lg font-semibold mb-2">
+              Inspection Date:
+            </Label>
+            <Input
+              id="checkDate"
+              value={checkDate}
+              onChange={(e) => setCheckDate(e.target.value)}
+              className="w-40 text-center"
+              placeholder="dd-mm-yyyy"
+              inputMode="numeric"
+              pattern="[0-9-]*"
+            />
+          </div>
+
+          <div className="mb-4">
+            <Label htmlFor="driverName">Driver's Name:</Label>
+            <Input
+              id="driverName"
+              value={driverName}
+              onChange={(e) => {
+                const value = e.target.value
+                const formatted = capitalizeWords(value)
+                setDriverName(formatted)
+              }}
+              className="w-full"
+            />
+          </div>
+
+          <div className="mb-4">
+            <Label htmlFor="truckPlate">Truck License Plate:</Label>
+            <Input
+              id="truckPlate"
+              value={truckPlate}
+              onChange={(e) => setTruckPlate(e.target.value.toUpperCase())}
+              className="w-full uppercase"
+            />
+          </div>
+
+          <div className="mb-4">
+            <Label htmlFor="trailerPlate">Trailer License Plate:</Label>
+            <Input
+              id="trailerPlate"
+              value={trailerPlate}
+              onChange={(e) => setTrailerPlate(e.target.value.toUpperCase())}
+              className="w-full uppercase"
+            />
+          </div>
+
+          {/* Document Boxes Section */}
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold mb-4">Driver and Vehicle Documents:</h2>
+
+            {/* Driving License Document Box */}
+            <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+              <Image
+                src="/images/driving-license.jpg"
+                alt="Driving License"
+                fill
+                className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+              />
+              <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+                <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                  <div className="flex-1">
+                    <div className="flex items-center">
+                      <Label className="font-medium">Driving License</Label>
                     </div>
-                  )}
-                  <div className="text-sm text-gray-600 mt-1">
-                    {item.translations.map((translation, i) => (
-                      <div key={i}>{translation}</div>
-                    ))}
+                    <div className="text-sm text-gray-600 mt-1">
+                      <div>de - Führerschein</div>
+                      <div>nl - Rijbewijs</div>
+                      <div>pl - Prawo jazdy</div>
+                      <div>ru - Водительское удостоверение</div>
+                      <div>ro - Permis de conducere</div>
+                      <div>rs - Возачка дозвола</div>
+                    </div>
                   </div>
                 </div>
-
-                <div className="flex items-center justify-center mx-4 gap-2 h-full">
-                  {item.additionalImage && (
-                    <div className="equipment-image-container ml-2">
-                      <Image
-                        src={item.additionalImage || "/placeholder.svg"}
-                        alt={`${item.name} additional`}
-                        width={50}
-                        height={50}
-                        style={{
-                          width: "auto",
-                          height: "auto",
-                          maxWidth: "100%",
-                          maxHeight: "100%",
-                        }}
-                      />
-                    </div>
-                  )}
-                  <Checkbox
-                    id={`equipment-${index}`}
-                    checked={checkedItems[item.name] || false}
-                    onCheckedChange={(checked) => handleEquipmentCheck(item.name, checked === true)}
-                    className="h-10 w-10 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
-                  />
-                </div>
-              </div>
-
-              {item.hasDate && (
                 <div className="mt-2">
                   <Label className="text-sm">Expiry (MM/YYYY):</Label>
                   <div className="flex items-center">
-                    {(() => {
-                      const m = expiryDates[item.name]?.month || ""
-                      const y = expiryDates[item.name]?.year || ""
-                      const complete = m.length === 2 && y.length === 4
-                      const expired = !!expiredItems[item.name]
-                      const borderClass = expired
-                        ? "border-red-500 border-2"
-                        : complete
-                          ? "border-green-500 border-2"
-                          : ""
-
-                      return (
-                        <>
-                          <Input
-                            ref={dateInputRefs.current[item.name]?.month}
-                            value={m}
-                            onChange={(e) => handleExpiryDateChange(item.name, "month", e.target.value)}
-                            placeholder="MM"
-                            className={`w-16 h-10 mr-1 ${borderClass}`}
-                            maxLength={2}
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                          />
-                          <span>/</span>
-                          <Input
-                            ref={dateInputRefs.current[item.name]?.year}
-                            value={y}
-                            onChange={(e) => handleExpiryDateChange(item.name, "year", e.target.value)}
-                            placeholder="YYYY"
-                            className={`w-20 h-10 ml-1 ${borderClass}`}
-                            maxLength={4}
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                          />
-                          {expired && <span className="ml-2 text-red-500">Expired</span>}
-                        </>
-                      )
-                    })()}
+                    <Input
+                      value={drivingLicenseDate.month}
+                      onChange={(e) => handleLicenseDateChange("drivingLicense", "month", e.target.value)}
+                      placeholder="MM"
+                      maxLength={2}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className={`w-16 h-10 mr-1 ${
+                        drivingLicenseExpired ? "border-red-500 border-2" : dateValid.drivingLicense ? "border-green-500 border-2" : ""
+                      }`}
+                    />
+                    <span>/</span>
+                    <Input
+                      ref={drivingLicenseYearRef}
+                      value={drivingLicenseDate.year}
+                      onChange={(e) => handleLicenseDateChange("drivingLicense", "year", e.target.value)}
+                      placeholder="YYYY"
+                      maxLength={4}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className={`w-20 h-10 ml-1 ${
+                        drivingLicenseExpired ? "border-red-500 border-2" : dateValid.drivingLicense ? "border-green-500 border-2" : ""
+                      }`}
+                    />
+                    {drivingLicenseExpired && <span className="ml-2 text-red-500">Expired</span>}
                   </div>
                 </div>
-              )}
+              </div>
+            </div>
+
+            {includeAdrCertificate && (
+              <>
+                {/* ADR Certificate Document Box */}
+                <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+                  <Image
+                    src="/images/adr-certificate.jpg"
+                    alt="ADR Certificate"
+                    fill
+                    className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+                  />
+                  <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+                    <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                      <div className="flex-1">
+                        <div className="flex items-center">
+                          <Label className="font-medium">ADR Certificate</Label>
+                        </div>
+                        <div className="text-sm text-gray-600 mt-1">
+                          <div>de - ADR-Bescheinigung</div>
+                          <div>nl - ADR-certificaat</div>
+                          <div>pl - Świadectwo ADR</div>
+                          <div>ru - Свидетельство ADR</div>
+                          <div>ro - Certificat ADR</div>
+                          <div>rs - АДР сертификат</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                      <div className="flex items-center">
+                        <Input
+                          value={adrCertificateDate.month}
+                          onChange={(e) => handleLicenseDateChange("adrCertificate", "month", e.target.value)}
+                          placeholder="MM"
+                          maxLength={2}
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          className={`w-16 h-10 mr-1 ${
+                            adrCertificateExpired ? "border-red-500 border-2" : dateValid.adrCertificate ? "border-green-500 border-2" : ""
+                          }`}
+                        />
+                        <span>/</span>
+                        <Input
+                          ref={adrCertificateYearRef}
+                          value={adrCertificateDate.year}
+                          onChange={(e) => handleLicenseDateChange("adrCertificate", "year", e.target.value)}
+                          placeholder="YYYY"
+                          maxLength={4}
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          className={`w-20 h-10 ml-1 ${
+                            adrCertificateExpired ? "border-red-500 border-2" : dateValid.adrCertificate ? "border-green-500 border-2" : ""
+                          }`}
+                        />
+                        {adrCertificateExpired && <span className="ml-2 text-red-500">Expired</span>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Combined Vehicle Documents Box */}
+            <div className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+              <Image
+                src="/images/truck-document.jpg"
+                alt="Vehicle Documents"
+                fill
+                className="absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none"
+              />
+              <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[160px]">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex-1">
+                    <div className="flex items-center">
+                      <Label className="font-medium">Vehicle Documents</Label>
+                    </div>
+                    <div className="text-sm text-gray-600 mt-1">
+                      <div>de - Fahrzeugschein</div>
+                      <div>nl - Kentekenbewijs</div>
+                      <div>pl - Dowód rejestracyjny</div>
+                      <div>ru - Свидетельство о регистрации</div>
+                      <div>ro - Certificat de înmatriculare</div>
+                      <div>rs - Саобраћајна дозвола</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Truck Document Expiry */}
+                <div className="mt-2">
+                  <Label className="text-sm font-medium">Truck Document Expiry (MM/YYYY):</Label>
+                  <div className="flex items-center">
+                    <Input
+                      value={truckDocDate.month}
+                      onChange={(e) => handleTruckDocDateChange("month", e.target.value)}
+                      placeholder="MM"
+                      maxLength={2}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className={`w-16 h-10 mr-1 ${truckDocExpired ? "border-red-500 border-2" : dateValid.truckDoc ? "border-green-500 border-2" : ""}`}
+                    />
+                    <span>/</span>
+                    <Input
+                      ref={truckDocYearRef}
+                      value={truckDocDate.year}
+                      onChange={(e) => handleTruckDocDateChange("year", e.target.value)}
+                      placeholder="YYYY"
+                      maxLength={4}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className={`w-20 h-10 ml-1 ${truckDocExpired ? "border-red-500 border-2" : dateValid.truckDoc ? "border-green-500 border-2" : ""}`}
+                    />
+                    {truckDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+                  </div>
+                </div>
+
+                {/* Trailer Document Expiry */}
+                <div className="mt-3">
+                  <Label className="text-sm font-medium">Trailer Document Expiry (MM/YYYY):</Label>
+                  <div className="flex items-center">
+                    <Input
+                      value={trailerDocDate.month}
+                      onChange={(e) => handleTrailerDocDateChange("month", e.target.value)}
+                      placeholder="MM"
+                      maxLength={2}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className={`w-16 h-10 mr-1 ${trailerDocExpired ? "border-red-500 border-2" : dateValid.trailerDoc ? "border-green-500 border-2" : ""}`}
+                    />
+                    <span>/</span>
+                    <Input
+                      ref={trailerDocYearRef}
+                      value={trailerDocDate.year}
+                      onChange={(e) => handleTrailerDocDateChange("year", e.target.value)}
+                      placeholder="YYYY"
+                      maxLength={4}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className={`w-20 h-10 ml-1 ${trailerDocExpired ? "border-red-500 border-2" : dateValid.trailerDoc ? "border-green-500 border-2" : ""}`}
+                    />
+                    {trailerDocExpired && <span className="ml-2 text-red-500">Expired</span>}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-        ))}
-      </div>
 
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-4">Before Loading:</h2>
-        <div className="space-y-2">
-          {beforeLoadingItems.map((item, index) => (
-            <div key={index} className="flex items-center">
-              <Checkbox
-                id={`before-loading-${index}`}
-                checked={beforeLoadingChecked[item] || false}
-                onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked === true)}
-                className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
-              />
-              <Label htmlFor={`before-loading-${index}`}>{item}</Label>
+          {/* Inspection Date */}
+        </div>
+
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-4">Select the equipment the driver has:</h2>
+          {equipmentItems.map((item, index) => (
+            <div key={index} className="mb-6 border-b pb-4 relative bg-white overflow-hidden rounded-lg shadow-sm">
+              {/* Faded background image */}
+              {item.image && (
+                <Image
+                  src={item.image || "/placeholder.svg"}
+                  alt={item.name}
+                  fill
+                  className={`absolute top-0 left-0 w-full h-full object-contain opacity-45 mix-blend-multiply dark:mix-blend-screen z-0 pointer-events-none ${
+                    item.name === "Safety glasses" || item.name === "Flashlight" || item.name === "Drain seal" ? "scale-50" : ""
+                  }`}
+                />
+              )}
+
+              <div className="relative z-10 pl-2 pt-2 pb-2 flex flex-col justify-center min-h-[120px]">
+                <div className="flex items-center justify-between mb-2 min-h-[120px]">
+                  <div className="flex-1">
+                    <div className="flex items-center">
+                      <Label htmlFor={`equipment-${index}`} className="font-medium">
+                        {item.name}
+                      </Label>
+                    </div>
+                    {/* Add red text for items from Flashlight to Collection bucket */}
+                    {(item.name === "Flashlight" ||
+                      item.name === "Rubber gloves" ||
+                      item.name === "Safety glasses" ||
+                      item.name === "Mask + filter (ADR class 6.1/2.3)" ||
+                      item.name === "Collection bucket") && (
+                      <div className="text-sm font-medium mt-1" style={{ color: "#FF0000" }}>
+                        One piece for each driver!
+                      </div>
+                    )}
+                    <div className="text-sm text-gray-600 mt-1">
+                      {item.translations.map((translation, i) => (
+                        <div key={i}>{translation}</div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-center mx-4 gap-2 h-full">
+                    {(item as any).additionalImage && (
+                      <div className="equipment-image-container ml-2">
+                        <Image
+                          src={(item as any).additionalImage || "/placeholder.svg"}
+                          alt={`${item.name} additional`}
+                          width={50}
+                          height={50}
+                          style={{
+                            width: "auto",
+                            height: "auto",
+                            maxWidth: "100%",
+                            maxHeight: "100%",
+                          }}
+                        />
+                      </div>
+                    )}
+                    <Checkbox
+                      id={`equipment-${index}`}
+                      checked={checkedItems[item.name] || false}
+                      onCheckedChange={(checked) => handleEquipmentCheck(item.name, checked === true)}
+                      className="h-10 w-10 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+                    />
+                  </div>
+                </div>
+
+                {item.hasDate && (
+                  <div className="mt-2">
+                    <Label className="text-sm">Expiry (MM/YYYY):</Label>
+                    <div className="flex items-center">
+                      {(() => {
+                        const m = expiryDates[item.name]?.month || ""
+                        const y = expiryDates[item.name]?.year || ""
+                        const complete = m.length === 2 && y.length === 4
+                        const expired = !!expiredItems[item.name]
+                        const borderClass = expired ? "border-red-500 border-2" : complete ? "border-green-500 border-2" : ""
+
+                        return (
+                          <>
+                            <Input
+                              ref={dateInputRefs.current[item.name]?.month}
+                              value={m}
+                              onChange={(e) => handleExpiryDateChange(item.name, "month", e.target.value)}
+                              placeholder="MM"
+                              className={`w-16 h-10 mr-1 ${borderClass}`}
+                              maxLength={2}
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                            />
+                            <span>/</span>
+                            <Input
+                              ref={dateInputRefs.current[item.name]?.year}
+                              value={y}
+                              onChange={(e) => handleExpiryDateChange(item.name, "year", e.target.value)}
+                              placeholder="YYYY"
+                              className={`w-20 h-10 ml-1 ${borderClass}`}
+                              maxLength={4}
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                            />
+                            {expired && <span className="ml-2 text-red-500">Expired</span>}
+                          </>
+                        )
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>
-      </div>
 
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-4">After Loading:</h2>
-        <div className="space-y-2">
-          {afterLoadingItems.map((item, index) => (
-            <div key={index} className="flex items-center">
-              <Checkbox
-                id={`after-loading-${index}`}
-                checked={afterLoadingChecked[item] || false}
-                onCheckedChange={(checked) => handleAfterLoadingCheck(item, checked === true)}
-                className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
-              />
-              <Label htmlFor={`after-loading-${index}`}>{item}</Label>
-            </div>
-          ))}
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-4">Before Loading:</h2>
+          <div className="space-y-2">
+            {beforeLoadingItems.map((item, index) => (
+              <div key={index} className="flex items-center">
+                <Checkbox
+                  id={`before-loading-${index}`}
+                  checked={beforeLoadingChecked[item] || false}
+                  onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked === true)}
+                  className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+                />
+                <Label htmlFor={`before-loading-${index}`}>{item}</Label>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
 
-      {showResult && (
-        <div className="mb-6 p-4 border rounded">
-          {allChecked ? (
-            <p className="text-green-600 font-medium">All items are checked.</p>
-          ) : (
-            <div>
-              <h3 className="font-bold mb-2">Missing Items:</h3>
-              <ul className="list-disc pl-5">
-                {missingItems.map((item, index) => (
-                  <li key={index}>{item}</li>
-                ))}
-              </ul>
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-4">After Loading:</h2>
+          <div className="space-y-2">
+            {afterLoadingItems.map((item, index) => (
+              <div key={index} className="flex items-center">
+                <Checkbox
+                  id={`after-loading-${index}`}
+                  checked={afterLoadingChecked[item] || false}
+                  onCheckedChange={(checked) => handleAfterLoadingCheck(item, checked === true)}
+                  className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+                />
+                <Label htmlFor={`after-loading-${index}`}>{item}</Label>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {showResult && (
+          <div className="mb-6 p-4 border rounded">
+            {allChecked ? (
+              <p className="text-green-600 font-medium">All items are checked.</p>
+            ) : (
+              <div>
+                <h3 className="font-bold mb-2">Missing Items:</h3>
+                <ul className="list-disc pl-5">
+                  {missingItems.map((item, index) => (
+                    <li key={index}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="mb-6">
+          {/* Remarks + Photos (above signatures) */}
+          <div className="mt-4">
+            <Label htmlFor="remarks" className="block mb-2">
+              Remarks:
+            </Label>
+            <textarea
+              id="remarks"
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              placeholder="Add any remarks here..."
+              className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
+            />
+
+            <div className="mt-4 flex flex-col gap-3">
+              <div className="flex items-start gap-4">
+                <div className="shrink-0">
+                  <Button
+                    type="button"
+                    onClick={() => photoInputRef.current?.click()}
+                    className="bg-black text-white hover:brightness-95"
+                  >
+                    Upload photos
+                  </Button>
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    multiple
+                    className="hidden"
+                    onChange={handlePhotoInputChange}
+                  />
+                  <p className="mt-1 text-xs text-gray-600">Camera will open on mobile.</p>
+                </div>
+
+                {/* Thumbnails */}
+                <div className="flex flex-wrap gap-2">
+                  {photos.map((p) => (
+                    <div
+                      key={p.id}
+                      className="group relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 bg-gray-50"
+                      title={p.name}
+                    >
+                      <img
+                        src={p.previewUrl}
+                        alt={p.name}
+                        className={`h-full w-full object-cover transition-opacity ${
+                          p.status === "uploading" || p.status === "queued" ? "opacity-60" : "opacity-100"
+                        }`}
+                      />
+
+                      {/* Progress bar overlay */}
+                      {(p.status === "uploading" || p.status === "queued") && (
+                        <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
+                          <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
+                        </div>
+                      )}
+
+                      {/* Remove button */}
+                      <button
+                        type="button"
+                        onClick={() => removePhoto(p.id)}
+                        aria-label="Remove photo"
+                        className="absolute right-1 top-1 rounded bg-black/70 px-1 text-xs text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
+                      >
+                        ×
+                      </button>
+
+                      {/* Error badge */}
+                      {p.status === "error" && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-red-600/70 text-[10px] font-semibold text-white">
+                          Error
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Container to hold both signature boxes side by side */}
+          <div className="flex gap-6 mt-6">
+            <div className="flex-1">
+              <Label className="block mb-2">Driver Signature:</Label>
+              <div className="border rounded-md p-2">
+                <canvas
+                  ref={canvasRef}
+                  className="w-full border border-gray-300 rounded"
+                  style={{ height: "150px", touchAction: "none" }}
+                />
+                <Button variant="outline" className="mt-2 bg-transparent" onClick={clearSignature}>
+                  Clear Signature
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex-1">
+              <Label className="block mb-2">Inspector Signature:</Label>
+              <div className="border rounded-md p-2">
+                <canvas
+                  ref={inspectorCanvasRef}
+                  className="w-full border border-gray-300 rounded"
+                  style={{ height: "150px", touchAction: "none" }}
+                />
+                <Button variant="outline" className="mt-2 bg-transparent" onClick={clearInspectorSignature}>
+                  Clear Signature
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col space-y-4 mb-6">
+          <Button onClick={checkMissingItems} className="w-full">
+            Check Missing Items
+          </Button>
+          <Button type="button" onClick={() => setConfirmAction("download")} disabled={isPdfGenerating} className="w-full">
+            {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
+          </Button>
+          <Button
+            type="button"
+            onClick={() => setConfirmAction("send")}
+            disabled={
+              isSendingEmail || isPdfGenerating || !selectedInspector || photos.some((p) => p.status === "uploading" || p.status === "queued")
+            }
+            style={{ backgroundColor: "#0099d0" }}
+            className="w-full hover:brightness-90"
+          >
+            {isSendingEmail ? "Sending Email..." : "Send ZIP via Email"}
+          </Button>
+
+          {emailStatus && (
+            <div
+              className={`mt-2 p-2 rounded ${
+                emailStatus.includes("Failed") ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
+              }`}
+            >
+              {emailStatus}
             </div>
           )}
         </div>
-      )}
-
-      <div className="mb-6">
-        {/* Remarks + Photos (above signatures) */}
-        <div className="mt-4">
-          <Label htmlFor="remarks" className="block mb-2">
-            Remarks:
-          </Label>
-          <textarea
-            id="remarks"
-            value={remarks}
-            onChange={(e) => setRemarks(e.target.value)}
-            placeholder="Add any remarks here..."
-            className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
-          />
-
-          <div className="mt-4 flex flex-col gap-3">
-            <div className="flex items-start gap-4">
-              <div className="shrink-0">
-                <Button
-                  type="button"
-                  onClick={() => photoInputRef.current?.click()}
-                  className="bg-black text-white hover:brightness-95"
-                >
-                  Upload photos
-                </Button>
-                <input
-                  ref={photoInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  multiple
-                  className="hidden"
-                  onChange={handlePhotoInputChange}
-                />
-                <p className="mt-1 text-xs text-gray-600">Camera will open on mobile.</p>
-              </div>
-
-              {/* Thumbnails */}
-              <div className="flex flex-wrap gap-2">
-                {photos.map((p) => (
-                  <div
-                    key={p.id}
-                    className="group relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 bg-gray-50"
-                    title={p.name}
-                  >
-                    <img
-                      src={p.previewUrl}
-                      alt={p.name}
-                      className={`h-full w-full object-cover transition-opacity ${p.status === "uploading" || p.status === "queued" ? "opacity-60" : "opacity-100"}`}
-                    />
-
-                    {/* Progress bar overlay */}
-                    {(p.status === "uploading" || p.status === "queued") && (
-                      <div className="absolute inset-x-0 bottom-0 h-2 bg-black/10">
-                        <div className="h-full bg-black/70" style={{ width: `${p.progress}%` }} />
-                      </div>
-                    )}
-
-                    {/* Remove button */}
-                    <button
-                      type="button"
-                      onClick={() => removePhoto(p.id)}
-                      aria-label="Remove photo"
-                      className="absolute right-1 top-1 rounded bg-black/70 px-1 text-xs text-white opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
-                    >
-                      ×
-                    </button>
-
-                    {/* Error badge */}
-                    {p.status === "error" && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-red-600/70 text-[10px] font-semibold text-white">
-                        Error
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Container to hold both signature boxes side by side */}
-        <div className="flex gap-6 mt-6">
-          <div className="flex-1">
-            <Label className="block mb-2">Driver Signature:</Label>
-            <div className="border rounded-md p-2">
-              <canvas
-                ref={canvasRef}
-                className="w-full border border-gray-300 rounded"
-                style={{ height: "150px", touchAction: "none" }}
-              />
-              <Button variant="outline" className="mt-2 bg-transparent" onClick={clearSignature}>
-                Clear Signature
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex-1">
-            <Label className="block mb-2">Inspector Signature:</Label>
-            <div className="border rounded-md p-2">
-              <canvas
-                ref={inspectorCanvasRef}
-                className="w-full border border-gray-300 rounded"
-                style={{ height: "150px", touchAction: "none" }}
-              />
-              <Button variant="outline" className="mt-2 bg-transparent" onClick={clearInspectorSignature}>
-                Clear Signature
-              </Button>
-            </div>
-          </div>
-        </div>
       </div>
-
-      <div className="flex flex-col space-y-4 mb-6">
-        <Button onClick={checkMissingItems} className="w-full">
-          Check Missing Items
-        </Button>
-        <Button type="button" onClick={() => setConfirmAction("download")} disabled={isPdfGenerating} className="w-full">
-          {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
-        </Button>
-        <Button
-          type="button"
-          onClick={() => setConfirmAction("send")}
-          disabled={
-            isSendingEmail ||
-            isPdfGenerating ||
-            !selectedInspector ||
-            photos.some((p) => p.status === "uploading" || p.status === "queued")
-          }
-          style={{ backgroundColor: "#0099d0" }}
-          className="w-full hover:brightness-90"
-        >
-          {isSendingEmail ? "Sending Email..." : "Send ZIP via Email"}
-        </Button>
-
-        {emailStatus && (
-          <div
-            className={`mt-2 p-2 rounded ${
-              emailStatus.includes("Failed") ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
-            }`}
-          >
-            {emailStatus}
-          </div>
-        )}
-      </div>
-    </div>
     </>
   )
 }
