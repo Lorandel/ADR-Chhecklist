@@ -149,7 +149,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "rs - Апарат за гашење",
       ],
       hasDate: true,
-      image: "/images/fire-extinguisher.png",
+      image: "/images/fire-extinguisher.jpg",
     },
     {
       name: "Wheel chock",
@@ -161,7 +161,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Cal pentru roți",
         "rs - Клизач",
       ],
-      image: "/images/wheel-chock.png",
+      image: "/images/wheel-chock.jpg",
     },
     {
       name: "2 lamps/warning triangle",
@@ -173,7 +173,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - 2 lampi/triunghi de avertizare",
         "rs - 2 лампе/упозоравајући троугао",
       ],
-      image: "/images/warning-triangle.png",
+      image: "/images/warning-triangle.jpg",
     },
     {
       name: "Eye wash",
@@ -185,7 +185,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Soluție pentru spălarea ochilor",
         "rs - Течност за испирање очију",
       ],
-      image: "/images/eye-wash.png",
+      image: "/images/eye-wash.jpg",
     },
     {
       name: "Written ADR instructions",
@@ -197,12 +197,12 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Instrucțiuni ADR scrise",
         "rs - Писане упутства ADR",
       ],
-      image: "/images/adr-instructions.png",
+      image: "/images/adr-instructions.jpg",
     },
     {
       name: "Shovel",
       translations: ["de - Schaufel", "nl - Schep", "pl - Łopata", "ru - Лопата", "ro - Lopată", "rs - Лопата"],
-      image: "/images/shovel.png",
+      image: "/images/shovel.jpg",
     },
     {
       name: "Drain seal",
@@ -214,7 +214,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Sigilant pentru scurgere",
         "rs - Бртвљење одвода",
       ],
-      image: "/images/drain-seal.png",
+      image: "/images/drain-seal.jpg",
     },
     {
       name: "Flashlight",
@@ -226,7 +226,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Lanternă",
         "rs - Батеријска лампа",
       ],
-      image: "/images/flashlight.png",
+      image: "/images/flashlight.jpg",
     },
     {
       name: "Rubber gloves",
@@ -238,7 +238,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Mănuși de cauciuc",
         "rs - Гумене рукавице",
       ],
-      image: "/images/rubber-gloves.png",
+      image: "/images/rubber-gloves.jpg",
     },
     {
       name: "Safety glasses",
@@ -250,7 +250,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Ochelari de protecție",
         "rs - Заштитне наочаре",
       ],
-      image: "/images/safety-glasses.png",
+      image: "/images/safety-glasses.jpg",
     },
     {
       name: "Mask + filter (ADR class 6.1/2.3)",
@@ -263,7 +263,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "rs - Маска + филтер",
       ],
       hasDate: true,
-      image: "/images/mask-filter.png",
+      image: "/images/mask-filter.jpg",
     },
     {
       name: "Collection bucket",
@@ -275,7 +275,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         "ro - Găleată de colectare",
         "rs - Канта за прикупљање",
       ],
-      image: "/images/collection-bucket.png",
+      image: "/images/collection-bucket.jpg",
     },
   ]
 
