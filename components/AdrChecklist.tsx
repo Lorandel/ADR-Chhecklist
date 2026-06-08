@@ -332,14 +332,13 @@ const [unInputs, setUnInputs] = useState<string[]>([""])
   }, [variant])
 
   const beforeLoadingItems = useMemo(() => {
-  if (!trailerType) return []
   const items: string[] = []
 
   // Requested list (conditional by trailer type)
   items.push("ADR plate front+back")
-  if (trailerType === "Tilt") items.push("Tension belts 2500DAN, 15 for FTL (Tilt trailer)")
+  if (trailerType === "Tilt" || !trailerType) items.push("Tension belts 2500DAN, 15 for FTL (Tilt trailer)")
   items.push("No visual damages on the truck/trailer")
-  if (trailerType === "Box") items.push("Loading security stanchions (box trailer)")
+  if (trailerType === "Box" || !trailerType) items.push("Loading security stanchions (box trailer)")
   items.push("Tires with at least 3 mm of profile")
   items.push("Slip mats, 40 for FTL")
   items.push("Loading floor dry, clean, tidy, odorless")
@@ -846,6 +845,10 @@ const handleSelectTrailerEmpty = useCallback((val: boolean) => {
   }
 }, [])
 
+const openHowToVideo = useCallback(() => {
+  if (typeof window === "undefined") return
+  window.open("https://www.youtube.com/watch?v=ghvgre1Vhac", "_blank", "noopener,noreferrer")
+}, [])
 
 const handleCargoPopupChoice = useCallback((adr: boolean) => {
   if (!isTrailerEmpty) {
@@ -1565,8 +1568,7 @@ const finalizeUnCodes = useCallback(() => {
       pdf.setFont("helvetica", "bold")
       pdf.setFontSize(11)
       pdf.setTextColor(17, 24, 39)
-      const titleW = pdf.getTextWidth(title)
-      pdf.text(title, x + (boxW - titleW) / 2, y + 8)
+      pdf.text(title, x + 6, y + 8)
 
       let yy = y + 16
       const textX = x + 6 + 6.2
@@ -1617,12 +1619,12 @@ if (trailerType) {
   const typeForText = trailerType === "Container" ? "container" : `${trailerType.toLowerCase()} trailer`
 
   // Insert connection question right after ADR plate
-  const connectedLine = `Is the ${typeForText} connected correctly?`
+  const connectedLine = `Is the ${typeForText} connected correctly? - ${trailerConnectedCorrectly === true ? "Yes" : "No"}`
   beforePdfItems.splice(1, 0, connectedLine)
   beforePdfChecked[connectedLine] = trailerConnectedCorrectly === true
 
   if (trailerType === "Container") {
-    const securedLine = `Is the container properly secured to the chassis?`
+    const securedLine = `Is the container properly secured to the chassis? - ${containerSecuredToChassis === true ? "Yes" : "No"}`
     beforePdfItems.splice(2, 0, securedLine)
     beforePdfChecked[securedLine] = containerSecuredToChassis === true
   }
@@ -3116,78 +3118,95 @@ unCodesDone,
 </div>
 
 {/* Before Loading (only after trailer type is selected) */}
-{trailerType && (
-  <div className="mb-6 flex flex-col items-center">
-    <h2 className="text-xl font-semibold mb-4 text-center">Before Loading:</h2>
+<div className="mb-6">
+    <h2 className="text-xl font-semibold mb-4">Before Loading:</h2>
 
     {/* 1) ADR plate front+back */}
     <div className="space-y-2">
       {beforeLoadingItems.slice(0, 1).map((item, index) => (
-        <div key={index} className="flex items-center">
+        <div key={index} className="grid grid-cols-[24px_1fr] gap-x-2 items-start">
           <Checkbox
             id={`before-loading-${index}`}
             checked={beforeLoadingChecked[item] || false}
             onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked === true)}
-            className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+            className="h-6 w-6 mt-0.5 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
           />
-          <Label htmlFor={`before-loading-${index}`}>{item}</Label>
+          <Label className="leading-tight" htmlFor={`before-loading-${index}`}>{item}</Label>
         </div>
       ))}
     </div>
 
-    {/* 2) Connection checks */}
-    <div className="mt-4 space-y-2">
-      <div className="flex items-center">
-        <Checkbox
-          id="trailer-connected-correctly"
-          checked={trailerConnectedCorrectly === true}
-          onCheckedChange={(checked) => {
-            if (checked === true) {
-              handleSelectTrailerConnected(true)
-            } else {
-              setTrailerConnectedCorrectly(null)
-            }
-          }}
-          className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
-        />
-        <Label htmlFor="trailer-connected-correctly" className="font-medium">
+    {/* 2) Connection question + video link */}
+    <div className="mt-4 flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-medium">
           Is the {trailerTypeDisplay || "trailer"} connected correctly?
-        </Label>
+        </div>
+        <Button type="button" variant="outline" className="bg-transparent h-8 px-3" onClick={openHowToVideo}>
+          Vezi aici
+        </Button>
+      </div>
+
+      <div className="flex items-center gap-3 justify-center flex-wrap">
+        <Button
+          type="button"
+          variant={trailerConnectedCorrectly === true ? "default" : "outline"}
+          className={trailerConnectedCorrectly === true ? "" : "bg-transparent"}
+          onClick={() => handleSelectTrailerConnected(true)}
+        >
+          Yes
+        </Button>
+        <Button
+          type="button"
+          variant={trailerConnectedCorrectly === false ? "default" : "outline"}
+          className={trailerConnectedCorrectly === false ? "" : "bg-transparent"}
+          onClick={() => handleSelectTrailerConnected(false)}
+        >
+          No
+        </Button>
       </div>
 
       {trailerType === "Container" && (
-        <div className="flex items-center">
-          <Checkbox
-            id="container-secured-to-chassis"
-            checked={containerSecuredToChassis === true}
-            onCheckedChange={(checked) => {
-              if (checked === true) {
-                handleSelectContainerSecured(true)
-              } else {
-                setContainerSecuredToChassis(null)
-              }
-            }}
-            className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
-          />
-          <Label htmlFor="container-secured-to-chassis" className="font-medium">
-            Is the container properly secured to the chassis?
-          </Label>
+        <div className="mt-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="font-medium">Is the container properly secured to the chassis?</div>
+            <Button type="button" variant="outline" className="bg-transparent h-8 px-3" onClick={openHowToVideo}>
+              Vezi aici
+            </Button>
+          </div>
+          <div className="flex items-center gap-3 justify-center flex-wrap mt-2">
+            <Button
+              type="button"
+              variant={containerSecuredToChassis === true ? "default" : "outline"}
+              className={containerSecuredToChassis === true ? "" : "bg-transparent"}
+              onClick={() => handleSelectContainerSecured(true)}
+            >
+              Yes
+            </Button>
+            <Button
+              type="button"
+              variant={containerSecuredToChassis === false ? "default" : "outline"}
+              className={containerSecuredToChassis === false ? "" : "bg-transparent"}
+              onClick={() => handleSelectContainerSecured(false)}
+            >
+              No
+            </Button>
+          </div>
         </div>
       )}
     </div>
 
     {/* 3) Remaining checklist items */}
-
     <div className="mt-4 space-y-2">
       {beforeLoadingItems.slice(1).map((item, index) => (
-        <div key={index} className="flex items-center">
+        <div key={index} className="grid grid-cols-[24px_1fr] gap-x-2 items-start">
           <Checkbox
             id={`before-loading-rest-${index}`}
             checked={beforeLoadingChecked[item] || false}
             onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked === true)}
-            className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+            className="h-6 w-6 mt-0.5 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
           />
-          <Label htmlFor={`before-loading-rest-${index}`}>{item}</Label>
+          <Label className="leading-tight" htmlFor={`before-loading-rest-${index}`}>{item}</Label>
         </div>
       ))}
     </div>
@@ -3215,30 +3234,27 @@ unCodesDone,
       </div>
     </div>
   </div>
-)}
 
 {/* After Loading and everything below it (only after the steps above are completed) */}
-{canProceedToAfterLoading && (
-  <div className="mb-6 flex flex-col items-center">
-    <h2 className="text-xl font-semibold mb-4 text-center">After Loading:</h2>
+<div className="mb-6">
+    <h2 className="text-xl font-semibold mb-4">After Loading:</h2>
     <div className="space-y-2">
       {afterLoadingItems.map((item, index) => (
-        <div key={index} className="flex items-center">
+        <div key={index} className="grid grid-cols-[24px_1fr] gap-x-2 items-start">
           <Checkbox
             id={`after-loading-${index}`}
             checked={afterLoadingChecked[item] || false}
             onCheckedChange={(checked) => handleAfterLoadingCheck(item, checked === true)}
-            className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+            className="h-6 w-6 mt-0.5 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
           />
-          <Label htmlFor={`after-loading-${index}`}>{item}</Label>
+          <Label className="leading-tight" htmlFor={`after-loading-${index}`}>{item}</Label>
         </div>
       ))}
     </div>
   </div>
-)}
 
-      {canProceedToAfterLoading && showResult && (
-        <div className="mb-6 p-4 border rounded w-full max-w-3xl">
+      {showResult && (
+        <div className="mb-6 p-4 border rounded">
           {allChecked ? (
             <p className="text-green-600 font-medium">All items are checked.</p>
           ) : (
@@ -3254,7 +3270,6 @@ unCodesDone,
         </div>
       )}
 
-      {canProceedToAfterLoading && (
       <>
 
       <div className="mb-6">
@@ -3403,7 +3418,7 @@ unCodesDone,
       </div>
 
       </>
-      )}
+
 
     </div>
     </>
