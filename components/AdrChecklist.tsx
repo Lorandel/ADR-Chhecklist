@@ -1581,19 +1581,40 @@ const finalizeUnCodes = useCallback(() => {
       // Line height used for checklist rows (keeps spacing consistent with existing layout)
       const rowH = 7
 
-      for (const it of items) {
-        const ok = !!checkedMap[it]
+      for (const itRaw of items) {
+        const it = (itRaw || "").toString()
+        const ok = !!checkedMap[itRaw]
         drawStatus(x + 6, yy - 4, ok)
+
+        // If the item contains explicit line breaks, render all lines wrapped inside the box (no ellipsis)
+        if (it.includes("
+")) {
+          const parts = it
+            .split("
+")
+            .map((p) => p.trim())
+            .filter(Boolean)
+
+          for (const part of parts) {
+            const wrapLines = (pdf as any).splitTextToSize ? (pdf as any).splitTextToSize(part, maxW) : [part]
+            for (let j = 0; j < wrapLines.length; j++) {
+              pdf.text(String(wrapLines[j]), textX, yy)
+              yy += rowH
+            }
+          }
+          continue
+        }
 
         // Special case: keep the "Goods correctly secured" item readable by wrapping after the colon
         // instead of truncating with an ellipsis.
-        if (it.startsWith("Goods correctly secured:") && pdf.getTextWidth(it) > maxW) {
-          const idx = it.indexOf(":")
-          const head = idx >= 0 ? it.slice(0, idx + 1).trim() : "Goods correctly secured:"
-          const tail = idx >= 0 ? it.slice(idx + 1).trim() : it
+        const itTrim = it.trim()
+        if (itTrim.startsWith("Goods correctly secured:")) {
+          const idx = itTrim.indexOf(":")
+          const head = idx >= 0 ? itTrim.slice(0, idx + 1).trim() : "Goods correctly secured:"
+          const tail = idx >= 0 ? itTrim.slice(idx + 1).trim() : itTrim
 
           // First line (label)
-          pdf.text(truncateToWidth(head, maxW), textX, yy)
+          pdf.text(head, textX, yy)
 
           // Following line(s) (description)
           const tailLines = (pdf as any).splitTextToSize ? (pdf as any).splitTextToSize(tail, maxW) : [tail]
@@ -1630,28 +1651,26 @@ if (trailerType) {
     beforePdfChecked[securedLine] = containerSecuredToChassis === true
   }
 
-  // Replace the old compatibility line with the new empty question (append to keep spacing stable)
-  const emptyLine = `Is the ${typeForText} empty? - ${isTrailerEmpty === true ? "Yes" : "No"}`
-  beforePdfItems.push(emptyLine)
-  beforePdfChecked[emptyLine] = isTrailerEmpty === true
-
-  // Cargo info when NOT empty
-  if (isTrailerEmpty === false) {
+  // Trailer cargo info (replaces the old compatibility line)
+  if (isTrailerEmpty === true) {
+    const info = `The ${typeForText} was empty before loading.`
+    beforePdfItems.push(info)
+    beforePdfChecked[info] = true
+  } else if (isTrailerEmpty === false) {
     if (isLoadedWithAdrGoods === false) {
-      const info = `THE ${trailerType} is loaded with non-ADR goods.`
+      const info = `The ${typeForText} had non ADR goods before loading.`
       beforePdfItems.push(info)
       beforePdfChecked[info] = true
     } else if (isLoadedWithAdrGoods === true) {
       const codeList = (unCodes || []).filter(Boolean).map((c) => `UN ${c}`).join(", ")
-      const info = codeList.length > 0
-        ? `ADR goods in the ${trailerType}: ${codeList}`
-        : `ADR goods in the ${trailerType}: UN codes not specified`
+      const info = `The ${typeForText} had next ADR goods before loading:
+${codeList || "UN codes not specified"}
+Product compatibility and segregation according with ADR is respected.`
       beforePdfItems.push(info)
       beforePdfChecked[info] = true
     }
   }
 }
-
 drawLoadingBox("Before Loading", beforeX, loadY, beforePdfItems, beforePdfChecked)
 drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingChecked)
 
