@@ -1605,7 +1605,18 @@ const finalizeUnCodes = useCallback(() => {
           continue
         }
 
-        const line = truncateToWidth(it, maxW)
+        
+        // Wrap trailer cargo statements in Before Loading (avoid ellipsis)
+        const shouldWrap = it.includes("before loading") || it.startsWith("Product compatibility") || it.startsWith("UN ")
+        if (shouldWrap && (pdf as any).splitTextToSize && pdf.getTextWidth(it) > maxW) {
+          const lines = (pdf as any).splitTextToSize(it, maxW)
+          for (let j = 0; j < lines.length; j++) {
+            pdf.text(String(lines[j]), textX, yy + rowH * j)
+          }
+          yy += rowH * lines.length
+          continue
+        }
+const line = truncateToWidth(it, maxW)
         pdf.text(line, textX, yy)
         yy += rowH
       }
@@ -1630,28 +1641,33 @@ if (trailerType) {
     beforePdfChecked[securedLine] = containerSecuredToChassis === true
   }
 
-  // Replace the old compatibility line with the new empty question (append to keep spacing stable)
-  const emptyLine = `Is the ${typeForText} empty? - ${isTrailerEmpty === true ? "Yes" : "No"}`
-  beforePdfItems.push(emptyLine)
-  beforePdfChecked[emptyLine] = isTrailerEmpty === true
+  // Trailer cargo info (PDF) — replaces the old compatibility/question line
+  const typeForSentence = trailerType === "Container" ? "container" : `${trailerType.toLowerCase()} trailer`
 
-  // Cargo info when NOT empty
-  if (isTrailerEmpty === false) {
+  if (isTrailerEmpty === true) {
+    const info = `The ${typeForSentence} was empty before loading.`
+    beforePdfItems.push(info)
+    beforePdfChecked[info] = true
+  } else if (isTrailerEmpty === false) {
     if (isLoadedWithAdrGoods === false) {
-      const info = `THE ${trailerType} is loaded with non-ADR goods.`
+      const info = `The ${typeForSentence} had non ADR goods before loading.`
       beforePdfItems.push(info)
       beforePdfChecked[info] = true
     } else if (isLoadedWithAdrGoods === true) {
+      const header = `The ${typeForSentence} had next ADR goods before loading:`
+      beforePdfItems.push(header)
+      beforePdfChecked[header] = true
+
       const codeList = (unCodes || []).filter(Boolean).map((c) => `UN ${c}`).join(", ")
-      const info = codeList.length > 0
-        ? `ADR goods in the ${trailerType}: ${codeList}`
-        : `ADR goods in the ${trailerType}: UN codes not specified`
-      beforePdfItems.push(info)
-      beforePdfChecked[info] = true
+      const unLine = codeList.length > 0 ? codeList : "UN numbers not specified"
+      beforePdfItems.push(unLine)
+      beforePdfChecked[unLine] = true
+
+      const compat = "Product compatibility and segregation according with ADR is respected."
+      beforePdfItems.push(compat)
+      beforePdfChecked[compat] = true
     }
   }
-}
-
 drawLoadingBox("Before Loading", beforeX, loadY, beforePdfItems, beforePdfChecked)
 drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingChecked)
 
