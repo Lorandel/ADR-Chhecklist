@@ -1587,11 +1587,9 @@ const finalizeUnCodes = useCallback(() => {
         drawStatus(x + 6, yy - 4, ok)
 
         // If the item contains explicit line breaks, render all lines wrapped inside the box (no ellipsis)
-        if (it.includes("
-")) {
+        if (it.includes("\n")) {
           const parts = it
-            .split("
-")
+            .split("\n")
             .map((p) => p.trim())
             .filter(Boolean)
 
