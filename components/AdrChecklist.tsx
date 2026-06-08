@@ -1554,12 +1554,12 @@ const finalizeUnCodes = useCallback(() => {
     const loadWTotal = pageW - margin * 2
     const loadColGap = 10
     const boxW = (loadWTotal - loadColGap) / 2
-    const boxH = 70
+    const boxH = 92
 
     const beforeX = margin
     const afterX = margin + boxW + loadColGap
 
-    const drawLoadingBox = (title: string, x: number, y: number, items: string[], checkedMap: Record<string, boolean>) => {
+    const drawLoadingBox = (title: string, x: number, y: number, items: string[], checkedMap: Record<string, boolean>, headerRight?: string) => {
       pdf.setDrawColor(226, 232, 240)
       pdf.setFillColor(255, 255, 255)
       pdf.setLineWidth(0.3)
@@ -1571,15 +1571,27 @@ const finalizeUnCodes = useCallback(() => {
       pdf.setTextColor(17, 24, 39)
       pdf.text(title, x + 6, y + 8)
 
+      // Optional right-aligned header text (e.g., Trailer type)
+      if (headerRight) {
+        pdf.setFont("helvetica", "normal")
+        pdf.setFontSize(8)
+        pdf.setTextColor(100, 116, 139)
+        pdf.text(headerRight, x + boxW - 6, y + 8, { align: "right" })
+        pdf.setTextColor(17, 24, 39)
+        pdf.setFont("helvetica", "bold")
+        pdf.setFontSize(7.4)
+      }
+
+
       let yy = y + 16
       const textX = x + 6 + 6.2
       const maxW = boxW - 14
 
       pdf.setFont("helvetica", "bold")
-      pdf.setFontSize(7.8)
+      pdf.setFontSize(7.4)
 
       // Line height used for checklist rows (keeps spacing consistent with existing layout)
-      const rowH = 7
+      const rowH = 6.2
 
       for (const itRaw of items) {
         const it = (itRaw || "").toString()
@@ -1635,8 +1647,15 @@ const finalizeUnCodes = useCallback(() => {
 const beforePdfItems: string[] = Array.isArray(beforeLoadingItems) && beforeLoadingItems.length > 0 ? [...beforeLoadingItems] : [...beforeLoadingItemsBase]
 const beforePdfChecked: Record<string, boolean> = { ...(beforeLoadingChecked || {}) }
 
+let beforeHeaderRight: string | undefined = undefined
+
 if (trailerType) {
   const typeForText = trailerType === "Container" ? "container" : `${trailerType.toLowerCase()} trailer`
+
+  // Trailer type label for PDF header
+  const typeForHeader = trailerType === "Box" ? "Box trailer" : trailerType === "Tilt" ? "Tilt trailer" : "Container"
+  beforeHeaderRight = `Trailer type: ${typeForHeader}`
+
 
   // Insert connection question right after ADR plate
   const connectedLine = `The ${typeForText} is connected correctly`
@@ -1656,24 +1675,24 @@ if (trailerType) {
     beforePdfChecked[info] = true
   } else if (isTrailerEmpty === false) {
     if (isLoadedWithAdrGoods === false) {
-      const info = `The ${typeForText} had non ADR goods before loading.`
+      const info = `The ${typeForText} contained non-ADR goods before loading.`
       beforePdfItems.push(info)
       beforePdfChecked[info] = true
     } else if (isLoadedWithAdrGoods === true) {
       const codeList = (unCodes || []).filter(Boolean).map((c) => `UN ${c}`).join(", ")
-      const info = `The ${typeForText} had next ADR goods before loading:
-${codeList || "UN codes not specified"}
-Product compatibility and segregation according with ADR is respected.`
+      const info = `The ${typeForText} contained ADR goods before loading:
+UN numbers: ${codeList || "UN codes not specified"}
+Product compatibility and segregation according to ADR is respected.`
       beforePdfItems.push(info)
       beforePdfChecked[info] = true
     }
   }
 }
-drawLoadingBox("Before Loading", beforeX, loadY, beforePdfItems, beforePdfChecked)
+drawLoadingBox("Before Loading", beforeX, loadY, beforePdfItems, beforePdfChecked, beforeHeaderRight)
 drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingChecked)
 
     // ---- Signatures box ----
-    const sigY = loadY + boxH + gap
+    const sigY = loadY + boxH + 4
     const sigX = margin
     const sigW = pageW - margin * 2
     const sigH = 34
