@@ -846,10 +846,6 @@ const handleSelectTrailerEmpty = useCallback((val: boolean) => {
   }
 }, [])
 
-const openHowToVideo = useCallback(() => {
-  if (typeof window === "undefined") return
-  window.open("https://www.youtube.com/watch?v=ghvgre1Vhac", "_blank", "noopener,noreferrer")
-}, [])
 
 const handleCargoPopupChoice = useCallback((adr: boolean) => {
   if (!isTrailerEmpty) {
@@ -1569,7 +1565,8 @@ const finalizeUnCodes = useCallback(() => {
       pdf.setFont("helvetica", "bold")
       pdf.setFontSize(11)
       pdf.setTextColor(17, 24, 39)
-      pdf.text(title, x + 6, y + 8)
+      const titleW = pdf.getTextWidth(title)
+      pdf.text(title, x + (boxW - titleW) / 2, y + 8)
 
       let yy = y + 16
       const textX = x + 6 + 6.2
@@ -1620,12 +1617,12 @@ if (trailerType) {
   const typeForText = trailerType === "Container" ? "container" : `${trailerType.toLowerCase()} trailer`
 
   // Insert connection question right after ADR plate
-  const connectedLine = `Is the ${typeForText} connected correctly? - ${trailerConnectedCorrectly === true ? "Yes" : "No"}`
+  const connectedLine = `Is the ${typeForText} connected correctly?`
   beforePdfItems.splice(1, 0, connectedLine)
   beforePdfChecked[connectedLine] = trailerConnectedCorrectly === true
 
   if (trailerType === "Container") {
-    const securedLine = `Is the container properly secured to the chassis? - ${containerSecuredToChassis === true ? "Yes" : "No"}`
+    const securedLine = `Is the container properly secured to the chassis?`
     beforePdfItems.splice(2, 0, securedLine)
     beforePdfChecked[securedLine] = containerSecuredToChassis === true
   }
@@ -3120,7 +3117,7 @@ unCodesDone,
 
 {/* Before Loading (only after trailer type is selected) */}
 {trailerType && (
-  <div className="mb-6 max-w-2xl mx-auto">
+  <div className="mb-6 flex flex-col items-center">
     <h2 className="text-xl font-semibold mb-4 text-center">Before Loading:</h2>
 
     {/* 1) ADR plate front+back */}
@@ -3138,67 +3135,49 @@ unCodesDone,
       ))}
     </div>
 
-    {/* 2) Connection question + video link */}
-    <div className="mt-4 flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-3">
-        <div className="font-medium">
+    {/* 2) Connection checks */}
+    <div className="mt-4 space-y-2">
+      <div className="flex items-center">
+        <Checkbox
+          id="trailer-connected-correctly"
+          checked={trailerConnectedCorrectly === true}
+          onCheckedChange={(checked) => {
+            if (checked === true) {
+              handleSelectTrailerConnected(true)
+            } else {
+              setTrailerConnectedCorrectly(null)
+            }
+          }}
+          className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+        />
+        <Label htmlFor="trailer-connected-correctly" className="font-medium">
           Is the {trailerTypeDisplay || "trailer"} connected correctly?
-        </div>
-        <Button type="button" variant="outline" className="bg-transparent h-8 px-3" onClick={openHowToVideo}>
-          See here
-        </Button>
-      </div>
-
-      <div className="flex items-center gap-3 justify-center flex-wrap">
-        <Button
-          type="button"
-          variant={trailerConnectedCorrectly === true ? "default" : "outline"}
-          className={trailerConnectedCorrectly === true ? "" : "bg-transparent"}
-          onClick={() => handleSelectTrailerConnected(true)}
-        >
-          Yes
-        </Button>
-        <Button
-          type="button"
-          variant={trailerConnectedCorrectly === false ? "default" : "outline"}
-          className={trailerConnectedCorrectly === false ? "" : "bg-transparent"}
-          onClick={() => handleSelectTrailerConnected(false)}
-        >
-          No
-        </Button>
+        </Label>
       </div>
 
       {trailerType === "Container" && (
-        <div className="mt-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="font-medium">Is the container properly secured to the chassis?</div>
-            <Button type="button" variant="outline" className="bg-transparent h-8 px-3" onClick={openHowToVideo}>
-              See here
-            </Button>
-          </div>
-          <div className="flex items-center gap-3 justify-center flex-wrap mt-2">
-            <Button
-              type="button"
-              variant={containerSecuredToChassis === true ? "default" : "outline"}
-              className={containerSecuredToChassis === true ? "" : "bg-transparent"}
-              onClick={() => handleSelectContainerSecured(true)}
-            >
-              Yes
-            </Button>
-            <Button
-              type="button"
-              variant={containerSecuredToChassis === false ? "default" : "outline"}
-              className={containerSecuredToChassis === false ? "" : "bg-transparent"}
-              onClick={() => handleSelectContainerSecured(false)}
-            >
-              No
-            </Button>
-          </div>
+        <div className="flex items-center">
+          <Checkbox
+            id="container-secured-to-chassis"
+            checked={containerSecuredToChassis === true}
+            onCheckedChange={(checked) => {
+              if (checked === true) {
+                handleSelectContainerSecured(true)
+              } else {
+                setContainerSecuredToChassis(null)
+              }
+            }}
+            className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+          />
+          <Label htmlFor="container-secured-to-chassis" className="font-medium">
+            Is the container properly secured to the chassis?
+          </Label>
         </div>
       )}
     </div>
 
     {/* 3) Remaining checklist items */}
+
     <div className="mt-4 space-y-2">
       {beforeLoadingItems.slice(1).map((item, index) => (
         <div key={index} className="flex items-center">
@@ -3240,7 +3219,7 @@ unCodesDone,
 
 {/* After Loading and everything below it (only after the steps above are completed) */}
 {canProceedToAfterLoading && (
-  <div className="mb-6 max-w-2xl mx-auto">
+  <div className="mb-6 flex flex-col items-center">
     <h2 className="text-xl font-semibold mb-4 text-center">After Loading:</h2>
     <div className="space-y-2">
       {afterLoadingItems.map((item, index) => (
@@ -3259,7 +3238,7 @@ unCodesDone,
 )}
 
       {canProceedToAfterLoading && showResult && (
-        <div className="mb-6 p-4 border rounded max-w-2xl mx-auto">
+        <div className="mb-6 p-4 border rounded w-full max-w-3xl">
           {allChecked ? (
             <p className="text-green-600 font-medium">All items are checked.</p>
           ) : (
@@ -3276,7 +3255,9 @@ unCodesDone,
       )}
 
       {canProceedToAfterLoading && (
-        <div className="mb-6">
+      <>
+
+      <div className="mb-6">
         {/* Remarks + Photos (above signatures) */}
         <div className="mt-4">
           <Label htmlFor="remarks" className="block mb-2">
@@ -3356,11 +3337,6 @@ unCodesDone,
           </div>
         </div>
 
-        </div>
-      )}
-
-      {/* Signatures (always visible) */}
-      <div className="mb-6">
         {/* Container to hold both signature boxes side by side */}
         <div className="flex gap-6 mt-6">
           <div className="flex-1">
@@ -3426,6 +3402,8 @@ unCodesDone,
         )}
       </div>
 
+      </>
+      )}
 
     </div>
     </>
