@@ -120,6 +120,23 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [afterLoadingChecked, setAfterLoadingChecked] = useState<Record<string, boolean>>({})
   const [expiryDates, setExpiryDates] = useState<Record<string, { month: string; year: string }>>({})
   const [expiredItems, setExpiredItems] = useState<Record<string, boolean>>({})
+type TrailerType = "Box" | "Tilt" | "Container"
+
+// Trailer-type gating (Before Loading / After Loading flow)
+const [trailerType, setTrailerType] = useState<TrailerType | null>(null)
+const [trailerConnectedCorrectly, setTrailerConnectedCorrectly] = useState<boolean | null>(null)
+const [containerSecuredToChassis, setContainerSecuredToChassis] = useState<boolean | null>(null)
+const [isTrailerEmpty, setIsTrailerEmpty] = useState<boolean | null>(null)
+
+// Cargo details (only when trailer is NOT empty)
+const [isLoadedWithAdrGoods, setIsLoadedWithAdrGoods] = useState<boolean | null>(null)
+const [unCodes, setUnCodes] = useState<string[]>([])
+const [unCodesDone, setUnCodesDone] = useState(false)
+
+// Popups for the "not empty" flow
+const [cargoPopupOpen, setCargoPopupOpen] = useState(false)
+const [unPopupOpen, setUnPopupOpen] = useState(false)
+const [unInputs, setUnInputs] = useState<string[]>([""])
 
   // Refs for date inputs
   const dateInputRefs = useRef<
@@ -315,10 +332,21 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   }, [variant])
 
   const beforeLoadingItems = useMemo(() => {
-    if (variant !== "under1000") return beforeLoadingItemsBase
-    const removed = new Set(["ADR plate front+back"])
-    return beforeLoadingItemsBase.filter((item) => !removed.has(item))
-  }, [variant])
+  if (!trailerType) return []
+  const items: string[] = []
+
+  // Requested list (conditional by trailer type)
+  items.push("ADR plate front+back")
+  if (trailerType === "Tilt") items.push("Tension belts 2500DAN, 15 for FTL (Tilt trailer)")
+  items.push("No visual damages on the truck/trailer")
+  if (trailerType === "Box") items.push("Loading security stanchions (box trailer)")
+  items.push("Tires with at least 3 mm of profile")
+  items.push("Slip mats, 40 for FTL")
+  items.push("Loading floor dry, clean, tidy, odorless")
+
+  return items
+}, [trailerType])
+
 
   const afterLoadingItems = useMemo(() => {
     if (variant !== "under1000") return afterLoadingItemsBase
@@ -752,6 +780,125 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       [itemName]: checked,
     }))
   }
+const trailerTypeDisplay = useMemo(() => {
+  if (!trailerType) return ""
+  return trailerType === "Container" ? "container" : `${trailerType.toLowerCase()} trailer`
+}, [trailerType])
+
+const canProceedToAfterLoading = useMemo(() => {
+  if (!trailerType) return false
+  if (trailerConnectedCorrectly === null) return false
+  if (trailerType === "Container" && containerSecuredToChassis === null) return false
+  if (isTrailerEmpty === null) return false
+
+  // Empty trailer/container -> OK
+  if (isTrailerEmpty === true) return true
+
+  // Not empty -> must complete the cargo flow
+  if (isLoadedWithAdrGoods === null) return false
+  if (isLoadedWithAdrGoods === false) return true
+  return unCodesDone
+}, [
+  trailerType,
+  trailerConnectedCorrectly,
+  containerSecuredToChassis,
+  isTrailerEmpty,
+  isLoadedWithAdrGoods,
+  unCodesDone,
+])
+
+const resetTrailerFlow = useCallback((t: TrailerType) => {
+  setTrailerType(t)
+  setBeforeLoadingChecked({})
+  setTrailerConnectedCorrectly(null)
+  setContainerSecuredToChassis(null)
+  setIsTrailerEmpty(null)
+  setIsLoadedWithAdrGoods(null)
+  setUnCodes([])
+  setUnCodesDone(false)
+  setUnInputs([""])
+  setCargoPopupOpen(false)
+  setUnPopupOpen(false)
+}, [])
+
+const handleSelectTrailerConnected = useCallback((val: boolean) => {
+  setTrailerConnectedCorrectly(val)
+}, [])
+
+const handleSelectContainerSecured = useCallback((val: boolean) => {
+  setContainerSecuredToChassis(val)
+}, [])
+
+const handleSelectTrailerEmpty = useCallback((val: boolean) => {
+  setIsTrailerEmpty(val)
+
+  // Reset cargo info whenever empty changes
+  setIsLoadedWithAdrGoods(null)
+  setUnCodes([])
+  setUnCodesDone(false)
+  setUnInputs([""])
+
+  if (val === false) {
+    setCargoPopupOpen(true)
+  } else {
+    setCargoPopupOpen(false)
+    setUnPopupOpen(false)
+  }
+}, [])
+
+const openHowToVideo = useCallback(() => {
+  if (typeof window === "undefined") return
+  window.open("https://www.youtube.com/watch?v=ghvgre1Vhac", "_blank", "noopener,noreferrer")
+}, [])
+
+const handleCargoPopupChoice = useCallback((adr: boolean) => {
+  if (!isTrailerEmpty) {
+    // isTrailerEmpty is false here by flow
+    if (!adr) {
+      setIsLoadedWithAdrGoods(false)
+      setCargoPopupOpen(false)
+      return
+    }
+
+    // ADR goods -> open UN input popup
+    setCargoPopupOpen(false)
+    setUnInputs(unCodes.length > 0 ? [...unCodes, ""] : [""])
+    setUnPopupOpen(true)
+  }
+}, [isTrailerEmpty, unCodes])
+
+const updateUnInput = useCallback((idx: number, raw: string) => {
+  const cleaned = (raw || "").replace(/\D/g, "").slice(0, 4)
+  setUnInputs((prev) => {
+    const next = [...prev]
+    next[idx] = cleaned
+
+    // Auto-add next line when user starts typing in the last row
+    if (idx === next.length - 1 && cleaned.length > 0) {
+      next.push("")
+    }
+
+    // Remove extra empty trailing rows (keep exactly 1 empty row at the end)
+    while (next.length > 1 && next[next.length - 1] === "" && next[next.length - 2] === "") {
+      next.splice(next.length - 1, 1)
+    }
+
+    return next
+  })
+}, [])
+
+const finalizeUnCodes = useCallback(() => {
+  const cleaned = unInputs
+    .map((v) => String(v || "").replace(/\D/g, "").slice(0, 4))
+    .filter((v) => v.length > 0)
+
+  setUnCodes(cleaned)
+  setIsLoadedWithAdrGoods(true)
+  setUnCodesDone(true)
+  setUnPopupOpen(false)
+}, [unInputs])
+
+
 
   // Check for missing items
   const checkMissingItems = () => {
@@ -1464,8 +1611,49 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       }
     }
 
-    drawLoadingBox("Before Loading", beforeX, loadY, beforeLoadingItems, beforeLoadingChecked)
-    drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingChecked)
+    
+// Build the dynamic Before Loading content for PDF (includes the new questions + cargo info)
+const beforePdfItems: string[] = Array.isArray(beforeLoadingItems) && beforeLoadingItems.length > 0 ? [...beforeLoadingItems] : [...beforeLoadingItemsBase]
+const beforePdfChecked: Record<string, boolean> = { ...(beforeLoadingChecked || {}) }
+
+if (trailerType) {
+  const typeForText = trailerType === "Container" ? "container" : `${trailerType.toLowerCase()} trailer`
+
+  // Insert connection question right after ADR plate
+  const connectedLine = `Is the ${typeForText} connected correctly? - ${trailerConnectedCorrectly === true ? "Yes" : "No"}`
+  beforePdfItems.splice(1, 0, connectedLine)
+  beforePdfChecked[connectedLine] = trailerConnectedCorrectly === true
+
+  if (trailerType === "Container") {
+    const securedLine = `Is the container properly secured to the chassis? - ${containerSecuredToChassis === true ? "Yes" : "No"}`
+    beforePdfItems.splice(2, 0, securedLine)
+    beforePdfChecked[securedLine] = containerSecuredToChassis === true
+  }
+
+  // Replace the old compatibility line with the new empty question (append to keep spacing stable)
+  const emptyLine = `Is the ${typeForText} empty? - ${isTrailerEmpty === true ? "Yes" : "No"}`
+  beforePdfItems.push(emptyLine)
+  beforePdfChecked[emptyLine] = isTrailerEmpty === true
+
+  // Cargo info when NOT empty
+  if (isTrailerEmpty === false) {
+    if (isLoadedWithAdrGoods === false) {
+      const info = `THE ${trailerType} is loaded with non-ADR goods.`
+      beforePdfItems.push(info)
+      beforePdfChecked[info] = true
+    } else if (isLoadedWithAdrGoods === true) {
+      const codeList = (unCodes || []).filter(Boolean).map((c) => `UN ${c}`).join(", ")
+      const info = codeList.length > 0
+        ? `ADR goods in the ${trailerType}: ${codeList}`
+        : `ADR goods in the ${trailerType}: UN codes not specified`
+      beforePdfItems.push(info)
+      beforePdfChecked[info] = true
+    }
+  }
+}
+
+drawLoadingBox("Before Loading", beforeX, loadY, beforePdfItems, beforePdfChecked)
+drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingChecked)
 
     // ---- Signatures box ----
     const sigY = loadY + boxH + gap
@@ -1551,6 +1739,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         checkedItems,
         beforeLoadingChecked,
         afterLoadingChecked,
+
+trailerType,
+trailerConnectedCorrectly,
+containerSecuredToChassis,
+isTrailerEmpty,
+isLoadedWithAdrGoods,
+unCodes,
+unCodesDone,
         expiryDates,
         signatureData,
         inspectorSignatureData,
@@ -1903,6 +2099,33 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         if (parsedData.selectedInspector) setSelectedInspector(parsedData.selectedInspector)
         if (typeof parsedData.remarks === "string") setRemarks(parsedData.remarks)
 
+
+// Restore trailer-type flow
+if (parsedData.trailerType === "Box" || parsedData.trailerType === "Tilt" || parsedData.trailerType === "Container") {
+  setTrailerType(parsedData.trailerType)
+}
+if (typeof parsedData.trailerConnectedCorrectly === "boolean") setTrailerConnectedCorrectly(parsedData.trailerConnectedCorrectly)
+if (typeof parsedData.containerSecuredToChassis === "boolean") setContainerSecuredToChassis(parsedData.containerSecuredToChassis)
+if (typeof parsedData.isTrailerEmpty === "boolean") setIsTrailerEmpty(parsedData.isTrailerEmpty)
+if (typeof parsedData.isLoadedWithAdrGoods === "boolean") setIsLoadedWithAdrGoods(parsedData.isLoadedWithAdrGoods)
+if (Array.isArray(parsedData.unCodes)) {
+  const cleaned = parsedData.unCodes
+    .map((v: any) => String(v || "").replace(/\D/g, "").slice(0, 4))
+    .filter((v: string) => v.length > 0)
+  setUnCodes(cleaned)
+}
+if (typeof parsedData.unCodesDone === "boolean") setUnCodesDone(parsedData.unCodesDone)
+setUnInputs(
+  Array.isArray(parsedData.unCodes) && parsedData.unCodes.length > 0
+    ? [
+        ...parsedData.unCodes
+          .map((v: any) => String(v || "").replace(/\D/g, "").slice(0, 4))
+          .filter((v: string) => v.length > 0),
+        "",
+      ]
+    : [""]
+)
+
         // Restore signatures
         if (typeof parsedData.signatureData === "string") setSignatureData(parsedData.signatureData)
         if (typeof parsedData.inspectorSignatureData === "string") setInspectorSignatureData(parsedData.inspectorSignatureData)
@@ -2059,6 +2282,15 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
       remarks,
       signatureData,
       inspectorSignatureData,
+
+// Trailer-type flow
+trailerType,
+trailerConnectedCorrectly,
+containerSecuredToChassis,
+isTrailerEmpty,
+isLoadedWithAdrGoods,
+unCodes,
+unCodesDone,
       // Persist photo metadata for both uploaded and pending photos.
       // Actual image data is kept in IndexedDB (idbPutPhoto) so drafts survive refresh/offline.
       photos: photos.map((p) => ({
@@ -2090,6 +2322,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
     remarks,
     signatureData,
     inspectorSignatureData,
+
+trailerType,
+trailerConnectedCorrectly,
+containerSecuredToChassis,
+isTrailerEmpty,
+isLoadedWithAdrGoods,
+unCodes,
+unCodesDone,
     photos,
   ])
 
@@ -2180,6 +2420,14 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         checkedItems,
         beforeLoadingChecked,
         afterLoadingChecked,
+
+trailerType,
+trailerConnectedCorrectly,
+containerSecuredToChassis,
+isTrailerEmpty,
+isLoadedWithAdrGoods,
+unCodes,
+unCodesDone,
         expiryDates,
         signatureData,
         inspectorSignatureData,
@@ -2303,7 +2551,85 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         </div>
       )}
 
-      <div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
+      
+{cargoPopupOpen && (
+  <div className="fixed inset-0 z-[10000] flex items-center justify-center">
+    <div
+      className="absolute inset-0 bg-black/40"
+      onClick={() => {
+        setCargoPopupOpen(false)
+      }}
+    />
+    <div className="relative w-[min(92vw,420px)] rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
+      <div className="font-semibold mb-2">Question</div>
+      <div className="text-sm text-gray-600 mb-5">Is the trailer loaded with ADR goods?</div>
+      <div className="flex items-center justify-end gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          className="bg-transparent"
+          onClick={() => {
+            setIsLoadedWithAdrGoods(false)
+            setCargoPopupOpen(false)
+          }}
+        >
+          No
+        </Button>
+        <Button
+          type="button"
+          onClick={() => {
+            // ADR goods -> ask for UN codes
+            setCargoPopupOpen(false)
+            setUnInputs(unCodes.length > 0 ? [...unCodes, ""] : [""])
+            setUnPopupOpen(true)
+          }}
+        >
+          Yes
+        </Button>
+      </div>
+    </div>
+  </div>
+)}
+
+{unPopupOpen && (
+  <div className="fixed inset-0 z-[10000] flex items-center justify-center">
+    <div
+      className="absolute inset-0 bg-black/40"
+      onClick={() => {
+        setUnPopupOpen(false)
+      }}
+    />
+    <div className="relative w-[min(92vw,520px)] rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
+      <div className="font-semibold mb-2">Enter UN numbers</div>
+      <div className="text-sm text-gray-600 mb-4">Add as many UN codes as needed, then press Done.</div>
+
+      <div className="space-y-3 mb-5">
+        {unInputs.map((val, idx) => (
+          <div key={idx} className="flex items-center gap-3">
+            <div className="w-10 text-sm font-semibold text-gray-700">UN</div>
+            <Input
+              value={val}
+              onChange={(e) => updateUnInput(idx, e.target.value)}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={4}
+              placeholder="1234"
+              className="h-10"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-end">
+        <Button type="button" onClick={finalizeUnCodes}>
+          Done
+        </Button>
+      </div>
+    </div>
+  </div>
+)}
+
+<div className="container mx-auto py-4 max-w-4xl relative z-30 bg-white bg-opacity-90 rounded-lg shadow-lg my-8">
       <div className="relative text-center mb-6">
         <h1 id="adr-title" className="text-2xl font-bold">
           ADR Checklist{variant === "under1000" ? " (Under 1000 pts)" : ""}
@@ -2760,41 +3086,179 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
         ))}
       </div>
 
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-4">Before Loading:</h2>
-        <div className="space-y-2">
-          {beforeLoadingItems.map((item, index) => (
-            <div key={index} className="flex items-center">
-              <Checkbox
-                id={`before-loading-${index}`}
-                checked={beforeLoadingChecked[item] || false}
-                onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked === true)}
-                className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
-              />
-              <Label htmlFor={`before-loading-${index}`}>{item}</Label>
-            </div>
-          ))}
+      
+{/* Trailer type selection (gates Before/After Loading) */}
+<div className="mb-8 text-center">
+  <h2 className="text-xl font-semibold mb-4">What is the type of the trailer?</h2>
+  <div className="flex items-center justify-center gap-3 flex-wrap">
+    <Button
+      type="button"
+      variant={trailerType === "Box" ? "default" : "outline"}
+      className={trailerType === "Box" ? "" : "bg-transparent"}
+      onClick={() => resetTrailerFlow("Box")}
+    >
+      Box
+    </Button>
+    <Button
+      type="button"
+      variant={trailerType === "Tilt" ? "default" : "outline"}
+      className={trailerType === "Tilt" ? "" : "bg-transparent"}
+      onClick={() => resetTrailerFlow("Tilt")}
+    >
+      Tilt
+    </Button>
+    <Button
+      type="button"
+      variant={trailerType === "Container" ? "default" : "outline"}
+      className={trailerType === "Container" ? "" : "bg-transparent"}
+      onClick={() => resetTrailerFlow("Container")}
+    >
+      Container
+    </Button>
+  </div>
+</div>
+
+{/* Before Loading (only after trailer type is selected) */}
+{trailerType && (
+  <div className="mb-6">
+    <h2 className="text-xl font-semibold mb-4">Before Loading:</h2>
+
+    {/* 1) ADR plate front+back */}
+    <div className="space-y-2">
+      {beforeLoadingItems.slice(0, 1).map((item, index) => (
+        <div key={index} className="flex items-center">
+          <Checkbox
+            id={`before-loading-${index}`}
+            checked={beforeLoadingChecked[item] || false}
+            onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked === true)}
+            className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+          />
+          <Label htmlFor={`before-loading-${index}`}>{item}</Label>
         </div>
+      ))}
+    </div>
+
+    {/* 2) Connection question + video link */}
+    <div className="mt-4 flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-medium">
+          Is the {trailerTypeDisplay || "trailer"} connected correctly?
+        </div>
+        <Button type="button" variant="outline" className="bg-transparent h-8 px-3" onClick={openHowToVideo}>
+          Vezi aici
+        </Button>
       </div>
 
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-4">After Loading:</h2>
-        <div className="space-y-2">
-          {afterLoadingItems.map((item, index) => (
-            <div key={index} className="flex items-center">
-              <Checkbox
-                id={`after-loading-${index}`}
-                checked={afterLoadingChecked[item] || false}
-                onCheckedChange={(checked) => handleAfterLoadingCheck(item, checked === true)}
-                className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
-              />
-              <Label htmlFor={`after-loading-${index}`}>{item}</Label>
-            </div>
-          ))}
-        </div>
+      <div className="flex items-center gap-3 justify-center flex-wrap">
+        <Button
+          type="button"
+          variant={trailerConnectedCorrectly === true ? "default" : "outline"}
+          className={trailerConnectedCorrectly === true ? "" : "bg-transparent"}
+          onClick={() => handleSelectTrailerConnected(true)}
+        >
+          Yes
+        </Button>
+        <Button
+          type="button"
+          variant={trailerConnectedCorrectly === false ? "default" : "outline"}
+          className={trailerConnectedCorrectly === false ? "" : "bg-transparent"}
+          onClick={() => handleSelectTrailerConnected(false)}
+        >
+          No
+        </Button>
       </div>
 
-      {showResult && (
+      {trailerType === "Container" && (
+        <div className="mt-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="font-medium">Is the container properly secured to the chassis?</div>
+            <Button type="button" variant="outline" className="bg-transparent h-8 px-3" onClick={openHowToVideo}>
+              Vezi aici
+            </Button>
+          </div>
+          <div className="flex items-center gap-3 justify-center flex-wrap mt-2">
+            <Button
+              type="button"
+              variant={containerSecuredToChassis === true ? "default" : "outline"}
+              className={containerSecuredToChassis === true ? "" : "bg-transparent"}
+              onClick={() => handleSelectContainerSecured(true)}
+            >
+              Yes
+            </Button>
+            <Button
+              type="button"
+              variant={containerSecuredToChassis === false ? "default" : "outline"}
+              className={containerSecuredToChassis === false ? "" : "bg-transparent"}
+              onClick={() => handleSelectContainerSecured(false)}
+            >
+              No
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+
+    {/* 3) Remaining checklist items */}
+    <div className="mt-4 space-y-2">
+      {beforeLoadingItems.slice(1).map((item, index) => (
+        <div key={index} className="flex items-center">
+          <Checkbox
+            id={`before-loading-rest-${index}`}
+            checked={beforeLoadingChecked[item] || false}
+            onCheckedChange={(checked) => handleBeforeLoadingCheck(item, checked === true)}
+            className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+          />
+          <Label htmlFor={`before-loading-rest-${index}`}>{item}</Label>
+        </div>
+      ))}
+    </div>
+
+    {/* 4) Empty question (replaces Product compatibility and segregation) */}
+    <div className="mt-6 text-center">
+      <div className="font-semibold mb-3">Is the {trailerTypeDisplay || "trailer"} empty?</div>
+      <div className="flex items-center justify-center gap-3 flex-wrap">
+        <Button
+          type="button"
+          variant={isTrailerEmpty === true ? "default" : "outline"}
+          className={isTrailerEmpty === true ? "" : "bg-transparent"}
+          onClick={() => handleSelectTrailerEmpty(true)}
+        >
+          Yes
+        </Button>
+        <Button
+          type="button"
+          variant={isTrailerEmpty === false ? "default" : "outline"}
+          className={isTrailerEmpty === false ? "" : "bg-transparent"}
+          onClick={() => handleSelectTrailerEmpty(false)}
+        >
+          No
+        </Button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* After Loading and everything below it (only after the steps above are completed) */}
+{canProceedToAfterLoading && (
+  <div className="mb-6">
+    <h2 className="text-xl font-semibold mb-4">After Loading:</h2>
+    <div className="space-y-2">
+      {afterLoadingItems.map((item, index) => (
+        <div key={index} className="flex items-center">
+          <Checkbox
+            id={`after-loading-${index}`}
+            checked={afterLoadingChecked[item] || false}
+            onCheckedChange={(checked) => handleAfterLoadingCheck(item, checked === true)}
+            className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
+          />
+          <Label htmlFor={`after-loading-${index}`}>{item}</Label>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
+      {canProceedToAfterLoading && showResult && (
         <div className="mb-6 p-4 border rounded">
           {allChecked ? (
             <p className="text-green-600 font-medium">All items are checked.</p>
@@ -2810,6 +3274,9 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           )}
         </div>
       )}
+
+      {canProceedToAfterLoading && (
+      <>
 
       <div className="mb-6">
         {/* Remarks + Photos (above signatures) */}
@@ -2955,6 +3422,10 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
           </div>
         )}
       </div>
+
+      </>
+      )}
+
     </div>
     </>
   )
