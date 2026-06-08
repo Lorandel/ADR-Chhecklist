@@ -3120,8 +3120,8 @@ unCodesDone,
 
 {/* Before Loading (only after trailer type is selected) */}
 {trailerType && (
-  <div className="mb-6">
-    <h2 className="text-xl font-semibold mb-4">Before Loading:</h2>
+  <div className="mb-6 max-w-2xl mx-auto">
+    <h2 className="text-xl font-semibold mb-4 text-center">Before Loading:</h2>
 
     {/* 1) ADR plate front+back */}
     <div className="space-y-2">
@@ -3145,7 +3145,7 @@ unCodesDone,
           Is the {trailerTypeDisplay || "trailer"} connected correctly?
         </div>
         <Button type="button" variant="outline" className="bg-transparent h-8 px-3" onClick={openHowToVideo}>
-          Vezi aici
+          See here
         </Button>
       </div>
 
@@ -3173,7 +3173,7 @@ unCodesDone,
           <div className="flex items-center justify-between gap-3">
             <div className="font-medium">Is the container properly secured to the chassis?</div>
             <Button type="button" variant="outline" className="bg-transparent h-8 px-3" onClick={openHowToVideo}>
-              Vezi aici
+              See here
             </Button>
           </div>
           <div className="flex items-center gap-3 justify-center flex-wrap mt-2">
@@ -3240,8 +3240,8 @@ unCodesDone,
 
 {/* After Loading and everything below it (only after the steps above are completed) */}
 {canProceedToAfterLoading && (
-  <div className="mb-6">
-    <h2 className="text-xl font-semibold mb-4">After Loading:</h2>
+  <div className="mb-6 max-w-2xl mx-auto">
+    <h2 className="text-xl font-semibold mb-4 text-center">After Loading:</h2>
     <div className="space-y-2">
       {afterLoadingItems.map((item, index) => (
         <div key={index} className="flex items-center">
@@ -3259,7 +3259,7 @@ unCodesDone,
 )}
 
       {canProceedToAfterLoading && showResult && (
-        <div className="mb-6 p-4 border rounded">
+        <div className="mb-6 p-4 border rounded max-w-2xl mx-auto">
           {allChecked ? (
             <p className="text-green-600 font-medium">All items are checked.</p>
           ) : (
@@ -3276,9 +3276,7 @@ unCodesDone,
       )}
 
       {canProceedToAfterLoading && (
-      <>
-
-      <div className="mb-6">
+        <div className="mb-6">
         {/* Remarks + Photos (above signatures) */}
         <div className="mt-4">
           <Label htmlFor="remarks" className="block mb-2">
@@ -3358,6 +3356,11 @@ unCodesDone,
           </div>
         </div>
 
+        </div>
+      )}
+
+      {/* Signatures (always visible) */}
+      <div className="mb-6">
         {/* Container to hold both signature boxes side by side */}
         <div className="flex gap-6 mt-6">
           <div className="flex-1">
@@ -3423,8 +3426,6 @@ unCodesDone,
         )}
       </div>
 
-      </>
-      )}
 
     </div>
     </>
