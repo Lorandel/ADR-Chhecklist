@@ -1620,12 +1620,12 @@ if (trailerType) {
   const typeForText = trailerType === "Container" ? "container" : `${trailerType.toLowerCase()} trailer`
 
   // Insert connection question right after ADR plate
-  const connectedLine = `Is the ${typeForText} connected correctly?`
+  const connectedLine = `The ${typeForText} is connected correctly`
   beforePdfItems.splice(1, 0, connectedLine)
   beforePdfChecked[connectedLine] = trailerConnectedCorrectly === true
 
   if (trailerType === "Container") {
-    const securedLine = `Is the container properly secured to the chassis?`
+    const securedLine = `The container is properly secured to the chassis`
     beforePdfItems.splice(2, 0, securedLine)
     beforePdfChecked[securedLine] = containerSecuredToChassis === true
   }
@@ -3119,8 +3119,7 @@ unCodesDone,
 </div>
 
 {/* Before Loading (only after trailer type is selected) */}
-{trailerType && (
-  <div className="mb-6">
+<div className="mb-6">
     <h2 className="text-xl font-semibold mb-4">Before Loading:</h2>
 
     {/* 1) ADR plate front+back */}
@@ -3148,7 +3147,7 @@ unCodesDone,
           className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
         />
         <Label htmlFor="trailer-connected-correctly">
-          Is the {trailerTypeDisplay || "trailer"} connected correctly?
+          The {trailerTypeDisplay || "trailer"} is connected correctly
         </Label>
       </div>
 
@@ -3160,7 +3159,7 @@ unCodesDone,
             onCheckedChange={(checked) => handleSelectContainerSecured(checked === true)}
             className="h-6 w-6 mr-2 border-2 border-gray-400 text-[16px] data-[state=checked]:bg-[#006400] data-[state=checked]:text-white rounded-md"
           />
-          <Label htmlFor="container-secured-to-chassis">Is the container properly secured to the chassis?</Label>
+          <Label htmlFor="container-secured-to-chassis">The container is properly secured to the chassis</Label>
         </div>
       )}
     </div>
@@ -3203,11 +3202,9 @@ unCodesDone,
       </div>
     </div>
   </div>
-)}
 
 {/* After Loading and everything below it (only after the steps above are completed) */}
-{canProceedToAfterLoading && (
-  <div className="mb-6">
+<div className="mb-6">
     <h2 className="text-xl font-semibold mb-4">After Loading:</h2>
     <div className="space-y-2">
       {afterLoadingItems.map((item, index) => (
@@ -3223,9 +3220,8 @@ unCodesDone,
       ))}
     </div>
   </div>
-)}
 
-      {canProceedToAfterLoading && showResult && (
+      {showResult && (
         <div className="mb-6 p-4 border rounded">
           {allChecked ? (
             <p className="text-green-600 font-medium">All items are checked.</p>
@@ -3241,10 +3237,6 @@ unCodesDone,
           )}
         </div>
       )}
-
-      {canProceedToAfterLoading && (
-      <>
-
       <div className="mb-6">
         {/* Remarks + Photos (above signatures) */}
         <div className="mt-4">
@@ -3389,10 +3381,6 @@ unCodesDone,
           </div>
         )}
       </div>
-
-      </>
-      )}
-
     </div>
     </>
   )
