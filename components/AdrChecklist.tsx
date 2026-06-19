@@ -153,6 +153,7 @@ const [orderType, setOrderType] = useState<LoadedOrderType | null>(null)
 const [orderInputs, setOrderInputs] = useState<string[]>([""])
 const [orderError, setOrderError] = useState("")
 const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+const lastDeletedEmptyDraftRef = useRef<string>("")
 
   // Refs for date inputs
   const dateInputRefs = useRef<
@@ -1151,10 +1152,26 @@ const saveSharedDraft = useCallback((data: any) => {
 
   if (!hasContent) {
     window.localStorage.removeItem(sharedStorageKey)
+    window.localStorage.removeItem(storageKey)
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+
+    // Also remove the shared Supabase draft. Otherwise an empty checklist can remain
+    // visible in the main menu after the user clears all fields and goes back.
+    if (session?.access_token && lastDeletedEmptyDraftRef.current !== activeDraftId) {
+      lastDeletedEmptyDraftRef.current = activeDraftId
+      fetch("/api/adr-draft", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ variant, draftId: activeDraftId }),
+      }).catch(() => {})
+    }
     return
   }
 
+  lastDeletedEmptyDraftRef.current = ""
   window.localStorage.setItem(sharedStorageKey, JSON.stringify(payload))
 
   if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
@@ -1178,6 +1195,7 @@ const saveSharedDraft = useCallback((data: any) => {
   loggedInspectorName,
   selectedInspector,
   sharedStorageKey,
+  storageKey,
   session?.access_token,
 ])
 
@@ -2730,60 +2748,12 @@ if (Array.isArray(parsedData.orderInputs)) {
     img.src = inspectorSignatureData
   }, [isMounted, inspectorSignatureData])
 
-  // Add an effect to save data to localStorage whenever relevant state changes
-  useEffect(() => {
-    if (!isMounted || typeof window === "undefined") return
-
-    const dataToSave = {
-      driverName,
-      truckPlate,
-      trailerPlate,
-      drivingLicenseDate,
-      ...(includeAdrCertificate ? { adrCertificateDate } : {}),
-      truckDocDate,
-      trailerDocDate,
-      checkedItems,
-      beforeLoadingChecked,
-      afterLoadingChecked,
-      expiryDates,
-      selectedInspector,
-      remarks,
-      signatureData,
-      inspectorSignatureData,
-
-// Trailer-type flow
-trailerType,
-trailerConnectedCorrectly,
-containerSecuredToChassis,
-isTrailerEmpty,
-isLoadedWithAdrGoods,
-unCodes,
-unCodesDone,
-completionReason,
-orderType,
-orderInputs,
-      // Persist photo metadata for both uploaded and pending photos.
-      // Actual image data is kept in IndexedDB (idbPutPhoto) so drafts survive refresh/offline.
-      photos: photos.map((p) => ({
-        id: p.id,
-        name: p.name,
-        url: p.url || null,
-        contentType: p.contentType || null,
-        status: p.status,
-        error: p.error || null,
-      })),
-    }
-
-    localStorage.setItem(storageKey, JSON.stringify(dataToSave))
-    saveSharedDraft(dataToSave)
-  }, [
-    storageKey,
-    isMounted,
+  const buildCurrentDraftData = useCallback(() => ({
     driverName,
     truckPlate,
     trailerPlate,
     drivingLicenseDate,
-    adrCertificateDate,
+    ...(includeAdrCertificate ? { adrCertificateDate } : {}),
     truckDocDate,
     trailerDocDate,
     checkedItems,
@@ -2795,18 +2765,97 @@ orderInputs,
     signatureData,
     inspectorSignatureData,
 
-trailerType,
-trailerConnectedCorrectly,
-containerSecuredToChassis,
-isTrailerEmpty,
-isLoadedWithAdrGoods,
-unCodes,
-unCodesDone,
-completionReason,
-orderType,
-orderInputs,
-saveSharedDraft,
+    // Trailer-type flow
+    trailerType,
+    trailerConnectedCorrectly,
+    containerSecuredToChassis,
+    isTrailerEmpty,
+    isLoadedWithAdrGoods,
+    unCodes,
+    unCodesDone,
+    completionReason,
+    orderType,
+    orderInputs,
+    // Persist photo metadata for both uploaded and pending photos.
+    // Actual image data is kept in IndexedDB (idbPutPhoto) so drafts survive refresh/offline.
+    photos: photos.map((p) => ({
+      id: p.id,
+      name: p.name,
+      url: p.url || null,
+      contentType: p.contentType || null,
+      status: p.status,
+      error: p.error || null,
+    })),
+  }), [
+    driverName,
+    truckPlate,
+    trailerPlate,
+    drivingLicenseDate,
+    includeAdrCertificate,
+    adrCertificateDate,
+    truckDocDate,
+    trailerDocDate,
+    checkedItems,
+    beforeLoadingChecked,
+    afterLoadingChecked,
+    expiryDates,
+    selectedInspector,
+    remarks,
+    signatureData,
+    inspectorSignatureData,
+    trailerType,
+    trailerConnectedCorrectly,
+    containerSecuredToChassis,
+    isTrailerEmpty,
+    isLoadedWithAdrGoods,
+    unCodes,
+    unCodesDone,
+    completionReason,
+    orderType,
+    orderInputs,
     photos,
+  ])
+
+  const deleteEmptyDraftNow = useCallback(async () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(storageKey)
+      window.localStorage.removeItem(sharedStorageKey)
+    }
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    if (!session?.access_token) return
+
+    try {
+      await fetch("/api/adr-draft", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ variant, draftId: activeDraftId }),
+      })
+    } catch {
+      // ignore cleanup errors; the menu also filters empty drafts locally
+    }
+  }, [storageKey, sharedStorageKey, session?.access_token, variant, activeDraftId])
+
+  // Add an effect to save data to localStorage whenever relevant state changes
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+
+    const dataToSave = buildCurrentDraftData()
+
+    if (hasAnyDraftContent(dataToSave)) {
+      localStorage.setItem(storageKey, JSON.stringify(dataToSave))
+    } else {
+      localStorage.removeItem(storageKey)
+    }
+    saveSharedDraft(dataToSave)
+  }, [
+    storageKey,
+    hasAnyDraftContent,
+    isMounted,
+    buildCurrentDraftData,
+    saveSharedDraft,
   ])
 
   // Add this right after the return statement
@@ -3267,7 +3316,18 @@ unCodesDone,
 
       {onBack && (
         <div className="flex items-center justify-between mb-4">
-          <Button type="button" variant="outline" className="bg-transparent" onClick={onBack}>
+          <Button
+            type="button"
+            variant="outline"
+            className="bg-transparent"
+            onClick={async () => {
+              const currentData = buildCurrentDraftData()
+              if (!hasAnyDraftContent(currentData)) {
+                await deleteEmptyDraftNow()
+              }
+              onBack()
+            }}
+          >
             ← Back
           </Button>
 

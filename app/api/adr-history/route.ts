@@ -35,41 +35,43 @@ async function purgeExpiredHistoryRows(supabase: ReturnType<typeof getSupabaseAd
   const paths = Array.from(new Set(expired.data.map((row: any) => normalizePath(row.file_path)).filter(Boolean)))
 
   if (paths.length > 0) {
-    await supabase.storage.from(bucket).remove(paths).catch(() => null)
+    try {
+      await supabase.storage.from(bucket).remove(paths)
+    } catch {
+      // Storage cleanup is best-effort. Do not block the History list if a file is already missing.
+    }
   }
 
   if (ids.length > 0) {
-    await supabase.from("adr_checklists").delete().in("id", ids).catch(() => null)
+    try {
+      await supabase.from("adr_checklists").delete().in("id", ids)
+    } catch {
+      // DB cleanup is best-effort from the History modal.
+    }
   }
-}
-
-async function signedUrlForFirstAvailable(
-  supabase: ReturnType<typeof getSupabaseAdmin>,
-  paths: string[],
-): Promise<string | null> {
-  for (const p of paths) {
-    if (!p) continue
-    const signed = await supabase.storage.from(bucket).createSignedUrl(p, 60 * 60)
-    if (!signed.error && signed.data?.signedUrl) return signed.data.signedUrl
-  }
-  return null
 }
 
 export async function GET(req: NextRequest) {
   try {
     const supabase = getSupabaseAdmin()
     const { searchParams } = new URL(req.url)
-    const type = searchParams.get("type") // full|reduced|... 
+    const type = searchParams.get("type") // full|reduced|...
     const cutoffIso = expiryCutoffEndOfTodayIso()
 
     // Best-effort cleanup when History is opened, so ZIPs disappear on the calendar day they expire.
-    await purgeExpiredHistoryRows(supabase)
+    // It must never make History fail to load.
+    try {
+      await purgeExpiredHistoryRows(supabase)
+    } catch {
+      // ignore cleanup errors
+    }
 
     let query = supabase
       .from("adr_checklists")
       .select("id, checklist_type, checklist_hash, file_path, created_at, expires_at, email_sent, meta")
       .gt("expires_at", cutoffIso)
       .order("created_at", { ascending: false })
+      .limit(100)
 
     if (type === "full" || type === "reduced") {
       query = query.eq("checklist_type", type)
@@ -80,28 +82,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, message: res.error.message }, { status: 500 })
     }
 
-    const rows = Array.isArray(res.data) ? res.data : []
-
-    // Create signed URLs (valid 1 hour) for each item.
-    const items = await Promise.all(
-      rows.map(async (row) => {
-        const t = row.checklist_type as "reduced" | "full"
-        const hash = row.checklist_hash as string
-        const stored = normalizePath(row.file_path as any)
-
-        const candidates = Array.from(
-          new Set([
-            stored,
-            `${t}/${hash}.zip`,
-            // legacy reduced path
-            t === "reduced" ? `under1000/${hash}.zip` : "",
-          ]),
-        ).filter(Boolean)
-
-        const downloadUrl = await signedUrlForFirstAvailable(supabase, candidates)
-        return { ...row, file_path: stored || row.file_path, downloadUrl }
-      }),
-    )
+    // The modal downloads/previews through same-origin API routes by id, so generating signed URLs
+    // for every history item here is unnecessary and uses extra Supabase resources/RAM.
+    const items = (Array.isArray(res.data) ? res.data : []).map((row: any) => ({
+      ...row,
+      file_path: normalizePath(row.file_path) || row.file_path,
+    }))
 
     return NextResponse.json(
       { success: true, items },
@@ -112,9 +98,7 @@ export async function GET(req: NextRequest) {
       },
     )
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, message: "Failed to load history", error: error?.message },
-      { status: 500 },
-    )
+    const message = error?.message || "Failed to load history"
+    return NextResponse.json({ success: false, message, error: message }, { status: 500 })
   }
 }

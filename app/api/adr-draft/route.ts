@@ -2,6 +2,8 @@ import { type NextRequest, NextResponse } from "next/server"
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin"
 
 export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+export const revalidate = 0
 
 type ChecklistVariant = "full" | "under1000"
 
@@ -99,24 +101,32 @@ export async function GET(req: NextRequest) {
     if (requestedDraftId || requestedVariant) {
       const id = requestedDraftId || requestedVariant || ""
       const draft = await readDraft(auth, id)
-      return NextResponse.json({ success: true, draft: draft?.data && hasDraftContent(draft.data) ? draft : null })
+      return NextResponse.json(
+        { success: true, draft: draft?.data && hasDraftContent(draft.data) ? draft : null },
+        { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" } },
+      )
     }
 
     const list = await auth.supabase.storage.from("adr-checklists").list("drafts", {
-      limit: 100,
+      // Keep this list small enough that the main menu does not download too many draft JSON files.
+      limit: 50,
       sortBy: { column: "updated_at", order: "desc" },
     })
 
     if (list.error) return NextResponse.json({ success: false, message: list.error.message }, { status: 500 })
 
     const files = (list.data || []).filter((file) => file.name.endsWith(".json"))
+    const emptyDraftPaths: string[] = []
     const drafts = (
       await Promise.all(
         files.map(async (file) => {
           try {
             const id = file.name.replace(/\.json$/i, "")
             const draft = await readDraft(auth, id)
-            if (!draft?.data || !hasDraftContent(draft.data)) return null
+            if (!draft?.data || !hasDraftContent(draft.data)) {
+              emptyDraftPaths.push(draftPath(id))
+              return null
+            }
             return { ...draft, draftId: draft.draftId || id }
           } catch {
             return null
@@ -125,8 +135,17 @@ export async function GET(req: NextRequest) {
       )
     ).filter(Boolean)
 
+    if (emptyDraftPaths.length > 0) {
+      // Best-effort cleanup: empty drafts should not remain visible in the main menu
+      // and should not keep being downloaded on every menu load.
+      await auth.supabase.storage.from("adr-checklists").remove(emptyDraftPaths).catch(() => null)
+    }
+
     drafts.sort((a: any, b: any) => String(b?.updatedAt || "").localeCompare(String(a?.updatedAt || "")))
-    return NextResponse.json({ success: true, drafts })
+    return NextResponse.json(
+      { success: true, drafts },
+      { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" } },
+    )
   } catch (e: any) {
     return NextResponse.json({ success: false, message: e?.message || "Failed to load draft" }, { status: 500 })
   }
