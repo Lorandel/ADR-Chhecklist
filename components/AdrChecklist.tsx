@@ -54,6 +54,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, session } = useAuth()
   const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
   const storageKey = `adrChecklistData_${variant}_${userId}`
+  const sharedStorageKey = `adrSharedChecklistData_${variant}`
 
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
@@ -74,7 +75,7 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [selectedInspector, setSelectedInspector] = useState("")
 
   // Confirmation popup for Send/Download actions
-  const [confirmAction, setConfirmAction] = useState<"download" | "send" | null>(null)
+  const [confirmAction, setConfirmAction] = useState<FinalizeAction | null>(null)
 
   // Inspector is always the logged-in inspector (no manual selector).
   useEffect(() => {
@@ -121,6 +122,8 @@ export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
   const [expiryDates, setExpiryDates] = useState<Record<string, { month: string; year: string }>>({})
   const [expiredItems, setExpiredItems] = useState<Record<string, boolean>>({})
 type TrailerType = "Box" | "Tilt" | "Container"
+type FinalizeAction = "download" | "send"
+type LoadedOrderType = "coglas" | "internal"
 
 // Trailer-type gating (Before Loading / After Loading flow)
 const [trailerType, setTrailerType] = useState<TrailerType | null>(null)
@@ -137,6 +140,17 @@ const [unCodesDone, setUnCodesDone] = useState(false)
 const [cargoPopupOpen, setCargoPopupOpen] = useState(false)
 const [unPopupOpen, setUnPopupOpen] = useState(false)
 const [unInputs, setUnInputs] = useState<string[]>([""])
+
+// Finalization validation + loaded order details
+const [showIncompletePopup, setShowIncompletePopup] = useState(false)
+const [incompleteIssues, setIncompleteIssues] = useState<string[]>([])
+const [incompleteReasonDraft, setIncompleteReasonDraft] = useState("")
+const [incompleteReasonError, setIncompleteReasonError] = useState("")
+const [completionReason, setCompletionReason] = useState("")
+const [orderType, setOrderType] = useState<LoadedOrderType | null>(null)
+const [orderInputs, setOrderInputs] = useState<string[]>([""])
+const [orderError, setOrderError] = useState("")
+const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Refs for date inputs
   const dateInputRefs = useRef<
@@ -898,6 +912,234 @@ const finalizeUnCodes = useCallback(() => {
   setUnPopupOpen(false)
 }, [unInputs])
 
+const cleanItemNameForDisplay = useCallback((name: string) => name.replace(/\s*\([^)]*\)/g, "").trim(), [])
+
+const hasMonthYear = useCallback((d?: { month: string; year: string }) => {
+  return !!d && /^\d{2}$/.test(d.month || "") && /^\d{4}$/.test(d.year || "")
+}, [])
+
+const getLoadedOrderNumbers = useCallback(() => {
+  if (!orderType) return []
+  return orderInputs
+    .map((value) => String(value || "").replace(/\D/g, "").slice(0, orderType === "coglas" ? 10 : 20))
+    .filter(Boolean)
+}, [orderInputs, orderType])
+
+const loadedOrdersSubtitle = useMemo(() => {
+  const nums = getLoadedOrderNumbers()
+  if (!orderType || nums.length === 0) return ""
+  if (orderType === "coglas") return `Loaded Coglas order(s): ${nums.map((n) => `CO${n}`).join(", ")}`
+  return `Loaded internal order(s): ${nums.join(", ")}`
+}, [getLoadedOrderNumbers, orderType])
+
+const finalRemarks = useMemo(() => {
+  const parts = [remarks.trim()]
+  if (completionReason.trim()) parts.push(`Reason for incomplete checklist: ${completionReason.trim()}`)
+  return parts.filter(Boolean).join("\n")
+}, [remarks, completionReason])
+
+const getCompletionIssues = useCallback(() => {
+  const issues: string[] = []
+
+  if (!driverName.trim()) issues.push("Driver's name")
+  if (!truckPlate.trim()) issues.push("Truck license plate")
+  if (!checkDate.trim()) issues.push("Inspection date")
+  // Trailer plate and trailer technical inspection expiry are intentionally optional.
+
+  if (!hasMonthYear(drivingLicenseDate)) issues.push("Driving Licence expiry date")
+  if (includeAdrCertificate && !hasMonthYear(adrCertificateDate)) issues.push("ADR Certificate expiry date")
+  if (!hasMonthYear(truckDocDate)) issues.push("Truck technical inspection expiry date")
+
+  equipmentItems.forEach((item) => {
+    const displayName = cleanItemNameForDisplay(item.name)
+    if (!checkedItems[item.name]) issues.push(`Equipment: ${displayName}`)
+    if (item.hasDate && item.name !== "Mask + filter (ADR class 6.1/2.3)" && !hasMonthYear(expiryDates[item.name])) {
+      issues.push(`Expiry date: ${displayName}`)
+    }
+  })
+
+  if (!trailerType) issues.push("Trailer type")
+
+  beforeLoadingItems.forEach((item) => {
+    if (!beforeLoadingChecked[item]) issues.push(`Before Loading: ${item}`)
+  })
+
+  if (trailerType && trailerConnectedCorrectly !== true) {
+    issues.push(`Before Loading: The ${trailerTypeDisplay || "trailer"} is connected correctly`)
+  }
+  if (trailerType === "Container" && containerSecuredToChassis !== true) {
+    issues.push("Before Loading: The container is properly secured to the chassis")
+  }
+
+  if (trailerType && isTrailerEmpty === null) {
+    issues.push(`Before Loading: Is the ${trailerTypeDisplay || "trailer"} empty?`)
+  }
+  if (isTrailerEmpty === false && isLoadedWithAdrGoods === null) {
+    issues.push("Before Loading: ADR goods status")
+  }
+  if (isTrailerEmpty === false && isLoadedWithAdrGoods === true && unCodes.filter(Boolean).length === 0) {
+    issues.push("Before Loading: UN numbers")
+  }
+
+  const mandatoryAfterLoading = [
+    "Goods correctly secured: This load has been secured in accordance STVO 22",
+    "Doors closed/Twist locks tight",
+    "ADR plate front + back are open",
+  ]
+
+  afterLoadingItems.forEach((item) => {
+    if (!afterLoadingChecked[item]) issues.push(`After Loading: ${item}`)
+  })
+
+  mandatoryAfterLoading.forEach((item) => {
+    if (afterLoadingItems.includes(item) && !afterLoadingChecked[item] && !issues.includes(`After Loading: ${item}`)) {
+      issues.push(`After Loading: ${item}`)
+    }
+  })
+
+  if (!signatureData) issues.push("Driver signature")
+  if (!inspectorSignatureData) issues.push("Inspector signature")
+  if (photos.length < 2) issues.push("Minimum 2 photos")
+
+  return issues
+}, [
+  driverName,
+  truckPlate,
+  checkDate,
+  drivingLicenseDate,
+  includeAdrCertificate,
+  adrCertificateDate,
+  truckDocDate,
+  equipmentItems,
+  cleanItemNameForDisplay,
+  checkedItems,
+  hasMonthYear,
+  expiryDates,
+  trailerType,
+  beforeLoadingItems,
+  beforeLoadingChecked,
+  trailerConnectedCorrectly,
+  trailerTypeDisplay,
+  containerSecuredToChassis,
+  isTrailerEmpty,
+  isLoadedWithAdrGoods,
+  unCodes,
+  afterLoadingItems,
+  afterLoadingChecked,
+  signatureData,
+  inspectorSignatureData,
+  photos.length,
+])
+
+const beginFinalizeAction = useCallback((action: FinalizeAction) => {
+  const issues = getCompletionIssues()
+  setOrderError("")
+
+  if (issues.length > 0) {
+    setIncompleteIssues(issues)
+    setIncompleteReasonDraft(completionReason)
+    setIncompleteReasonError("")
+    setConfirmAction(action)
+    setShowIncompletePopup(true)
+    return
+  }
+
+  setCompletionReason("")
+  setIncompleteIssues([])
+  setConfirmAction(action)
+}, [completionReason, getCompletionIssues])
+
+const updateOrderInput = useCallback((idx: number, raw: string) => {
+  const cleaned = String(raw || "").replace(/\D/g, "").slice(0, orderType === "coglas" ? 10 : 20)
+  setOrderInputs((prev) => {
+    const next = [...prev]
+    next[idx] = cleaned
+    return next
+  })
+  setOrderError("")
+}, [orderType])
+
+const addOrderInput = useCallback(() => {
+  setOrderInputs((prev) => [...prev, ""])
+}, [])
+
+const hasAnyDraftContent = useCallback((data: any) => {
+  const hasChecked = (obj: Record<string, boolean> | undefined) => !!obj && Object.values(obj).some(Boolean)
+  const hasDate = (d: { month?: string; year?: string } | undefined) => !!d && (!!d.month || !!d.year)
+  const hasExpiry = (obj: Record<string, { month?: string; year?: string }> | undefined) =>
+    !!obj && Object.values(obj).some((d) => !!d?.month || !!d?.year)
+
+  return !!(
+    data.driverName ||
+    data.truckPlate ||
+    data.trailerPlate ||
+    hasDate(data.drivingLicenseDate) ||
+    hasDate(data.adrCertificateDate) ||
+    hasDate(data.truckDocDate) ||
+    hasDate(data.trailerDocDate) ||
+    hasChecked(data.checkedItems) ||
+    hasChecked(data.beforeLoadingChecked) ||
+    hasChecked(data.afterLoadingChecked) ||
+    hasExpiry(data.expiryDates) ||
+    data.remarks ||
+    data.signatureData ||
+    data.inspectorSignatureData ||
+    data.trailerType ||
+    data.trailerConnectedCorrectly != null ||
+    data.containerSecuredToChassis != null ||
+    data.isTrailerEmpty != null ||
+    data.isLoadedWithAdrGoods != null ||
+    (Array.isArray(data.unCodes) && data.unCodes.length > 0) ||
+    (Array.isArray(data.photos) && data.photos.length > 0)
+  )
+}, [])
+
+const saveSharedDraft = useCallback((data: any) => {
+  if (!isMounted || typeof window === "undefined") return
+
+  const hasContent = hasAnyDraftContent(data)
+  const payload = {
+    variant,
+    updatedAt: new Date().toISOString(),
+    ownerUserId: userId,
+    inspectorName: loggedInspectorName || selectedInspector || "Unknown inspector",
+    data: {
+      ...data,
+      selectedInspector: loggedInspectorName || selectedInspector || data.selectedInspector || "",
+    },
+  }
+
+  if (!hasContent) {
+    window.localStorage.removeItem(sharedStorageKey)
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    return
+  }
+
+  window.localStorage.setItem(sharedStorageKey, JSON.stringify(payload))
+
+  if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+  draftSaveTimerRef.current = setTimeout(() => {
+    if (!session?.access_token) return
+    fetch("/api/adr-draft", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ variant, data: payload.data }),
+    }).catch(() => {})
+  }, 900)
+}, [
+  hasAnyDraftContent,
+  isMounted,
+  variant,
+  userId,
+  loggedInspectorName,
+  selectedInspector,
+  sharedStorageKey,
+  session?.access_token,
+])
+
 
 
   // Check for missing items
@@ -1319,10 +1561,18 @@ const finalizeUnCodes = useCallback(() => {
     pdf.setTextColor(0, 0, 0)
     pdf.text("ADR Checklist", pageW / 2, 12, { align: "center" })
 
+    let headerSubY = 16.5
+    if (loadedOrdersSubtitle) {
+      pdf.setFontSize(8.5)
+      pdf.setFont("helvetica", "normal")
+      pdf.text(loadedOrdersSubtitle, pageW / 2, headerSubY, { align: "center" })
+      headerSubY += 4
+    }
+
     if (variant === "under1000") {
       pdf.setFontSize(9)
       pdf.setFont("helvetica", "normal")
-      pdf.text("UNDER 1000 PTS • Reduced checklist", pageW / 2, 16.5, { align: "center" })
+      pdf.text("UNDER 1000 PTS • Reduced checklist", pageW / 2, headerSubY, { align: "center" })
     }
 
     pdf.setTextColor(17, 24, 39)
@@ -1397,7 +1647,7 @@ const finalizeUnCodes = useCallback(() => {
     pdf.setTextColor(100, 116, 139)
     pdf.text("Remarks:", remarksBoxX + 2, remarksBoxY + 6.7)
 
-    const trimmedRemarks = (remarks || "").trim()
+    const trimmedRemarks = (finalRemarks || "").trim()
     if (trimmedRemarks) {
       pdf.setTextColor(17, 24, 39)
       pdf.setFont("helvetica", "normal")
@@ -1767,7 +2017,11 @@ drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingCh
         trailerPlate,
         inspectionDate: checkDate,
         selectedInspector,
-        remarks,
+        remarks: finalRemarks,
+        completionReason,
+        loadedOrdersSubtitle,
+        loadedOrderType: orderType,
+        loadedOrderNumbers: getLoadedOrderNumbers(),
         drivingLicenseDate,
         adrCertificateDate,
         truckDocDate,
@@ -1872,6 +2126,8 @@ unCodesDone,
               inspectionDate: checkDate,
               inspectorName: loggedInspectorName || selectedInspector,
               inspectorEmail: loggedInspectorEmail || undefined,
+              loadedOrders: loadedOrdersSubtitle || undefined,
+              completionReason: completionReason || undefined,
               photos: photos.map((p) => ({
                 id: p.id,
                 name: p.name,
@@ -2017,16 +2273,50 @@ unCodesDone,
       return []
     })
 
+    // Reset trailer flow, validation and order details
+    setTrailerType(null)
+    setTrailerConnectedCorrectly(null)
+    setContainerSecuredToChassis(null)
+    setIsTrailerEmpty(null)
+    setIsLoadedWithAdrGoods(null)
+    setUnCodes([])
+    setUnCodesDone(false)
+    setUnInputs([""])
+    setCargoPopupOpen(false)
+    setUnPopupOpen(false)
+    setShowIncompletePopup(false)
+    setIncompleteIssues([])
+    setIncompleteReasonDraft("")
+    setIncompleteReasonError("")
+    setCompletionReason("")
+    setOrderType(null)
+    setOrderInputs([""])
+    setOrderError("")
+    setConfirmAction(null)
+
     // Reset other states
     setShowResult(false)
     setMissingItems([])
     setAllChecked(false)
 
-    // Clear localStorage
+    // Clear localStorage and shared in-progress draft
     if (typeof window !== "undefined") {
       localStorage.removeItem(storageKey)
+      localStorage.removeItem(sharedStorageKey)
     }
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey])
+
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    if (session?.access_token) {
+      fetch("/api/adr-draft", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ variant }),
+      }).catch(() => {})
+    }
+  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey, sharedStorageKey, session?.access_token, variant])
 
   // Initialize component
   useEffect(() => {
@@ -2161,6 +2451,14 @@ setUnInputs(
       ]
     : [""]
 )
+if (typeof parsedData.completionReason === "string") setCompletionReason(parsedData.completionReason)
+if (parsedData.orderType === "coglas" || parsedData.orderType === "internal") setOrderType(parsedData.orderType)
+if (Array.isArray(parsedData.orderInputs)) {
+  const cleanedOrders = parsedData.orderInputs
+    .map((v: any) => String(v || "").replace(/\D/g, ""))
+    .filter((v: string) => v.length > 0)
+  setOrderInputs(cleanedOrders.length > 0 ? cleanedOrders : [""])
+}
 
         // Restore signatures
         if (typeof parsedData.signatureData === "string") setSignatureData(parsedData.signatureData)
@@ -2327,6 +2625,9 @@ isTrailerEmpty,
 isLoadedWithAdrGoods,
 unCodes,
 unCodesDone,
+completionReason,
+orderType,
+orderInputs,
       // Persist photo metadata for both uploaded and pending photos.
       // Actual image data is kept in IndexedDB (idbPutPhoto) so drafts survive refresh/offline.
       photos: photos.map((p) => ({
@@ -2340,6 +2641,7 @@ unCodesDone,
     }
 
     localStorage.setItem(storageKey, JSON.stringify(dataToSave))
+    saveSharedDraft(dataToSave)
   }, [
     storageKey,
     isMounted,
@@ -2366,6 +2668,10 @@ isTrailerEmpty,
 isLoadedWithAdrGoods,
 unCodes,
 unCodesDone,
+completionReason,
+orderType,
+orderInputs,
+saveSharedDraft,
     photos,
   ])
 
@@ -2448,7 +2754,11 @@ unCodesDone,
         trailerPlate,
         inspectionDate: checkDate,
         selectedInspector,
-        remarks,
+        remarks: finalRemarks,
+        completionReason,
+        loadedOrdersSubtitle,
+        loadedOrderType: orderType,
+        loadedOrderNumbers: getLoadedOrderNumbers(),
         drivingLicenseDate,
         adrCertificateDate,
         truckDocDate,
@@ -2516,7 +2826,8 @@ unCodesDone,
           truckPlate,
           trailerPlate,
           inspectionDate: checkDate,
-          remarks,
+          remarks: finalRemarks,
+          loadedOrders: loadedOrdersSubtitle || undefined,
           photos: uploadedPhotos,
           variant,
           checklistHash,
@@ -2527,6 +2838,8 @@ unCodesDone,
             trailerPlate,
             inspectionDate: checkDate,
             inspectorName: loggedInspectorName || selectedInspector,
+            loadedOrders: loadedOrdersSubtitle || undefined,
+            completionReason: completionReason || undefined,
           },
         }),
       })
@@ -2553,14 +2866,146 @@ unCodesDone,
 
   return (
     <>
-      {confirmAction && (
+      {showIncompletePopup && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => {
+              setShowIncompletePopup(false)
+              setConfirmAction(null)
+            }}
+          />
+          <div className="relative w-[min(94vw,560px)] max-h-[88vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
+            <button
+              type="button"
+              aria-label="Close"
+              className="absolute right-4 top-3 text-2xl leading-none text-gray-500 hover:text-gray-900"
+              onClick={() => {
+                setShowIncompletePopup(false)
+                setConfirmAction(null)
+              }}
+            >
+              ×
+            </button>
+            <div className="font-semibold mb-2">ADR Checklist is not fully completed</div>
+            <div className="text-sm text-gray-600 mb-3">
+              The following details are missing. You can close this window and complete them, or enter a reason to continue.
+            </div>
+            <div className="mb-4 max-h-48 overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-sm">
+              <ul className="list-disc pl-5 space-y-1">
+                {incompleteIssues.map((issue, idx) => (
+                  <li key={idx}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+            <Label htmlFor="incomplete-reason" className="block mb-2">
+              Reason for incomplete checklist:
+            </Label>
+            <textarea
+              id="incomplete-reason"
+              value={incompleteReasonDraft}
+              onChange={(e) => {
+                setIncompleteReasonDraft(e.target.value)
+                setIncompleteReasonError("")
+              }}
+              placeholder="Write the reason here..."
+              className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
+            />
+            {incompleteReasonError && <div className="mt-2 text-sm text-red-600">{incompleteReasonError}</div>}
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="bg-transparent"
+                onClick={() => {
+                  setShowIncompletePopup(false)
+                  setConfirmAction(null)
+                }}
+              >
+                Close and complete
+              </Button>
+              <Button
+                type="button"
+                onClick={() => {
+                  const reason = incompleteReasonDraft.trim()
+                  if (!reason) {
+                    setIncompleteReasonError("Please write a reason before continuing.")
+                    return
+                  }
+                  setCompletionReason(reason)
+                  setShowIncompletePopup(false)
+                }}
+              >
+                Continue with reason
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmAction && !showIncompletePopup && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40" onClick={() => setConfirmAction(null)} />
-          <div className="relative w-[min(92vw,420px)] rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
+          <div className="relative w-[min(94vw,520px)] max-h-[88vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
             <div className="font-semibold mb-2">Confirm</div>
             <div className="text-sm text-gray-600 mb-5">
               {confirmAction === "download" ? "Download ZIP?" : "Send ZIP via Email?"}
             </div>
+
+            <div className="mb-4 rounded-md border border-gray-200 p-3">
+              <div className="font-medium mb-3">Which order type was loaded?</div>
+              <div className="flex flex-wrap gap-3 mb-4">
+                <Button
+                  type="button"
+                  variant={orderType === "coglas" ? "default" : "outline"}
+                  className={orderType === "coglas" ? "" : "bg-transparent"}
+                  onClick={() => {
+                    setOrderType("coglas")
+                    setOrderInputs([""])
+                    setOrderError("")
+                  }}
+                >
+                  Coglas order(s)
+                </Button>
+                <Button
+                  type="button"
+                  variant={orderType === "internal" ? "default" : "outline"}
+                  className={orderType === "internal" ? "" : "bg-transparent"}
+                  onClick={() => {
+                    setOrderType("internal")
+                    setOrderInputs([""])
+                    setOrderError("")
+                  }}
+                >
+                  Internal order(s)
+                </Button>
+              </div>
+
+              {orderType && (
+                <div className="space-y-3">
+                  {orderInputs.map((value, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      {orderType === "coglas" && <div className="w-10 text-sm font-semibold text-gray-700">CO</div>}
+                      <Input
+                        value={value}
+                        onChange={(e) => updateOrderInput(idx, e.target.value)}
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={orderType === "coglas" ? 10 : 20}
+                        placeholder={orderType === "coglas" ? "10 digits" : "Order number"}
+                        className="h-10"
+                      />
+                    </div>
+                  ))}
+                  <Button type="button" variant="outline" className="bg-transparent" onClick={addOrderInput}>
+                    + Add another order
+                  </Button>
+                </div>
+              )}
+
+              {orderError && <div className="mt-3 text-sm text-red-600">{orderError}</div>}
+            </div>
+
             <div className="flex items-center justify-end gap-3">
               <Button
                 type="button"
@@ -2573,6 +3018,21 @@ unCodesDone,
               <Button
                 type="button"
                 onClick={async () => {
+                  if (!orderType) {
+                    setOrderError("Please select Coglas order(s) or Internal order(s).")
+                    return
+                  }
+
+                  const nums = getLoadedOrderNumbers()
+                  if (nums.length === 0) {
+                    setOrderError("Please enter at least one order number.")
+                    return
+                  }
+                  if (orderType === "coglas" && nums.some((n) => n.length !== 10)) {
+                    setOrderError("Each Coglas order must have exactly 10 digits.")
+                    return
+                  }
+
                   const action = confirmAction
                   setConfirmAction(null)
                   if (action === "send") await handleSendEmail()
@@ -3389,12 +3849,12 @@ unCodesDone,
         <Button onClick={checkMissingItems} className="w-full">
           Check Missing Items
         </Button>
-        <Button type="button" onClick={() => setConfirmAction("download")} disabled={isPdfGenerating} className="w-full">
+        <Button type="button" onClick={() => beginFinalizeAction("download")} disabled={isPdfGenerating} className="w-full">
           {isPdfGenerating ? "Generating ZIP..." : "Download ZIP"}
         </Button>
         <Button
           type="button"
-          onClick={() => setConfirmAction("send")}
+          onClick={() => beginFinalizeAction("send")}
           disabled={
             isSendingEmail ||
             isPdfGenerating ||

@@ -9,6 +9,14 @@ import { AuthProvider, useAuth } from "@/components/auth/AuthProvider"
 import LoginGate from "@/components/auth/LoginGate"
 import { Button } from "@/components/ui/button"
 
+type InProgressDraft = {
+  variant: ChecklistVariant
+  inspectorName: string
+  updatedAt: string
+  ownerUserId?: string
+  data?: Record<string, unknown>
+}
+
 function HomePageInner() {
   const { role, signOut, inspectorName, session } = useAuth()
 
@@ -22,6 +30,7 @@ function HomePageInner() {
   const [variant, setVariant] = useState<ChecklistVariant | null | "loading">("loading")
   const [historyOpen, setHistoryOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
+  const [inProgressDrafts, setInProgressDrafts] = useState<InProgressDraft[]>([])
 
   // Load persisted active variant on mount (per user).
   useEffect(() => {
@@ -39,6 +48,96 @@ function HomePageInner() {
     if (variant) window.localStorage.setItem(activeVariantKey, variant)
     else window.localStorage.removeItem(activeVariantKey)
   }, [session, activeVariantKey, variant])
+
+  const readLocalDrafts = () => {
+    if (typeof window === "undefined") return [] as InProgressDraft[]
+    const variants: ChecklistVariant[] = ["under1000", "full"]
+    return variants
+      .map((v) => {
+        try {
+          const raw = window.localStorage.getItem(`adrSharedChecklistData_${v}`)
+          if (!raw) return null
+          const parsed = JSON.parse(raw)
+          if (!parsed?.data) return null
+          return {
+            variant: v,
+            inspectorName: parsed.inspectorName || parsed.data?.selectedInspector || "Unknown inspector",
+            updatedAt: parsed.updatedAt || "",
+            ownerUserId: parsed.ownerUserId,
+            data: parsed.data,
+          } as InProgressDraft
+        } catch {
+          return null
+        }
+      })
+      .filter(Boolean) as InProgressDraft[]
+  }
+
+  const loadInProgressDrafts = async () => {
+    if (!session || typeof window === "undefined") return
+
+    let drafts = readLocalDrafts()
+
+    // Supabase-backed shared drafts allow another logged-in user/device to take over the checklist.
+    if (session.access_token) {
+      const remoteDrafts = await Promise.all(
+        (["under1000", "full"] as ChecklistVariant[]).map(async (v) => {
+          try {
+            const res = await fetch(`/api/adr-draft?variant=${v}`, {
+              headers: { Authorization: `Bearer ${session.access_token}` },
+              cache: "no-store",
+            })
+            const json = await res.json().catch(() => ({}))
+            if (!res.ok || !json?.draft?.data) return null
+            return {
+              variant: v,
+              inspectorName: json.draft.inspectorName || json.draft.data?.selectedInspector || "Unknown inspector",
+              updatedAt: json.draft.updatedAt || "",
+              ownerUserId: json.draft.ownerUserId,
+              data: json.draft.data,
+            } as InProgressDraft
+          } catch {
+            return null
+          }
+        }),
+      )
+
+      const byVariant = new Map<ChecklistVariant, InProgressDraft>()
+      drafts.forEach((d) => byVariant.set(d.variant, d))
+      remoteDrafts.filter(Boolean).forEach((d) => byVariant.set((d as InProgressDraft).variant, d as InProgressDraft))
+      drafts = Array.from(byVariant.values())
+    }
+
+    setInProgressDrafts(drafts)
+  }
+
+  useEffect(() => {
+    if (!session || variant !== null) return
+    void loadInProgressDrafts()
+
+    const onStorage = () => void loadInProgressDrafts()
+    window.addEventListener("storage", onStorage)
+    window.addEventListener("focus", onStorage)
+    return () => {
+      window.removeEventListener("storage", onStorage)
+      window.removeEventListener("focus", onStorage)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, variant])
+
+  const takeOverDraft = (draft: InProgressDraft) => {
+    if (typeof window === "undefined") return
+    if (!draft.data) return
+
+    const targetStorageKey = `adrChecklistData_${draft.variant}_${userId}`
+    const nextData = {
+      ...draft.data,
+      selectedInspector: inspectorName || (draft.data as any).selectedInspector || "",
+    }
+    window.localStorage.setItem(targetStorageKey, JSON.stringify(nextData))
+    window.localStorage.setItem(activeVariantKey, draft.variant)
+    setVariant(draft.variant)
+  }
 
   if (variant === "loading") {
     return <div className="min-h-[100vh] bg-white" />
@@ -100,6 +199,29 @@ function HomePageInner() {
         </div>
 
         <h1 className="text-3xl font-bold text-center mb-10">ADR Checklist</h1>
+
+        {inProgressDrafts.length > 0 && (
+          <div className="mb-8 space-y-3">
+            {inProgressDrafts.map((draft) => (
+              <div key={draft.variant} className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-amber-900">
+                      {draft.variant === "full" ? "Full Checklist" : "Reduced Checklist"} is in process
+                    </div>
+                    <div className="text-sm text-amber-800">
+                      By user: <span className="font-semibold">{draft.inspectorName}</span>
+                      {draft.updatedAt ? ` • ${new Date(draft.updatedAt).toLocaleString()}` : ""}
+                    </div>
+                  </div>
+                  <Button type="button" onClick={() => takeOverDraft(draft)}>
+                    Take over and continue
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <button
