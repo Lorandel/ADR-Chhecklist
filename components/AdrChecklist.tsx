@@ -46,15 +46,17 @@ type UploadedPhoto = {
 
 type ADRChecklistProps = {
   variant: ChecklistVariant
+  draftId?: string
   onBack?: () => void
 }
 
-export default function ADRChecklist({ variant, onBack }: ADRChecklistProps) {
+export default function ADRChecklist({ variant, draftId, onBack }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
   const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, session } = useAuth()
   const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
-  const storageKey = `adrChecklistData_${variant}_${userId}`
-  const sharedStorageKey = `adrSharedChecklistData_${variant}`
+  const activeDraftId = draftId || variant
+  const storageKey = `adrChecklistData_${variant}_${userId}_${activeDraftId}`
+  const sharedStorageKey = `adrSharedChecklistData_${activeDraftId}`
 
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
@@ -987,12 +989,11 @@ const getCompletionIssues = useCallback(() => {
     "ADR plate front + back are open",
   ]
 
-  afterLoadingItems.forEach((item) => {
-    if (!afterLoadingChecked[item]) issues.push(`After Loading: ${item}`)
-  })
-
+  // Only these After Loading items are required for the completion warning.
+  // "Seal on right door" and "Markings and Labels in Case of IMO" remain visible in the checklist,
+  // but they do not trigger the incomplete-checklist popup when unchecked.
   mandatoryAfterLoading.forEach((item) => {
-    if (afterLoadingItems.includes(item) && !afterLoadingChecked[item] && !issues.includes(`After Loading: ${item}`)) {
+    if (afterLoadingItems.includes(item) && !afterLoadingChecked[item]) {
       issues.push(`After Loading: ${item}`)
     }
   })
@@ -1031,11 +1032,48 @@ const getCompletionIssues = useCallback(() => {
   photos.length,
 ])
 
+const playErrorSound = useCallback(() => {
+  if (typeof window === "undefined") return
+
+  try {
+    const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined
+    if (!AudioContextClass) {
+      if (navigator.vibrate) navigator.vibrate(120)
+      return
+    }
+
+    const ctx = new AudioContextClass()
+    const oscillator = ctx.createOscillator()
+    const gain = ctx.createGain()
+
+    oscillator.type = "square"
+    oscillator.frequency.setValueAtTime(220, ctx.currentTime)
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.22)
+
+    oscillator.connect(gain)
+    gain.connect(ctx.destination)
+    oscillator.start(ctx.currentTime)
+    oscillator.stop(ctx.currentTime + 0.24)
+    oscillator.onended = () => {
+      void ctx.close().catch(() => {})
+    }
+  } catch {
+    try {
+      if (navigator.vibrate) navigator.vibrate(120)
+    } catch {
+      // ignore
+    }
+  }
+}, [])
+
 const beginFinalizeAction = useCallback((action: FinalizeAction) => {
   const issues = getCompletionIssues()
   setOrderError("")
 
   if (issues.length > 0) {
+    playErrorSound()
     setIncompleteIssues(issues)
     setIncompleteReasonDraft(completionReason)
     setIncompleteReasonError("")
@@ -1047,7 +1085,7 @@ const beginFinalizeAction = useCallback((action: FinalizeAction) => {
   setCompletionReason("")
   setIncompleteIssues([])
   setConfirmAction(action)
-}, [completionReason, getCompletionIssues])
+}, [completionReason, getCompletionIssues, playErrorSound])
 
 const updateOrderInput = useCallback((idx: number, raw: string) => {
   const cleaned = String(raw || "").replace(/\D/g, "").slice(0, orderType === "coglas" ? 10 : 20)
@@ -1099,10 +1137,12 @@ const saveSharedDraft = useCallback((data: any) => {
 
   const hasContent = hasAnyDraftContent(data)
   const payload = {
+    draftId: activeDraftId,
     variant,
     updatedAt: new Date().toISOString(),
     ownerUserId: userId,
     inspectorName: loggedInspectorName || selectedInspector || "Unknown inspector",
+    driverName: data?.driverName || "",
     data: {
       ...data,
       selectedInspector: loggedInspectorName || selectedInspector || data.selectedInspector || "",
@@ -1126,12 +1166,13 @@ const saveSharedDraft = useCallback((data: any) => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ variant, data: payload.data }),
+      body: JSON.stringify({ variant, draftId: activeDraftId, data: payload.data }),
     }).catch(() => {})
   }, 900)
 }, [
   hasAnyDraftContent,
   isMounted,
+  activeDraftId,
   variant,
   userId,
   loggedInspectorName,
@@ -2313,10 +2354,10 @@ unCodesDone,
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ variant }),
+        body: JSON.stringify({ variant, draftId: activeDraftId }),
       }).catch(() => {})
     }
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey, sharedStorageKey, session?.access_token, variant])
+  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey, sharedStorageKey, session?.access_token, variant, activeDraftId])
 
   // Initialize component
   useEffect(() => {
@@ -2889,7 +2930,7 @@ unCodesDone,
             </button>
             <div className="font-semibold mb-2">ADR Checklist is not fully completed</div>
             <div className="text-sm text-gray-600 mb-3">
-              The following details are missing. You can close this window and complete them, or enter a reason to continue.
+              The following details are missing. Enter the reason for completing this checklist with missing details, or close this window with X and complete what is missing.
             </div>
             <div className="mb-4 max-h-48 overflow-y-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-sm">
               <ul className="list-disc pl-5 space-y-1">
@@ -2912,31 +2953,20 @@ unCodesDone,
               className="w-full min-h-[90px] rounded-md border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-black/20"
             />
             {incompleteReasonError && <div className="mt-2 text-sm text-red-600">{incompleteReasonError}</div>}
-            <div className="mt-5 flex items-center justify-end gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                className="bg-transparent"
-                onClick={() => {
-                  setShowIncompletePopup(false)
-                  setConfirmAction(null)
-                }}
-              >
-                Close and complete
-              </Button>
+            <div className="mt-5 flex items-center justify-end">
               <Button
                 type="button"
                 onClick={() => {
                   const reason = incompleteReasonDraft.trim()
                   if (!reason) {
-                    setIncompleteReasonError("Please write a reason before continuing.")
+                    setIncompleteReasonError("Please write a reason before completing.")
                     return
                   }
                   setCompletionReason(reason)
                   setShowIncompletePopup(false)
                 }}
               >
-                Continue with reason
+                Complete
               </Button>
             </div>
           </div>

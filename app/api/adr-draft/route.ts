@@ -15,8 +15,15 @@ function asVariant(v: unknown): ChecklistVariant | null {
   return v === "full" || v === "under1000" ? v : null
 }
 
-function draftPath(variant: ChecklistVariant) {
-  return `drafts/${variant}.json`
+function cleanDraftId(id: unknown): string {
+  return String(id || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 80)
+}
+
+function draftPath(draftId: string) {
+  return `drafts/${draftId}.json`
 }
 
 async function assertAuthenticated(req: NextRequest) {
@@ -32,26 +39,57 @@ async function assertAuthenticated(req: NextRequest) {
   return { ok: true as const, supabase, user: data.user }
 }
 
+async function readDraft(auth: Awaited<ReturnType<typeof assertAuthenticated>> & { ok: true }, id: string) {
+  const download = await auth.supabase.storage.from("adr-checklists").download(draftPath(id))
+  if (download.error || !download.data) {
+    const msg = String(download.error?.message || "").toLowerCase()
+    if (msg.includes("not found") || msg.includes("404") || msg.includes("does not exist")) return null
+    throw new Error(download.error?.message || "Failed to load draft")
+  }
+
+  const text = await download.data.text()
+  return JSON.parse(text)
+}
+
 export async function GET(req: NextRequest) {
   const auth = await assertAuthenticated(req)
   if (!auth.ok) return NextResponse.json({ success: false, message: auth.message }, { status: auth.status })
 
-  const variant = asVariant(req.nextUrl.searchParams.get("variant"))
-  if (!variant) return NextResponse.json({ success: false, message: "Missing or invalid variant" }, { status: 400 })
+  const requestedDraftId = cleanDraftId(req.nextUrl.searchParams.get("draftId"))
+  const requestedVariant = asVariant(req.nextUrl.searchParams.get("variant"))
 
   try {
-    const download = await auth.supabase.storage.from("adr-checklists").download(draftPath(variant))
-    if (download.error || !download.data) {
-      const msg = String(download.error?.message || "").toLowerCase()
-      if (msg.includes("not found") || msg.includes("404") || msg.includes("does not exist")) {
-        return NextResponse.json({ success: true, draft: null })
-      }
-      return NextResponse.json({ success: false, message: download.error?.message || "Failed to load draft" }, { status: 500 })
+    if (requestedDraftId || requestedVariant) {
+      const id = requestedDraftId || requestedVariant || ""
+      const draft = await readDraft(auth, id)
+      return NextResponse.json({ success: true, draft })
     }
 
-    const text = await download.data.text()
-    const draft = JSON.parse(text)
-    return NextResponse.json({ success: true, draft })
+    const list = await auth.supabase.storage.from("adr-checklists").list("drafts", {
+      limit: 100,
+      sortBy: { column: "updated_at", order: "desc" },
+    })
+
+    if (list.error) return NextResponse.json({ success: false, message: list.error.message }, { status: 500 })
+
+    const files = (list.data || []).filter((file) => file.name.endsWith(".json"))
+    const drafts = (
+      await Promise.all(
+        files.map(async (file) => {
+          try {
+            const id = file.name.replace(/\.json$/i, "")
+            const draft = await readDraft(auth, id)
+            if (!draft?.data) return null
+            return { ...draft, draftId: draft.draftId || id }
+          } catch {
+            return null
+          }
+        }),
+      )
+    ).filter(Boolean)
+
+    drafts.sort((a: any, b: any) => String(b?.updatedAt || "").localeCompare(String(a?.updatedAt || "")))
+    return NextResponse.json({ success: true, drafts })
   } catch (e: any) {
     return NextResponse.json({ success: false, message: e?.message || "Failed to load draft" }, { status: 500 })
   }
@@ -66,17 +104,23 @@ export async function POST(req: NextRequest) {
     const variant = asVariant(body?.variant)
     if (!variant) return NextResponse.json({ success: false, message: "Missing or invalid variant" }, { status: 400 })
 
+    const draftId = cleanDraftId(body?.draftId) || variant
     const meta: any = auth.user.user_metadata || {}
     const payload = {
+      draftId,
       variant,
       updatedAt: new Date().toISOString(),
       ownerUserId: auth.user.id,
-      inspectorName: typeof meta.inspectorName === "string" && meta.inspectorName.trim() ? meta.inspectorName.trim() : auth.user.email || "Unknown inspector",
+      inspectorName:
+        typeof meta.inspectorName === "string" && meta.inspectorName.trim()
+          ? meta.inspectorName.trim()
+          : auth.user.email || "Unknown inspector",
+      driverName: typeof body?.data?.driverName === "string" ? body.data.driverName : "",
       data: body?.data || {},
     }
 
     const json = JSON.stringify(payload)
-    const up = await auth.supabase.storage.from("adr-checklists").upload(draftPath(variant), Buffer.from(json, "utf8"), {
+    const up = await auth.supabase.storage.from("adr-checklists").upload(draftPath(draftId), Buffer.from(json, "utf8"), {
       contentType: "application/json",
       upsert: true,
     })
@@ -94,10 +138,12 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const body = await req.json().catch(() => ({}))
+    const draftId = cleanDraftId(body?.draftId || req.nextUrl.searchParams.get("draftId"))
     const variant = asVariant(body?.variant || req.nextUrl.searchParams.get("variant"))
-    if (!variant) return NextResponse.json({ success: false, message: "Missing or invalid variant" }, { status: 400 })
+    const id = draftId || variant
+    if (!id) return NextResponse.json({ success: false, message: "Missing draftId or variant" }, { status: 400 })
 
-    const del = await auth.supabase.storage.from("adr-checklists").remove([draftPath(variant)])
+    const del = await auth.supabase.storage.from("adr-checklists").remove([draftPath(id)])
     if (del.error) return NextResponse.json({ success: false, message: del.error.message }, { status: 500 })
     return NextResponse.json({ success: true })
   } catch (e: any) {

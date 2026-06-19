@@ -10,8 +10,10 @@ import LoginGate from "@/components/auth/LoginGate"
 import { Button } from "@/components/ui/button"
 
 type InProgressDraft = {
+  draftId: string
   variant: ChecklistVariant
   inspectorName: string
+  driverName?: string
   updatedAt: string
   ownerUserId?: string
   data?: Record<string, unknown>
@@ -23,54 +25,114 @@ function HomePageInner() {
   // Keep the user on the same checklist page after refresh (per user).
   const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
   const activeVariantKey = `adrActiveVariant_${userId}`
+  const activeDraftKey = `adrActiveDraft_${userId}`
 
   // On some devices/browsers the first paint can happen before localStorage is read,
   // which briefly shows the menu before returning to the checklist. We avoid that by
   // rendering a white placeholder until we've checked the saved variant.
   const [variant, setVariant] = useState<ChecklistVariant | null | "loading">("loading")
+  const [activeDraftId, setActiveDraftId] = useState("")
   const [historyOpen, setHistoryOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
   const [inProgressDrafts, setInProgressDrafts] = useState<InProgressDraft[]>([])
+  const [showNewChecklistOptions, setShowNewChecklistOptions] = useState(false)
 
   // Load persisted active variant on mount (per user).
   useEffect(() => {
     if (!session) return
     if (typeof window === "undefined") return
     const saved = window.localStorage.getItem(activeVariantKey)
-    setVariant(saved === "full" || saved === "under1000" ? (saved as ChecklistVariant) : null)
-  }, [session, activeVariantKey])
+    const savedDraftId = window.localStorage.getItem(activeDraftKey) || ""
+
+    try {
+      const parsed = saved ? JSON.parse(saved) : null
+      if ((parsed?.variant === "full" || parsed?.variant === "under1000") && parsed?.draftId) {
+        setActiveDraftId(String(parsed.draftId))
+        setVariant(parsed.variant)
+        return
+      }
+    } catch {
+      // older saved value format, handled below
+    }
+
+    if (saved === "full" || saved === "under1000") {
+      setActiveDraftId(savedDraftId || `${saved}-${userId}`)
+      setVariant(saved as ChecklistVariant)
+    } else {
+      setActiveDraftId("")
+      setVariant(null)
+    }
+  }, [session, activeVariantKey, activeDraftKey, userId])
 
   // Persist active variant whenever it changes.
   useEffect(() => {
     if (!session) return
     if (typeof window === "undefined") return
     if (variant === "loading") return
-    if (variant) window.localStorage.setItem(activeVariantKey, variant)
-    else window.localStorage.removeItem(activeVariantKey)
-  }, [session, activeVariantKey, variant])
+    if (variant && activeDraftId) {
+      window.localStorage.setItem(activeVariantKey, JSON.stringify({ variant, draftId: activeDraftId }))
+      window.localStorage.setItem(activeDraftKey, activeDraftId)
+    } else {
+      window.localStorage.removeItem(activeVariantKey)
+      window.localStorage.removeItem(activeDraftKey)
+    }
+  }, [session, activeVariantKey, activeDraftKey, variant, activeDraftId])
+
+  const createDraftId = () => {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID()
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  }
+
+  const normalizeDraft = (draft: any, fallbackId: string): InProgressDraft | null => {
+    const variant = draft?.variant === "full" || draft?.variant === "under1000" ? draft.variant : null
+    const data = draft?.data && typeof draft.data === "object" ? draft.data : null
+    if (!variant || !data) return null
+
+    return {
+      draftId: String(draft?.draftId || data?.draftId || fallbackId),
+      variant,
+      inspectorName: draft?.inspectorName || data?.selectedInspector || "Unknown inspector",
+      driverName: draft?.driverName || data?.driverName || "",
+      updatedAt: draft?.updatedAt || "",
+      ownerUserId: draft?.ownerUserId,
+      data,
+    }
+  }
 
   const readLocalDrafts = () => {
     if (typeof window === "undefined") return [] as InProgressDraft[]
-    const variants: ChecklistVariant[] = ["under1000", "full"]
-    return variants
-      .map((v) => {
-        try {
-          const raw = window.localStorage.getItem(`adrSharedChecklistData_${v}`)
-          if (!raw) return null
-          const parsed = JSON.parse(raw)
-          if (!parsed?.data) return null
-          return {
-            variant: v,
-            inspectorName: parsed.inspectorName || parsed.data?.selectedInspector || "Unknown inspector",
-            updatedAt: parsed.updatedAt || "",
-            ownerUserId: parsed.ownerUserId,
-            data: parsed.data,
-          } as InProgressDraft
-        } catch {
-          return null
-        }
-      })
-      .filter(Boolean) as InProgressDraft[]
+
+    const drafts: InProgressDraft[] = []
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i)
+      if (!key || !key.startsWith("adrSharedChecklistData_")) continue
+
+      try {
+        const raw = window.localStorage.getItem(key)
+        if (!raw) continue
+        const parsed = JSON.parse(raw)
+        const fallbackId = key.replace("adrSharedChecklistData_", "")
+        const draft = normalizeDraft(parsed, fallbackId)
+        if (draft) drafts.push(draft)
+      } catch {
+        // ignore invalid draft entries
+      }
+    }
+
+    // Legacy compatibility: older versions used one shared key per variant.
+    ;(["under1000", "full"] as ChecklistVariant[]).forEach((v) => {
+      try {
+        const raw = window.localStorage.getItem(`adrSharedChecklistData_${v}`)
+        if (!raw) return
+        const parsed = JSON.parse(raw)
+        const draft = normalizeDraft(parsed, v)
+        if (draft && !drafts.some((d) => d.draftId === draft.draftId)) drafts.push(draft)
+      } catch {
+        // ignore
+      }
+    })
+
+    return drafts.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
   }
 
   const loadInProgressDrafts = async () => {
@@ -80,35 +142,29 @@ function HomePageInner() {
 
     // Supabase-backed shared drafts allow another logged-in user/device to take over the checklist.
     if (session.access_token) {
-      const remoteDrafts = await Promise.all(
-        (["under1000", "full"] as ChecklistVariant[]).map(async (v) => {
-          try {
-            const res = await fetch(`/api/adr-draft?variant=${v}`, {
-              headers: { Authorization: `Bearer ${session.access_token}` },
-              cache: "no-store",
-            })
-            const json = await res.json().catch(() => ({}))
-            if (!res.ok || !json?.draft?.data) return null
-            return {
-              variant: v,
-              inspectorName: json.draft.inspectorName || json.draft.data?.selectedInspector || "Unknown inspector",
-              updatedAt: json.draft.updatedAt || "",
-              ownerUserId: json.draft.ownerUserId,
-              data: json.draft.data,
-            } as InProgressDraft
-          } catch {
-            return null
-          }
-        }),
-      )
+      try {
+        const res = await fetch("/api/adr-draft", {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          cache: "no-store",
+        })
+        const json = await res.json().catch(() => ({}))
+        if (res.ok && Array.isArray(json?.drafts)) {
+          const remoteDrafts = json.drafts
+            .map((d: any) => normalizeDraft(d, d?.draftId || d?.variant || "remote"))
+            .filter(Boolean) as InProgressDraft[]
 
-      const byVariant = new Map<ChecklistVariant, InProgressDraft>()
-      drafts.forEach((d) => byVariant.set(d.variant, d))
-      remoteDrafts.filter(Boolean).forEach((d) => byVariant.set((d as InProgressDraft).variant, d as InProgressDraft))
-      drafts = Array.from(byVariant.values())
+          const byId = new Map<string, InProgressDraft>()
+          drafts.forEach((d) => byId.set(d.draftId, d))
+          remoteDrafts.forEach((d) => byId.set(d.draftId, d))
+          drafts = Array.from(byId.values()).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        }
+      } catch {
+        // keep local drafts if remote loading fails
+      }
     }
 
     setInProgressDrafts(drafts)
+    if (drafts.length === 0) setShowNewChecklistOptions(true)
   }
 
   useEffect(() => {
@@ -125,17 +181,29 @@ function HomePageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, variant])
 
+  const startNewChecklist = (nextVariant: ChecklistVariant) => {
+    if (typeof window === "undefined") return
+    const nextDraftId = createDraftId()
+    window.localStorage.removeItem(`adrChecklistData_${nextVariant}_${userId}_${nextDraftId}`)
+    window.localStorage.setItem(activeVariantKey, JSON.stringify({ variant: nextVariant, draftId: nextDraftId }))
+    window.localStorage.setItem(activeDraftKey, nextDraftId)
+    setActiveDraftId(nextDraftId)
+    setVariant(nextVariant)
+  }
+
   const takeOverDraft = (draft: InProgressDraft) => {
     if (typeof window === "undefined") return
     if (!draft.data) return
 
-    const targetStorageKey = `adrChecklistData_${draft.variant}_${userId}`
+    const targetStorageKey = `adrChecklistData_${draft.variant}_${userId}_${draft.draftId}`
     const nextData = {
       ...draft.data,
       selectedInspector: inspectorName || (draft.data as any).selectedInspector || "",
     }
     window.localStorage.setItem(targetStorageKey, JSON.stringify(nextData))
-    window.localStorage.setItem(activeVariantKey, draft.variant)
+    window.localStorage.setItem(activeVariantKey, JSON.stringify({ variant: draft.variant, draftId: draft.draftId }))
+    window.localStorage.setItem(activeDraftKey, draft.draftId)
+    setActiveDraftId(draft.draftId)
     setVariant(draft.variant)
   }
 
@@ -147,9 +215,12 @@ function HomePageInner() {
     return (
       <ADRChecklist
         variant={variant}
+        draftId={activeDraftId}
         onBack={() => {
           // Clear the persisted "active" screen only when the user explicitly goes back.
+          setActiveDraftId("")
           setVariant(null)
+          void loadInProgressDrafts()
         }}
       />
     )
@@ -203,7 +274,7 @@ function HomePageInner() {
         {inProgressDrafts.length > 0 && (
           <div className="mb-8 space-y-3">
             {inProgressDrafts.map((draft) => (
-              <div key={draft.variant} className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+              <div key={draft.draftId} className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div>
                     <div className="text-sm font-semibold text-amber-900">
@@ -211,6 +282,9 @@ function HomePageInner() {
                     </div>
                     <div className="text-sm text-amber-800">
                       By user: <span className="font-semibold">{draft.inspectorName}</span>
+                      {draft.driverName ? (
+                        <> • Driver: <span className="font-semibold">{draft.driverName}</span></>
+                      ) : null}
                       {draft.updatedAt ? ` • ${new Date(draft.updatedAt).toLocaleString()}` : ""}
                     </div>
                   </div>
@@ -223,10 +297,21 @@ function HomePageInner() {
           </div>
         )}
 
+        <div className="mb-6 flex justify-center">
+          <Button
+            type="button"
+            onClick={() => setShowNewChecklistOptions((prev) => !prev)}
+            className="min-w-[180px]"
+          >
+            New Checklist
+          </Button>
+        </div>
+
+        {(showNewChecklistOptions || inProgressDrafts.length === 0) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <button
             type="button"
-            onClick={() => setVariant("under1000")}
+            onClick={() => startNewChecklist("under1000")}
             className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-gradient-to-br from-white to-gray-50 p-10 shadow-xl transition duration-200 hover:shadow-2xl hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black min-h-[170px] flex items-center justify-center text-center"
           >
             <div className="relative z-10">
@@ -239,7 +324,7 @@ function HomePageInner() {
 
           <button
             type="button"
-            onClick={() => setVariant("full")}
+            onClick={() => startNewChecklist("full")}
             className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-gradient-to-br from-white to-gray-50 p-10 shadow-xl transition duration-200 hover:shadow-2xl hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black min-h-[170px] flex items-center justify-center text-center"
           >
             <div className="relative z-10">
@@ -250,6 +335,7 @@ function HomePageInner() {
             <span className="pointer-events-none absolute -right-14 -bottom-14 h-44 w-44 rounded-full bg-gray-100 transition group-hover:scale-110" />
           </button>
         </div>
+        )}
 
         <p className="text-sm text-gray-600 text-center mt-8">
           Choose the correct option based on the ADR points planned for loading.
