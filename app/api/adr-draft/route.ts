@@ -83,6 +83,40 @@ async function readDraft(auth: Awaited<ReturnType<typeof assertAuthenticated>> &
   return JSON.parse(text)
 }
 
+function getInspectorName(user: any): string {
+  const meta: any = user?.user_metadata || {}
+  return typeof meta.inspectorName === "string" && meta.inspectorName.trim()
+    ? meta.inspectorName.trim()
+    : user?.email || "Unknown inspector"
+}
+
+function withCurrentLock(payload: any, user: any, dataOverride?: any) {
+  const inspectorName = getInspectorName(user)
+  const now = new Date().toISOString()
+  return {
+    ...payload,
+    updatedAt: now,
+    ownerUserId: user.id,
+    inspectorName,
+    lockedByUserId: user.id,
+    lockedByInspectorName: inspectorName,
+    lockedAt: now,
+    driverName: typeof dataOverride?.driverName === "string" ? dataOverride.driverName : payload?.driverName || "",
+    data: dataOverride || payload?.data || {},
+  }
+}
+
+function lockedByAnotherUser(draft: any, userId: string): boolean {
+  return !!draft?.lockedByUserId && draft.lockedByUserId !== userId
+}
+
+async function uploadDraft(auth: Awaited<ReturnType<typeof assertAuthenticated>> & { ok: true }, draftId: string, payload: any) {
+  return auth.supabase.storage.from("adr-checklists").upload(draftPath(draftId), Buffer.from(JSON.stringify(payload), "utf8"), {
+    contentType: "application/json",
+    upsert: true,
+  })
+}
+
 export async function GET(req: NextRequest) {
   const auth = await assertAuthenticated(req)
   if (!auth.ok) return NextResponse.json({ success: false, message: auth.message }, { status: auth.status })
@@ -154,31 +188,69 @@ export async function POST(req: NextRequest) {
     if (!variant) return NextResponse.json({ success: false, message: "Missing or invalid variant" }, { status: 400 })
 
     const draftId = cleanDraftId(body?.draftId) || variant
+    const action = String(body?.action || "")
+
+    if (action === "takeover") {
+      const existing = await readDraft(auth, draftId)
+      if (!existing?.data || !hasDraftContent(existing.data)) {
+        return NextResponse.json({ success: false, message: "Draft not found or empty" }, { status: 404 })
+      }
+
+      const inspectorName = getInspectorName(auth.user)
+      const nextData = {
+        ...existing.data,
+        selectedInspector: inspectorName,
+      }
+      const payload = withCurrentLock(
+        {
+          ...existing,
+          draftId,
+          variant,
+        },
+        auth.user,
+        nextData,
+      )
+
+      const up = await uploadDraft(auth, draftId, payload)
+      if (up.error) return NextResponse.json({ success: false, message: up.error.message }, { status: 500 })
+      return NextResponse.json({ success: true, draft: payload })
+    }
+
+    const existing = await readDraft(auth, draftId).catch(() => null)
+    if (lockedByAnotherUser(existing, auth.user.id)) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: "DRAFT_LOCKED",
+          message: `This checklist was taken over by ${existing.lockedByInspectorName || existing.inspectorName || "another user"}.`,
+          lockedByUserId: existing.lockedByUserId,
+          lockedByInspectorName: existing.lockedByInspectorName || existing.inspectorName || "another user",
+        },
+        { status: 409 },
+      )
+    }
 
     if (!hasDraftContent(body?.data)) {
       await auth.supabase.storage.from("adr-checklists").remove([draftPath(draftId)])
       return NextResponse.json({ success: true, deleted: true, draft: null })
     }
 
-    const meta: any = auth.user.user_metadata || {}
-    const payload = {
-      draftId,
-      variant,
-      updatedAt: new Date().toISOString(),
-      ownerUserId: auth.user.id,
-      inspectorName:
-        typeof meta.inspectorName === "string" && meta.inspectorName.trim()
-          ? meta.inspectorName.trim()
-          : auth.user.email || "Unknown inspector",
-      driverName: typeof body?.data?.driverName === "string" ? body.data.driverName : "",
-      data: body?.data || {},
+    const inspectorName = getInspectorName(auth.user)
+    const data = {
+      ...(body?.data || {}),
+      selectedInspector: inspectorName,
     }
 
-    const json = JSON.stringify(payload)
-    const up = await auth.supabase.storage.from("adr-checklists").upload(draftPath(draftId), Buffer.from(json, "utf8"), {
-      contentType: "application/json",
-      upsert: true,
-    })
+    const payload = withCurrentLock(
+      {
+        draftId,
+        variant,
+      },
+      auth.user,
+      data,
+    )
+
+    const up = await uploadDraft(auth, draftId, payload)
 
     if (up.error) return NextResponse.json({ success: false, message: up.error.message }, { status: 500 })
     return NextResponse.json({ success: true, draft: payload })
@@ -197,6 +269,19 @@ export async function DELETE(req: NextRequest) {
     const variant = asVariant(body?.variant || req.nextUrl.searchParams.get("variant"))
     const id = draftId || variant
     if (!id) return NextResponse.json({ success: false, message: "Missing draftId or variant" }, { status: 400 })
+
+    const existing = await readDraft(auth, id).catch(() => null)
+    if (lockedByAnotherUser(existing, auth.user.id)) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: "DRAFT_LOCKED",
+          message: `This checklist was taken over by ${existing.lockedByInspectorName || existing.inspectorName || "another user"}.`,
+          lockedByInspectorName: existing.lockedByInspectorName || existing.inspectorName || "another user",
+        },
+        { status: 409 },
+      )
+    }
 
     const del = await auth.supabase.storage.from("adr-checklists").remove([draftPath(id)])
     if (del.error) return NextResponse.json({ success: false, message: del.error.message }, { status: 500 })

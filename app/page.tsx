@@ -16,6 +16,9 @@ type InProgressDraft = {
   driverName?: string
   updatedAt: string
   ownerUserId?: string
+  lockedByUserId?: string
+  lockedByInspectorName?: string
+  lockedAt?: string
   data?: Record<string, unknown>
 }
 
@@ -125,6 +128,9 @@ function HomePageInner() {
       driverName: draft?.driverName || data?.driverName || "",
       updatedAt: draft?.updatedAt || "",
       ownerUserId: draft?.ownerUserId,
+      lockedByUserId: draft?.lockedByUserId,
+      lockedByInspectorName: draft?.lockedByInspectorName || draft?.inspectorName || data?.selectedInspector || "Unknown inspector",
+      lockedAt: draft?.lockedAt,
       data,
     }
   }
@@ -221,20 +227,58 @@ function HomePageInner() {
     setVariant(nextVariant)
   }
 
-  const takeOverDraft = (draft: InProgressDraft) => {
+  const takeOverDraft = async (draft: InProgressDraft) => {
     if (typeof window === "undefined") return
     if (!draft.data) return
 
-    const targetStorageKey = `adrChecklistData_${draft.variant}_${userId}_${draft.draftId}`
+    const isLockedByAnotherUser = !!draft.lockedByUserId && draft.lockedByUserId !== userId
+    if (isLockedByAnotherUser) {
+      const lockedBy = draft.lockedByInspectorName || draft.inspectorName || "another user"
+      const ok = window.confirm(
+        `This checklist is currently being edited by ${lockedBy}.\n\nAre you sure you want to take over and continue it?`,
+      )
+      if (!ok) return
+    }
+
+    let nextDraft = draft
+
+    if (session?.access_token) {
+      try {
+        const res = await fetch("/api/adr-draft", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            action: "takeover",
+            variant: draft.variant,
+            draftId: draft.draftId,
+          }),
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok || !json?.success || !json?.draft) {
+          window.alert(json?.message || "Could not take over this checklist. Please refresh and try again.")
+          await loadInProgressDrafts()
+          return
+        }
+        nextDraft = normalizeDraft(json.draft, draft.draftId) || draft
+      } catch {
+        window.alert("Could not take over this checklist. Please check your connection and try again.")
+        return
+      }
+    }
+
+    const targetStorageKey = `adrChecklistData_${nextDraft.variant}_${userId}_${nextDraft.draftId}`
     const nextData = {
-      ...draft.data,
-      selectedInspector: inspectorName || (draft.data as any).selectedInspector || "",
+      ...(nextDraft.data || {}),
+      selectedInspector: inspectorName || (nextDraft.data as any)?.selectedInspector || "",
     }
     window.localStorage.setItem(targetStorageKey, JSON.stringify(nextData))
-    window.localStorage.setItem(activeVariantKey, JSON.stringify({ variant: draft.variant, draftId: draft.draftId }))
-    window.localStorage.setItem(activeDraftKey, draft.draftId)
-    setActiveDraftId(draft.draftId)
-    setVariant(draft.variant)
+    window.localStorage.setItem(activeVariantKey, JSON.stringify({ variant: nextDraft.variant, draftId: nextDraft.draftId }))
+    window.localStorage.setItem(activeDraftKey, nextDraft.draftId)
+    setActiveDraftId(nextDraft.draftId)
+    setVariant(nextDraft.variant)
   }
 
   if (variant === "loading") {
@@ -311,15 +355,20 @@ function HomePageInner() {
                       {draft.variant === "full" ? "Full Checklist" : "Reduced Checklist"} is in process
                     </div>
                     <div className="text-sm text-amber-800">
-                      By user: <span className="font-semibold">{draft.inspectorName}</span>
+                      Currently edited by: <span className="font-semibold">{draft.lockedByInspectorName || draft.inspectorName}</span>
                       {draft.driverName ? (
                         <> • Driver: <span className="font-semibold">{draft.driverName}</span></>
                       ) : null}
                       {draft.updatedAt ? ` • ${new Date(draft.updatedAt).toLocaleString()}` : ""}
                     </div>
+                    {draft.lockedByUserId && draft.lockedByUserId !== userId ? (
+                      <div className="mt-1 text-xs font-semibold text-red-700">Locked — another user is editing it</div>
+                    ) : (
+                      <div className="mt-1 text-xs font-semibold text-green-700">Available on your account</div>
+                    )}
                   </div>
-                  <Button type="button" onClick={() => takeOverDraft(draft)}>
-                    Take over and continue
+                  <Button type="button" onClick={() => void takeOverDraft(draft)}>
+                    {draft.lockedByUserId && draft.lockedByUserId !== userId ? "Take over and continue" : "Continue"}
                   </Button>
                 </div>
               </div>

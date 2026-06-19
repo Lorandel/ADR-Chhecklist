@@ -156,6 +156,7 @@ const [internalOrderInputs, setInternalOrderInputs] = useState<string[]>([""])
 const [orderError, setOrderError] = useState("")
 const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 const lastDeletedEmptyDraftRef = useRef<string>("")
+const [lockConflictMessage, setLockConflictMessage] = useState("")
 
   // Refs for date inputs
   const dateInputRefs = useRef<
@@ -1201,7 +1202,7 @@ const saveSharedDraft = useCallback((data: any) => {
 
   if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
   draftSaveTimerRef.current = setTimeout(() => {
-    if (!session?.access_token) return
+    if (!session?.access_token || lockConflictMessage) return
     fetch("/api/adr-draft", {
       method: "POST",
       headers: {
@@ -1209,7 +1210,16 @@ const saveSharedDraft = useCallback((data: any) => {
         Authorization: `Bearer ${session.access_token}`,
       },
       body: JSON.stringify({ variant, draftId: activeDraftId, data: payload.data }),
-    }).catch(() => {})
+    })
+      .then(async (res) => {
+        if (res.status !== 409) return
+        const json = await res.json().catch(() => ({}))
+        setLockConflictMessage(
+          json?.message ||
+            `This checklist was taken over by ${json?.lockedByInspectorName || "another user"}. Please go back to the main menu.`,
+        )
+      })
+      .catch(() => {})
   }, 900)
 }, [
   hasAnyDraftContent,
@@ -1222,6 +1232,7 @@ const saveSharedDraft = useCallback((data: any) => {
   sharedStorageKey,
   storageKey,
   session?.access_token,
+  lockConflictMessage,
 ])
 
 
@@ -2878,7 +2889,7 @@ if (Array.isArray(parsedData.internalOrderInputs)) {
     if (!session?.access_token) return
 
     try {
-      await fetch("/api/adr-draft", {
+      const res = await fetch("/api/adr-draft", {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
@@ -2886,6 +2897,13 @@ if (Array.isArray(parsedData.internalOrderInputs)) {
         },
         body: JSON.stringify({ variant, draftId: activeDraftId }),
       })
+      if (res.status === 409) {
+        const json = await res.json().catch(() => ({}))
+        setLockConflictMessage(
+          json?.message ||
+            `This checklist was taken over by ${json?.lockedByInspectorName || "another user"}. Please go back to the main menu.`,
+        )
+      }
     } catch {
       // ignore cleanup errors; the menu also filters empty drafts locally
     }
@@ -3102,6 +3120,28 @@ unCodesDone,
 
   return (
     <>
+      {lockConflictMessage && (
+        <div className="fixed inset-0 z-[11000] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" />
+          <div className="relative w-[min(94vw,520px)] rounded-2xl bg-white shadow-2xl border border-red-200 p-5 text-center">
+            <div className="text-lg font-semibold text-red-700 mb-2">Checklist taken over</div>
+            <div className="text-sm text-gray-700 mb-4">{lockConflictMessage}</div>
+            <Button
+              type="button"
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  window.localStorage.removeItem(storageKey)
+                  window.localStorage.removeItem(sharedStorageKey)
+                }
+                onBack?.()
+              }}
+            >
+              Back to main menu
+            </Button>
+          </div>
+        </div>
+      )}
+
       {showIncompletePopup && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center">
           <div
