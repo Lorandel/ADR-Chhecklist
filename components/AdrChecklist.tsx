@@ -1682,8 +1682,9 @@ const saveSharedDraft = useCallback((data: any) => {
       pdf.roundedRect(x, y, size, size, 1.2, 1.2, "FD")
 
       const padding = 0.6
+      const innerSize = size - padding * 2
       const imgType = isJpeg(imgUrl) ? "JPEG" : "PNG"
-      pdf.addImage(img, imgType, x + padding, y + padding, size - padding * 2, size - padding * 2)
+      addImageContain(img, imgType, x + padding, y + padding, innerSize, innerSize)
     }
 
     // Preload all icons + watermark (faster and consistent)

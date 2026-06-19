@@ -53,7 +53,6 @@ function hasDraftContent(data: any): boolean {
     data?.signatureData ||
     data?.inspectorSignatureData ||
     hasUnCodes ||
-    data?.completionReason ||
     hasOrders ||
     hasPhotos
   )

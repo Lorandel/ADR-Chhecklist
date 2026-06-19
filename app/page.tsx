@@ -108,7 +108,6 @@ function HomePageInner() {
       data?.signatureData ||
       data?.inspectorSignatureData ||
       hasUnCodes ||
-      data?.completionReason ||
       hasOrders ||
       hasPhotos
     )
