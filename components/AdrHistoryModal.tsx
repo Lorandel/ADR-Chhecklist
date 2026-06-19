@@ -358,7 +358,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                             variant="outline"
                             className="bg-transparent"
                             onClick={() => onDownloadZip(it)}
-                            disabled={!it.downloadUrl}
+                            disabled={loading}
                           >
                             Download ZIP
                           </Button>
@@ -411,7 +411,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                             variant="outline"
                             className="bg-transparent"
                             onClick={() => onDownloadZip(it)}
-                            disabled={!it.downloadUrl}
+                            disabled={loading}
                           >
                             Download ZIP
                           </Button>

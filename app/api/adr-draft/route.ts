@@ -52,14 +52,8 @@ function hasDraftContent(data: any): boolean {
     data?.remarks ||
     data?.signatureData ||
     data?.inspectorSignatureData ||
-    data?.trailerType ||
-    data?.trailerConnectedCorrectly != null ||
-    data?.containerSecuredToChassis != null ||
-    data?.isTrailerEmpty != null ||
-    data?.isLoadedWithAdrGoods != null ||
     hasUnCodes ||
     data?.completionReason ||
-    data?.orderType ||
     hasOrders ||
     hasPhotos
   )

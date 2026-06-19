@@ -1123,12 +1123,7 @@ const hasAnyDraftContent = useCallback((data: any) => {
     data.remarks ||
     data.signatureData ||
     data.inspectorSignatureData ||
-    data.trailerType ||
-    data.trailerConnectedCorrectly != null ||
-    data.containerSecuredToChassis != null ||
-    data.isTrailerEmpty != null ||
-    data.isLoadedWithAdrGoods != null ||
-    (Array.isArray(data.unCodes) && data.unCodes.length > 0) ||
+    (Array.isArray(data.unCodes) && data.unCodes.some((v: unknown) => String(v || "").trim())) ||
     (Array.isArray(data.photos) && data.photos.length > 0)
   )
 }, [])
