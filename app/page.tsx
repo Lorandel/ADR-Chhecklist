@@ -8,6 +8,7 @@ import AdminPanelModal from "@/components/AdminPanelModal"
 import { AuthProvider, useAuth } from "@/components/auth/AuthProvider"
 import LoginGate from "@/components/auth/LoginGate"
 import { Button } from "@/components/ui/button"
+import { getSupabaseBrowser } from "@/lib/supabaseBrowser"
 
 type InProgressDraft = {
   draftId: string
@@ -20,6 +21,7 @@ type InProgressDraft = {
   lockedByInspectorName?: string
   lockedAt?: string
   data?: Record<string, unknown>
+  syncError?: boolean
 }
 
 function HomePageInner() {
@@ -86,6 +88,19 @@ function HomePageInner() {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   }
 
+  const getFreshAccessToken = async () => {
+    try {
+      const supabase = getSupabaseBrowser()
+      if (supabase) {
+        const { data } = await supabase.auth.getSession()
+        if (data.session?.access_token) return data.session.access_token
+      }
+    } catch {
+      // fall back to the session already stored in AuthProvider
+    }
+    return session?.access_token || ""
+  }
+
   const hasDraftContent = (data: any) => {
     const hasChecked = (obj: Record<string, boolean> | undefined) => !!obj && Object.values(obj).some(Boolean)
     const hasDate = (d: { month?: string; year?: string } | undefined) => !!d && (!!d.month || !!d.year)
@@ -135,6 +150,22 @@ function HomePageInner() {
     }
   }
 
+  const fetchFreshDraft = async (draftId: string) => {
+    const token = await getFreshAccessToken()
+    if (!token) return { ok: false as const, message: "Your session is not active. Please sign in again." }
+
+    const res = await fetch(`/api/adr-draft?draftId=${encodeURIComponent(draftId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok || !json?.success) {
+      return { ok: false as const, message: json?.message || "Could not refresh this checklist. Please try again." }
+    }
+
+    return { ok: true as const, draft: json?.draft || null }
+  }
+
   const readLocalDrafts = () => {
     if (typeof window === "undefined") return [] as InProgressDraft[]
 
@@ -177,10 +208,11 @@ function HomePageInner() {
     let drafts = readLocalDrafts()
 
     // Supabase-backed shared drafts allow another logged-in user/device to take over the checklist.
-    if (session.access_token) {
+    const token = await getFreshAccessToken()
+    if (token) {
       try {
         const res = await fetch("/api/adr-draft", {
-          headers: { Authorization: `Bearer ${session.access_token}` },
+          headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         })
         const json = await res.json().catch(() => ({}))
@@ -193,9 +225,12 @@ function HomePageInner() {
           drafts.forEach((d) => byId.set(d.draftId, d))
           remoteDrafts.forEach((d) => byId.set(d.draftId, d))
           drafts = Array.from(byId.values()).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        } else {
+          drafts = drafts.map((d) => ({ ...d, syncError: true }))
         }
       } catch {
-        // keep local drafts if remote loading fails
+        // Keep local drafts visible, but do not show them as reliably available.
+        drafts = drafts.map((d) => ({ ...d, syncError: true }))
       }
     }
 
@@ -208,11 +243,18 @@ function HomePageInner() {
     void loadInProgressDrafts()
 
     const onStorage = () => void loadInProgressDrafts()
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void loadInProgressDrafts()
+    }
+    const refreshTimer = window.setInterval(() => void loadInProgressDrafts(), 15000)
     window.addEventListener("storage", onStorage)
     window.addEventListener("focus", onStorage)
+    document.addEventListener("visibilitychange", onVisibility)
     return () => {
+      window.clearInterval(refreshTimer)
       window.removeEventListener("storage", onStorage)
       window.removeEventListener("focus", onStorage)
+      document.removeEventListener("visibilitychange", onVisibility)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, variant])
@@ -229,31 +271,59 @@ function HomePageInner() {
 
   const takeOverDraft = async (draft: InProgressDraft) => {
     if (typeof window === "undefined") return
-    if (!draft.data) return
 
-    const isLockedByAnotherUser = !!draft.lockedByUserId && draft.lockedByUserId !== userId
+    let freshDraft = draft
+
+    if (session?.access_token) {
+      try {
+        const fresh = await fetchFreshDraft(draft.draftId)
+        if (!fresh.ok) {
+          window.alert(fresh.message)
+          await loadInProgressDrafts()
+          return
+        }
+        if (!fresh.draft) {
+          window.alert("This checklist is no longer available. The main menu will be updated now.")
+          await loadInProgressDrafts()
+          return
+        }
+        freshDraft = normalizeDraft(fresh.draft, draft.draftId) || draft
+      } catch {
+        window.alert("Could not refresh this checklist. Please check your connection and try again.")
+        await loadInProgressDrafts()
+        return
+      }
+    }
+
+    if (!freshDraft.data) return
+
+    const isLockedByAnotherUser = !!freshDraft.lockedByUserId && freshDraft.lockedByUserId !== userId
     if (isLockedByAnotherUser) {
-      const lockedBy = draft.lockedByInspectorName || draft.inspectorName || "another user"
+      const lockedBy = freshDraft.lockedByInspectorName || freshDraft.inspectorName || "another user"
       const ok = window.confirm(
         `This checklist is currently being edited by ${lockedBy}.\n\nAre you sure you want to take over and continue it?`,
       )
-      if (!ok) return
+      if (!ok) {
+        await loadInProgressDrafts()
+        return
+      }
     }
 
-    let nextDraft = draft
+    let nextDraft = freshDraft
 
-    if (session?.access_token) {
+    const token = await getFreshAccessToken()
+    if (token) {
       try {
         const res = await fetch("/api/adr-draft", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
             action: "takeover",
-            variant: draft.variant,
-            draftId: draft.draftId,
+            variant: freshDraft.variant,
+            draftId: freshDraft.draftId,
           }),
         })
         const json = await res.json().catch(() => ({}))
@@ -262,9 +332,10 @@ function HomePageInner() {
           await loadInProgressDrafts()
           return
         }
-        nextDraft = normalizeDraft(json.draft, draft.draftId) || draft
+        nextDraft = normalizeDraft(json.draft, freshDraft.draftId) || freshDraft
       } catch {
         window.alert("Could not take over this checklist. Please check your connection and try again.")
+        await loadInProgressDrafts()
         return
       }
     }
@@ -361,7 +432,9 @@ function HomePageInner() {
                       ) : null}
                       {draft.updatedAt ? ` • ${new Date(draft.updatedAt).toLocaleString()}` : ""}
                     </div>
-                    {draft.lockedByUserId && draft.lockedByUserId !== userId ? (
+                    {draft.syncError ? (
+                      <div className="mt-1 text-xs font-semibold text-orange-700">Sync status unknown — it will be checked before opening</div>
+                    ) : draft.lockedByUserId && draft.lockedByUserId !== userId ? (
                       <div className="mt-1 text-xs font-semibold text-red-700">Locked — another user is editing it</div>
                     ) : (
                       <div className="mt-1 text-xs font-semibold text-green-700">Available on your account</div>

@@ -277,6 +277,7 @@ export async function DELETE(req: NextRequest) {
           success: false,
           code: "DRAFT_LOCKED",
           message: `This checklist was taken over by ${existing.lockedByInspectorName || existing.inspectorName || "another user"}.`,
+          lockedByUserId: existing.lockedByUserId,
           lockedByInspectorName: existing.lockedByInspectorName || existing.inspectorName || "another user",
         },
         { status: 409 },

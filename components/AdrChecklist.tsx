@@ -12,6 +12,7 @@ import { compressImageFile } from "@/lib/imageCompress"
 import { stableStringify } from "@/lib/stableStringify"
 import { idbPutPhoto, idbGetPhoto, idbDeletePhoto } from "@/lib/offlinePhotos"
 import { sha256Hex } from "@/lib/hash"
+import { getSupabaseBrowser } from "@/lib/supabaseBrowser"
 
 const INSPECTOR_COLORS: Record<string, string> = {
   "Alexandru Dogariu": "#FF8C00",
@@ -57,6 +58,19 @@ export default function ADRChecklist({ variant, draftId, onBack }: ADRChecklistP
   const activeDraftId = draftId || variant
   const storageKey = `adrChecklistData_${variant}_${userId}_${activeDraftId}`
   const sharedStorageKey = `adrSharedChecklistData_${activeDraftId}`
+
+  const getFreshAccessToken = useCallback(async () => {
+    try {
+      const supabase = getSupabaseBrowser()
+      if (supabase) {
+        const { data } = await supabase.auth.getSession()
+        if (data.session?.access_token) return data.session.access_token
+      }
+    } catch {
+      // fall back to the AuthProvider session
+    }
+    return session?.access_token || ""
+  }, [session?.access_token])
 
   const [isMounted, setIsMounted] = useState(false)
   // State for driver and vehicle information
@@ -1183,16 +1197,20 @@ const saveSharedDraft = useCallback((data: any) => {
 
     // Also remove the shared Supabase draft. Otherwise an empty checklist can remain
     // visible in the main menu after the user clears all fields and goes back.
-    if (session?.access_token && lastDeletedEmptyDraftRef.current !== activeDraftId) {
+    if (lastDeletedEmptyDraftRef.current !== activeDraftId) {
       lastDeletedEmptyDraftRef.current = activeDraftId
-      fetch("/api/adr-draft", {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ variant, draftId: activeDraftId }),
-      }).catch(() => {})
+      void (async () => {
+        const token = await getFreshAccessToken()
+        if (!token) return
+        fetch("/api/adr-draft", {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ variant, draftId: activeDraftId }),
+        }).catch(() => {})
+      })()
     }
     return
   }
@@ -1202,24 +1220,28 @@ const saveSharedDraft = useCallback((data: any) => {
 
   if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
   draftSaveTimerRef.current = setTimeout(() => {
-    if (!session?.access_token || lockConflictMessage) return
-    fetch("/api/adr-draft", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({ variant, draftId: activeDraftId, data: payload.data }),
-    })
-      .then(async (res) => {
-        if (res.status !== 409) return
-        const json = await res.json().catch(() => ({}))
-        setLockConflictMessage(
-          json?.message ||
-            `This checklist was taken over by ${json?.lockedByInspectorName || "another user"}. Please go back to the main menu.`,
-        )
+    if (lockConflictMessage) return
+    void (async () => {
+      const token = await getFreshAccessToken()
+      if (!token) return
+      fetch("/api/adr-draft", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ variant, draftId: activeDraftId, data: payload.data }),
       })
-      .catch(() => {})
+        .then(async (res) => {
+          if (res.status !== 409) return
+          const json = await res.json().catch(() => ({}))
+          setLockConflictMessage(
+            json?.message ||
+              `This checklist was taken over by ${json?.lockedByInspectorName || "another user"}. Please go back to the main menu.`,
+          )
+        })
+        .catch(() => {})
+    })()
   }, 900)
 }, [
   hasAnyDraftContent,
@@ -1231,9 +1253,46 @@ const saveSharedDraft = useCallback((data: any) => {
   selectedInspector,
   sharedStorageKey,
   storageKey,
-  session?.access_token,
+  getFreshAccessToken,
   lockConflictMessage,
 ])
+
+
+  useEffect(() => {
+    if (!isMounted || typeof window === "undefined") return
+    if (lockConflictMessage) return
+
+    const checkCurrentLock = async () => {
+      const token = await getFreshAccessToken()
+      if (!token) return
+
+      try {
+        const res = await fetch(`/api/adr-draft?draftId=${encodeURIComponent(activeDraftId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        })
+        const json = await res.json().catch(() => ({}))
+        const draft = json?.draft
+        if (res.ok && draft?.lockedByUserId && draft.lockedByUserId !== userId) {
+          setLockConflictMessage(
+            `This checklist was taken over by ${draft.lockedByInspectorName || draft.inspectorName || "another user"}. Please go back to the main menu.`,
+          )
+        }
+      } catch {
+        // Do not interrupt the user for temporary connection issues.
+      }
+    }
+
+    const onFocus = () => void checkCurrentLock()
+    const timer = window.setInterval(() => void checkCurrentLock(), 10000)
+    window.addEventListener("focus", onFocus)
+    void checkCurrentLock()
+
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener("focus", onFocus)
+    }
+  }, [isMounted, lockConflictMessage, getFreshAccessToken, activeDraftId, userId])
 
 
 
@@ -2497,17 +2556,19 @@ unCodesDone,
     }
 
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
-    if (session?.access_token) {
+    void (async () => {
+      const token = await getFreshAccessToken()
+      if (!token) return
       fetch("/api/adr-draft", {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ variant, draftId: activeDraftId }),
       }).catch(() => {})
-    }
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey, sharedStorageKey, session?.access_token, variant, activeDraftId])
+    })()
+  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey, sharedStorageKey, getFreshAccessToken, variant, activeDraftId])
 
   // Initialize component
   useEffect(() => {
@@ -2886,14 +2947,15 @@ if (Array.isArray(parsedData.internalOrderInputs)) {
       window.localStorage.removeItem(sharedStorageKey)
     }
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
-    if (!session?.access_token) return
+    const token = await getFreshAccessToken()
+    if (!token) return
 
     try {
       const res = await fetch("/api/adr-draft", {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ variant, draftId: activeDraftId }),
       })
@@ -2907,7 +2969,7 @@ if (Array.isArray(parsedData.internalOrderInputs)) {
     } catch {
       // ignore cleanup errors; the menu also filters empty drafts locally
     }
-  }, [storageKey, sharedStorageKey, session?.access_token, variant, activeDraftId])
+  }, [storageKey, sharedStorageKey, getFreshAccessToken, variant, activeDraftId])
 
   // Add an effect to save data to localStorage whenever relevant state changes
   useEffect(() => {
