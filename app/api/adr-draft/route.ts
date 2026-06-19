@@ -26,6 +26,43 @@ function draftPath(draftId: string) {
   return `drafts/${draftId}.json`
 }
 
+function hasDraftContent(data: any): boolean {
+  const hasChecked = (obj: Record<string, boolean> | undefined) => !!obj && Object.values(obj).some(Boolean)
+  const hasDate = (d: { month?: string; year?: string } | undefined) => !!d && (!!d.month || !!d.year)
+  const hasExpiry = (obj: Record<string, { month?: string; year?: string }> | undefined) =>
+    !!obj && Object.values(obj).some((d) => !!d?.month || !!d?.year)
+  const hasPhotos = Array.isArray(data?.photos) && data.photos.length > 0
+  const hasUnCodes = Array.isArray(data?.unCodes) && data.unCodes.some((v: unknown) => String(v || "").trim())
+  const hasOrders = Array.isArray(data?.orderInputs) && data.orderInputs.some((v: unknown) => String(v || "").trim())
+
+  return !!(
+    data?.driverName ||
+    data?.truckPlate ||
+    data?.trailerPlate ||
+    hasDate(data?.drivingLicenseDate) ||
+    hasDate(data?.adrCertificateDate) ||
+    hasDate(data?.truckDocDate) ||
+    hasDate(data?.trailerDocDate) ||
+    hasChecked(data?.checkedItems) ||
+    hasChecked(data?.beforeLoadingChecked) ||
+    hasChecked(data?.afterLoadingChecked) ||
+    hasExpiry(data?.expiryDates) ||
+    data?.remarks ||
+    data?.signatureData ||
+    data?.inspectorSignatureData ||
+    data?.trailerType ||
+    data?.trailerConnectedCorrectly != null ||
+    data?.containerSecuredToChassis != null ||
+    data?.isTrailerEmpty != null ||
+    data?.isLoadedWithAdrGoods != null ||
+    hasUnCodes ||
+    data?.completionReason ||
+    data?.orderType ||
+    hasOrders ||
+    hasPhotos
+  )
+}
+
 async function assertAuthenticated(req: NextRequest) {
   const token = getBearerToken(req)
   if (!token) return { ok: false as const, status: 401, message: "Missing token" }
@@ -62,7 +99,7 @@ export async function GET(req: NextRequest) {
     if (requestedDraftId || requestedVariant) {
       const id = requestedDraftId || requestedVariant || ""
       const draft = await readDraft(auth, id)
-      return NextResponse.json({ success: true, draft })
+      return NextResponse.json({ success: true, draft: draft?.data && hasDraftContent(draft.data) ? draft : null })
     }
 
     const list = await auth.supabase.storage.from("adr-checklists").list("drafts", {
@@ -79,7 +116,7 @@ export async function GET(req: NextRequest) {
           try {
             const id = file.name.replace(/\.json$/i, "")
             const draft = await readDraft(auth, id)
-            if (!draft?.data) return null
+            if (!draft?.data || !hasDraftContent(draft.data)) return null
             return { ...draft, draftId: draft.draftId || id }
           } catch {
             return null
@@ -105,6 +142,12 @@ export async function POST(req: NextRequest) {
     if (!variant) return NextResponse.json({ success: false, message: "Missing or invalid variant" }, { status: 400 })
 
     const draftId = cleanDraftId(body?.draftId) || variant
+
+    if (!hasDraftContent(body?.data)) {
+      await auth.supabase.storage.from("adr-checklists").remove([draftPath(draftId)])
+      return NextResponse.json({ success: true, deleted: true, draft: null })
+    }
+
     const meta: any = auth.user.user_metadata || {}
     const payload = {
       draftId,

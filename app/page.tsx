@@ -83,10 +83,47 @@ function HomePageInner() {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   }
 
+  const hasDraftContent = (data: any) => {
+    const hasChecked = (obj: Record<string, boolean> | undefined) => !!obj && Object.values(obj).some(Boolean)
+    const hasDate = (d: { month?: string; year?: string } | undefined) => !!d && (!!d.month || !!d.year)
+    const hasExpiry = (obj: Record<string, { month?: string; year?: string }> | undefined) =>
+      !!obj && Object.values(obj).some((d) => !!d?.month || !!d?.year)
+    const hasPhotos = Array.isArray(data?.photos) && data.photos.length > 0
+    const hasUnCodes = Array.isArray(data?.unCodes) && data.unCodes.some((v: unknown) => String(v || "").trim())
+    const hasOrders = Array.isArray(data?.orderInputs) && data.orderInputs.some((v: unknown) => String(v || "").trim())
+
+    return !!(
+      data?.driverName ||
+      data?.truckPlate ||
+      data?.trailerPlate ||
+      hasDate(data?.drivingLicenseDate) ||
+      hasDate(data?.adrCertificateDate) ||
+      hasDate(data?.truckDocDate) ||
+      hasDate(data?.trailerDocDate) ||
+      hasChecked(data?.checkedItems) ||
+      hasChecked(data?.beforeLoadingChecked) ||
+      hasChecked(data?.afterLoadingChecked) ||
+      hasExpiry(data?.expiryDates) ||
+      data?.remarks ||
+      data?.signatureData ||
+      data?.inspectorSignatureData ||
+      data?.trailerType ||
+      data?.trailerConnectedCorrectly != null ||
+      data?.containerSecuredToChassis != null ||
+      data?.isTrailerEmpty != null ||
+      data?.isLoadedWithAdrGoods != null ||
+      hasUnCodes ||
+      data?.completionReason ||
+      data?.orderType ||
+      hasOrders ||
+      hasPhotos
+    )
+  }
+
   const normalizeDraft = (draft: any, fallbackId: string): InProgressDraft | null => {
     const variant = draft?.variant === "full" || draft?.variant === "under1000" ? draft.variant : null
     const data = draft?.data && typeof draft.data === "object" ? draft.data : null
-    if (!variant || !data) return null
+    if (!variant || !data || !hasDraftContent(data)) return null
 
     return {
       draftId: String(draft?.draftId || data?.draftId || fallbackId),

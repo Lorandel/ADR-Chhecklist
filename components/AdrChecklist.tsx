@@ -1496,6 +1496,97 @@ const saveSharedDraft = useCallback((data: any) => {
       return dataUrl
     }
 
+    const loadHtmlImage = (src: string) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        if (typeof window === "undefined") {
+          reject(new Error("Image loading is only available in the browser"))
+          return
+        }
+        const img = new window.Image()
+        img.onload = () => resolve(img)
+        img.onerror = () => reject(new Error("Failed to load signature image"))
+        img.src = src
+      })
+
+    const trimSignatureDataUrl = async (dataUrl: string | null) => {
+      if (!dataUrl || typeof document === "undefined") return dataUrl
+
+      try {
+        const img = await loadHtmlImage(dataUrl)
+        const w = img.naturalWidth || img.width
+        const h = img.naturalHeight || img.height
+        if (!w || !h) return dataUrl
+
+        const source = document.createElement("canvas")
+        source.width = w
+        source.height = h
+        const ctx = source.getContext("2d", { willReadFrequently: true })
+        if (!ctx) return dataUrl
+        ctx.drawImage(img, 0, 0, w, h)
+
+        const pixels = ctx.getImageData(0, 0, w, h).data
+        let minX = w
+        let minY = h
+        let maxX = -1
+        let maxY = -1
+
+        for (let y = 0; y < h; y += 1) {
+          for (let x = 0; x < w; x += 1) {
+            const idx = (y * w + x) * 4
+            const r = pixels[idx]
+            const g = pixels[idx + 1]
+            const b = pixels[idx + 2]
+            const a = pixels[idx + 3]
+            // Keep the written ink and remove the white empty area around it.
+            if (a > 20 && (r < 245 || g < 245 || b < 245)) {
+              minX = Math.min(minX, x)
+              minY = Math.min(minY, y)
+              maxX = Math.max(maxX, x)
+              maxY = Math.max(maxY, y)
+            }
+          }
+        }
+
+        if (maxX < minX || maxY < minY) return dataUrl
+
+        const pad = Math.max(8, Math.round(Math.max(maxX - minX + 1, maxY - minY + 1) * 0.06))
+        const cropX = Math.max(0, minX - pad)
+        const cropY = Math.max(0, minY - pad)
+        const cropW = Math.min(w - cropX, maxX - minX + 1 + pad * 2)
+        const cropH = Math.min(h - cropY, maxY - minY + 1 + pad * 2)
+
+        const out = document.createElement("canvas")
+        out.width = cropW
+        out.height = cropH
+        const outCtx = out.getContext("2d")
+        if (!outCtx) return dataUrl
+        outCtx.fillStyle = "#ffffff"
+        outCtx.fillRect(0, 0, cropW, cropH)
+        outCtx.drawImage(source, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH)
+        return out.toDataURL("image/png")
+      } catch {
+        return dataUrl
+      }
+    }
+
+    const addImageContain = (imgData: string, imgType: "PNG" | "JPEG", x: number, y: number, maxW: number, maxH: number) => {
+      const props = pdf.getImageProperties(imgData)
+      const imgW = Number(props.width) || maxW
+      const imgH = Number(props.height) || maxH
+      const ratio = imgW / imgH
+
+      let drawW = maxW
+      let drawH = drawW / ratio
+      if (drawH > maxH) {
+        drawH = maxH
+        drawW = drawH * ratio
+      }
+
+      const drawX = x + (maxW - drawW) / 2
+      const drawY = y + (maxH - drawH) / 2
+      pdf.addImage(imgData, imgType, drawX, drawY, drawW, drawH)
+    }
+
     const truncateToWidth = (str: string, maxWidth: number) => {
       const s = (str || "").toString()
       if (pdf.getTextWidth(s) <= maxWidth) return s
@@ -2001,13 +2092,15 @@ drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingCh
     const rightSigX = sigX + sigInnerPad + sigColW + sigGap
 
     const sigImgW = sigColW
-    const sigImgH = 16
+    const sigImgH = 18
+    const driverSignaturePdfData = await trimSignatureDataUrl(signatureData)
+    const inspectorSignaturePdfData = await trimSignatureDataUrl(inspectorSignatureData)
 
     const drawSignatureArea = (x: number, imgData: string | null, labelText: string) => {
       // signature image / line
       if (imgData) {
         try {
-          pdf.addImage(imgData, "PNG", x, sigY + 6, sigImgW, sigImgH)
+          addImageContain(imgData, "PNG", x, sigY + 4.5, sigImgW, sigImgH)
         } catch {
           // fallback to line
           pdf.setDrawColor(148, 163, 184)
@@ -2029,8 +2122,8 @@ drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingCh
       pdf.text(line, cx, sigY + 30)
     }
 
-    drawSignatureArea(leftSigX, signatureData, `Driver: ${safeVal(driverName)}`)
-    drawSignatureArea(rightSigX, inspectorSignatureData, `Inspector: ${safeVal(selectedInspector)}`)
+    drawSignatureArea(leftSigX, driverSignaturePdfData, `Driver: ${safeVal(driverName)}`)
+    drawSignatureArea(rightSigX, inspectorSignaturePdfData, `Inspector: ${safeVal(selectedInspector)}`)
 
     await addWatermark()
 

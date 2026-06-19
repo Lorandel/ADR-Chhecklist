@@ -1,6 +1,6 @@
 // supabase/functions/purge-adr-checklists/index.ts
 //
-// Edge Function care șterge automat (zilnic prin cron) toate rândurile expirate (expires_at < now())
+// Edge Function care șterge automat (zilnic prin cron) toate rândurile expirate în ziua curentă (expires_at <= finalul zilei UTC)
 // + șterge fișierele ZIP din Supabase Storage bucket-ul "adr-checklists".
 //
 // IMPORTANT:
@@ -57,7 +57,11 @@ serve(async (req) => {
   const BUCKET = "adr-checklists";
   const BATCH = 200;
 
-  const nowIso = new Date().toISOString();
+  // History shows only the calendar date, so an entry expiring today should be removed today,
+  // not tomorrow after the exact created-at hour passes.
+  const cutoff = new Date();
+  cutoff.setUTCHours(23, 59, 59, 999);
+  const expiresOnOrBeforeIso = cutoff.toISOString();
 
   let deletedRows = 0;
   let storageDeleteTried = 0;
@@ -70,7 +74,7 @@ serve(async (req) => {
     const { data, error } = await supabase
       .from("adr_checklists")
       .select("id,file_path")
-      .lt("expires_at", nowIso)
+      .lte("expires_at", expiresOnOrBeforeIso)
       .order("expires_at", { ascending: true })
       .limit(BATCH);
 
@@ -137,6 +141,7 @@ serve(async (req) => {
       storage_delete_tried: storageDeleteTried,
       storage_delete_ok: storageDeleteOk,
       storage_delete_failed: storageDeleteFailed,
+      expires_on_or_before: expiresOnOrBeforeIso,
       failed_sample: failedSample,
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
