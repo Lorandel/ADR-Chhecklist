@@ -149,8 +149,10 @@ const [incompleteIssues, setIncompleteIssues] = useState<string[]>([])
 const [incompleteReasonDraft, setIncompleteReasonDraft] = useState("")
 const [incompleteReasonError, setIncompleteReasonError] = useState("")
 const [completionReason, setCompletionReason] = useState("")
-const [orderType, setOrderType] = useState<LoadedOrderType | null>(null)
-const [orderInputs, setOrderInputs] = useState<string[]>([""])
+const [orderType, setOrderType] = useState<LoadedOrderType | null>(null) // legacy draft support only
+const [orderInputs, setOrderInputs] = useState<string[]>([""]) // legacy draft support only
+const [coglasOrderInputs, setCoglasOrderInputs] = useState<string[]>([""])
+const [internalOrderInputs, setInternalOrderInputs] = useState<string[]>([""])
 const [orderError, setOrderError] = useState("")
 const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 const lastDeletedEmptyDraftRef = useRef<string>("")
@@ -921,19 +923,44 @@ const hasMonthYear = useCallback((d?: { month: string; year: string }) => {
   return !!d && /^\d{2}$/.test(d.month || "") && /^\d{4}$/.test(d.year || "")
 }, [])
 
-const getLoadedOrderNumbers = useCallback(() => {
-  if (!orderType) return []
-  return orderInputs
-    .map((value) => String(value || "").replace(/\D/g, "").slice(0, orderType === "coglas" ? 10 : 20))
+const getLoadedCoglasOrderNumbers = useCallback(() => {
+  return coglasOrderInputs
+    .map((value) => String(value || "").replace(/\D/g, "").slice(0, 10))
     .filter(Boolean)
-}, [orderInputs, orderType])
+}, [coglasOrderInputs])
+
+const getLoadedInternalOrderNumbers = useCallback(() => {
+  return internalOrderInputs
+    .map((value) => String(value || "").replace(/\D/g, "").slice(0, 20))
+    .filter(Boolean)
+}, [internalOrderInputs])
+
+const getLoadedOrderNumbers = useCallback(() => {
+  return [
+    ...getLoadedCoglasOrderNumbers().map((n) => `CO${n}`),
+    ...getLoadedInternalOrderNumbers(),
+  ]
+}, [getLoadedCoglasOrderNumbers, getLoadedInternalOrderNumbers])
+
+const loadedOrderTypeSummary = useMemo(() => {
+  const hasCoglas = getLoadedCoglasOrderNumbers().length > 0
+  const hasInternal = getLoadedInternalOrderNumbers().length > 0
+  if (hasCoglas && hasInternal) return "both"
+  if (hasCoglas) return "coglas"
+  if (hasInternal) return "internal"
+  return null
+}, [getLoadedCoglasOrderNumbers, getLoadedInternalOrderNumbers])
 
 const loadedOrdersSubtitle = useMemo(() => {
-  const nums = getLoadedOrderNumbers()
-  if (!orderType || nums.length === 0) return ""
-  if (orderType === "coglas") return `Loaded Coglas order(s): ${nums.map((n) => `CO${n}`).join(", ")}`
-  return `Loaded internal order(s): ${nums.join(", ")}`
-}, [getLoadedOrderNumbers, orderType])
+  const coglasNums = getLoadedCoglasOrderNumbers()
+  const internalNums = getLoadedInternalOrderNumbers()
+  const parts: string[] = []
+
+  if (coglasNums.length > 0) parts.push(`Coglas order(s): ${coglasNums.map((n) => `CO${n}`).join(", ")}`)
+  if (internalNums.length > 0) parts.push(`Internal order(s): ${internalNums.join(", ")}`)
+
+  return parts.length > 0 ? `Loaded order(s): ${parts.join(" | ")}` : ""
+}, [getLoadedCoglasOrderNumbers, getLoadedInternalOrderNumbers])
 
 const finalRemarks = useMemo(() => {
   const parts = [remarks.trim()]
@@ -1088,18 +1115,21 @@ const beginFinalizeAction = useCallback((action: FinalizeAction) => {
   setConfirmAction(action)
 }, [completionReason, getCompletionIssues, playErrorSound])
 
-const updateOrderInput = useCallback((idx: number, raw: string) => {
-  const cleaned = String(raw || "").replace(/\D/g, "").slice(0, orderType === "coglas" ? 10 : 20)
-  setOrderInputs((prev) => {
+const updateLoadedOrderInput = useCallback((type: LoadedOrderType, idx: number, raw: string) => {
+  const cleaned = String(raw || "").replace(/\D/g, "").slice(0, type === "coglas" ? 10 : 20)
+  const setter = type === "coglas" ? setCoglasOrderInputs : setInternalOrderInputs
+
+  setter((prev) => {
     const next = [...prev]
     next[idx] = cleaned
     return next
   })
   setOrderError("")
-}, [orderType])
+}, [])
 
-const addOrderInput = useCallback(() => {
-  setOrderInputs((prev) => [...prev, ""])
+const addLoadedOrderInput = useCallback((type: LoadedOrderType) => {
+  const setter = type === "coglas" ? setCoglasOrderInputs : setInternalOrderInputs
+  setter((prev) => [...prev, ""])
 }, [])
 
 const hasAnyDraftContent = useCallback((data: any) => {
@@ -2167,7 +2197,7 @@ drawLoadingBox("After Loading", afterX, loadY, afterLoadingItems, afterLoadingCh
         remarks: finalRemarks,
         completionReason,
         loadedOrdersSubtitle,
-        loadedOrderType: orderType,
+        loadedOrderType: loadedOrderTypeSummary,
         loadedOrderNumbers: getLoadedOrderNumbers(),
         drivingLicenseDate,
         adrCertificateDate,
@@ -2438,6 +2468,8 @@ unCodesDone,
     setCompletionReason("")
     setOrderType(null)
     setOrderInputs([""])
+    setCoglasOrderInputs([""])
+    setInternalOrderInputs([""])
     setOrderError("")
     setConfirmAction(null)
 
@@ -2605,6 +2637,27 @@ if (Array.isArray(parsedData.orderInputs)) {
     .map((v: any) => String(v || "").replace(/\D/g, ""))
     .filter((v: string) => v.length > 0)
   setOrderInputs(cleanedOrders.length > 0 ? cleanedOrders : [""])
+
+  // Backwards compatibility for older drafts that stored only one selected order type.
+  if (parsedData.orderType === "coglas") {
+    const cleanedCoglas = cleanedOrders.map((v: string) => v.slice(0, 10)).filter((v: string) => v.length > 0)
+    setCoglasOrderInputs(cleanedCoglas.length > 0 ? cleanedCoglas : [""])
+  } else if (parsedData.orderType === "internal") {
+    const cleanedInternal = cleanedOrders.map((v: string) => v.slice(0, 20)).filter((v: string) => v.length > 0)
+    setInternalOrderInputs(cleanedInternal.length > 0 ? cleanedInternal : [""])
+  }
+}
+if (Array.isArray(parsedData.coglasOrderInputs)) {
+  const cleanedCoglas = parsedData.coglasOrderInputs
+    .map((v: any) => String(v || "").replace(/\D/g, "").slice(0, 10))
+    .filter((v: string) => v.length > 0)
+  setCoglasOrderInputs(cleanedCoglas.length > 0 ? cleanedCoglas : [""])
+}
+if (Array.isArray(parsedData.internalOrderInputs)) {
+  const cleanedInternal = parsedData.internalOrderInputs
+    .map((v: any) => String(v || "").replace(/\D/g, "").slice(0, 20))
+    .filter((v: string) => v.length > 0)
+  setInternalOrderInputs(cleanedInternal.length > 0 ? cleanedInternal : [""])
 }
 
         // Restore signatures
@@ -2771,6 +2824,8 @@ if (Array.isArray(parsedData.orderInputs)) {
     completionReason,
     orderType,
     orderInputs,
+    coglasOrderInputs,
+    internalOrderInputs,
     // Persist photo metadata for both uploaded and pending photos.
     // Actual image data is kept in IndexedDB (idbPutPhoto) so drafts survive refresh/offline.
     photos: photos.map((p) => ({
@@ -2808,6 +2863,8 @@ if (Array.isArray(parsedData.orderInputs)) {
     completionReason,
     orderType,
     orderInputs,
+    coglasOrderInputs,
+    internalOrderInputs,
     photos,
   ])
 
@@ -2935,7 +2992,7 @@ if (Array.isArray(parsedData.orderInputs)) {
         remarks: finalRemarks,
         completionReason,
         loadedOrdersSubtitle,
-        loadedOrderType: orderType,
+        loadedOrderType: loadedOrderTypeSummary,
         loadedOrderNumbers: getLoadedOrderNumbers(),
         drivingLicenseDate,
         adrCertificateDate,
@@ -3120,55 +3177,55 @@ unCodesDone,
             </div>
 
             <div className="mb-4 rounded-md border border-gray-200 p-3">
-              <div className="font-medium mb-3">Which order type was loaded?</div>
-              <div className="flex flex-wrap gap-3 mb-4">
-                <Button
-                  type="button"
-                  variant={orderType === "coglas" ? "default" : "outline"}
-                  className={orderType === "coglas" ? "" : "bg-transparent"}
-                  onClick={() => {
-                    setOrderType("coglas")
-                    setOrderInputs([""])
-                    setOrderError("")
-                  }}
-                >
-                  Coglas order(s)
-                </Button>
-                <Button
-                  type="button"
-                  variant={orderType === "internal" ? "default" : "outline"}
-                  className={orderType === "internal" ? "" : "bg-transparent"}
-                  onClick={() => {
-                    setOrderType("internal")
-                    setOrderInputs([""])
-                    setOrderError("")
-                  }}
-                >
-                  Internal order(s)
-                </Button>
-              </div>
+              <div className="font-medium mb-1">Which order(s) were loaded?</div>
+              <div className="text-xs text-gray-500 mb-4">You can enter Coglas order(s), internal order(s), or both.</div>
 
-              {orderType && (
-                <div className="space-y-3">
-                  {orderInputs.map((value, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      {orderType === "coglas" && <div className="w-10 text-sm font-semibold text-gray-700">CO</div>}
-                      <Input
-                        value={value}
-                        onChange={(e) => updateOrderInput(idx, e.target.value)}
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        maxLength={orderType === "coglas" ? 10 : 20}
-                        placeholder={orderType === "coglas" ? "10 digits" : "Order number"}
-                        className="h-10"
-                      />
-                    </div>
-                  ))}
-                  <Button type="button" variant="outline" className="bg-transparent" onClick={addOrderInput}>
-                    + Add another order
-                  </Button>
+              <div className="space-y-5">
+                <div>
+                  <div className="text-sm font-semibold text-gray-700 mb-2">Coglas order(s)</div>
+                  <div className="space-y-3">
+                    {coglasOrderInputs.map((value, idx) => (
+                      <div key={`coglas-${idx}`} className="flex items-center gap-2">
+                        <div className="w-10 text-sm font-semibold text-gray-700">CO</div>
+                        <Input
+                          value={value}
+                          onChange={(e) => updateLoadedOrderInput("coglas", idx, e.target.value)}
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={10}
+                          placeholder="10 digits"
+                          className="h-10"
+                        />
+                      </div>
+                    ))}
+                    <Button type="button" variant="outline" className="bg-transparent" onClick={() => addLoadedOrderInput("coglas")}>
+                      + Add Coglas order
+                    </Button>
+                  </div>
                 </div>
-              )}
+
+                <div>
+                  <div className="text-sm font-semibold text-gray-700 mb-2">Internal order(s)</div>
+                  <div className="space-y-3">
+                    {internalOrderInputs.map((value, idx) => (
+                      <div key={`internal-${idx}`} className="flex items-center gap-2">
+                        <Input
+                          value={value}
+                          onChange={(e) => updateLoadedOrderInput("internal", idx, e.target.value)}
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={20}
+                          placeholder="Internal order number"
+                          className="h-10"
+                        />
+                      </div>
+                    ))}
+                    <Button type="button" variant="outline" className="bg-transparent" onClick={() => addLoadedOrderInput("internal")}>
+                      + Add internal order
+                    </Button>
+                  </div>
+                </div>
+              </div>
 
               {orderError && <div className="mt-3 text-sm text-red-600">{orderError}</div>}
             </div>
@@ -3185,17 +3242,13 @@ unCodesDone,
               <Button
                 type="button"
                 onClick={async () => {
-                  if (!orderType) {
-                    setOrderError("Please select Coglas order(s) or Internal order(s).")
+                  const coglasNums = getLoadedCoglasOrderNumbers()
+                  const internalNums = getLoadedInternalOrderNumbers()
+                  if (coglasNums.length === 0 && internalNums.length === 0) {
+                    setOrderError("Please enter at least one Coglas or internal order number.")
                     return
                   }
-
-                  const nums = getLoadedOrderNumbers()
-                  if (nums.length === 0) {
-                    setOrderError("Please enter at least one order number.")
-                    return
-                  }
-                  if (orderType === "coglas" && nums.some((n) => n.length !== 10)) {
+                  if (coglasNums.some((n) => n.length !== 10)) {
                     setOrderError("Each Coglas order must have exactly 10 digits.")
                     return
                   }
