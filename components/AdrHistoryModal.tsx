@@ -57,6 +57,42 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     return {}
   }
 
+  const collectOrderValues = (m: Record<string, any>) => {
+    const values = [
+      m.loadedOrders,
+      m.loaded_orders,
+      m.loadedOrderNumbers,
+      m.loaded_order_numbers,
+      m.orderNumbers,
+      m.order_numbers,
+      m.coglasOrders,
+      m.coglas_orders,
+      m.internalOrders,
+      m.internal_orders,
+    ]
+
+    return values.flatMap((value) => {
+      if (!value) return []
+      if (Array.isArray(value)) return value.map((v) => String(v || "").trim()).filter(Boolean)
+      return [String(value).trim()].filter(Boolean)
+    })
+  }
+
+  const orderSearchText = (m: Record<string, any>) => collectOrderValues(m).join(" ").toLowerCase()
+
+  const orderSummary = (it: HistoryItem) => {
+    const m = safeMeta(it.meta)
+    const loadedOrders = String(m.loadedOrders ?? m.loaded_orders ?? "").trim()
+    if (loadedOrders) {
+      return loadedOrders
+        .replace(/^loaded order\(s\):\s*/i, "")
+        .replace(/\s+/g, " ")
+        .trim()
+    }
+
+    return collectOrderValues(m).join(", ").replace(/\s+/g, " ").trim()
+  }
+
   const matchesSearch = (it: HistoryItem, qRaw: string) => {
     const q = (qRaw || "").trim().toLowerCase()
     if (!q) return true
@@ -65,12 +101,18 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
     const truck = String(m.truckPlate ?? m.truck_plate ?? m.truckNumber ?? m.truck_number ?? "").toLowerCase()
     const trailer = String(m.trailerPlate ?? m.trailer_plate ?? m.trailerNumber ?? m.trailer_number ?? "").toLowerCase()
     const inspector = String(m.inspectorName ?? m.inspector_name ?? "").toLowerCase()
+    const orders = orderSearchText(m)
     const hash = String(it.checklist_hash ?? "").toLowerCase()
+    const qDigits = q.replace(/\D/g, "")
+    const orderDigits = orders.replace(/\D/g, "")
+
     return (
       driver.includes(q) ||
       truck.includes(q) ||
       trailer.includes(q) ||
       inspector.includes(q) ||
+      orders.includes(q) ||
+      (!!qDigits && orderDigits.includes(qDigits)) ||
       hash.includes(q)
     )
   }
@@ -307,7 +349,7 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                   <Input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search by driver, truck or trailer"
+                    placeholder="Search by driver, truck, trailer or order number"
                   />
                 </div>
                 <Button
@@ -337,6 +379,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                       >
                         <div className="min-w-0">
                           <div className="text-sm font-medium break-words">{itemLabel(it)}</div>
+                          {orderSummary(it) && (
+                            <div className="text-xs text-gray-600 break-words">Orders: {orderSummary(it)}</div>
+                          )}
                           <div className="text-xs text-gray-600 break-words">
                             {new Date(it.created_at).toLocaleString()} • expires{" "}
                             {new Date(it.expires_at).toLocaleDateString()}
@@ -390,6 +435,9 @@ export default function AdrHistoryModal({ open, onClose }: Props) {
                       >
                         <div className="min-w-0">
                           <div className="text-sm font-medium break-words">{itemLabel(it)}</div>
+                          {orderSummary(it) && (
+                            <div className="text-xs text-gray-600 break-words">Orders: {orderSummary(it)}</div>
+                          )}
                           <div className="text-xs text-gray-600 break-words">
                             {new Date(it.created_at).toLocaleString()} • expires{" "}
                             {new Date(it.expires_at).toLocaleDateString()}
