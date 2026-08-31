@@ -49,9 +49,10 @@ type ADRChecklistProps = {
   variant: ChecklistVariant
   draftId?: string
   onBack?: () => void
+  onCompleted?: () => void
 }
 
-export default function ADRChecklist({ variant, draftId, onBack }: ADRChecklistProps) {
+export default function ADRChecklist({ variant, draftId, onBack, onCompleted }: ADRChecklistProps) {
   const includeAdrCertificate = variant === "full"
   const { inspectorName: loggedInspectorName, inspectorEmail: loggedInspectorEmail, session } = useAuth()
   const userId = (session as any)?.user?.id || (session as any)?.user?.sub || "anonymous"
@@ -170,7 +171,14 @@ const [internalOrderInputs, setInternalOrderInputs] = useState<string[]>([""])
 const [orderError, setOrderError] = useState("")
 const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 const lastDeletedEmptyDraftRef = useRef<string>("")
+const finalizedDraftRef = useRef(false)
 const [lockConflictMessage, setLockConflictMessage] = useState("")
+
+useEffect(() => {
+  // A completed checklist gets a fresh draft id before the next one starts.
+  finalizedDraftRef.current = false
+  lastDeletedEmptyDraftRef.current = ""
+}, [activeDraftId])
 
   // Refs for date inputs
   const dateInputRefs = useRef<
@@ -1176,6 +1184,15 @@ const hasAnyDraftContent = useCallback((data: any) => {
 const saveSharedDraft = useCallback((data: any) => {
   if (!isMounted || typeof window === "undefined") return
 
+  // Once a checklist has been finalized, never allow a late React effect or a
+  // previously scheduled autosave to recreate the same draft.
+  if (finalizedDraftRef.current) {
+    window.localStorage.removeItem(sharedStorageKey)
+    window.localStorage.removeItem(storageKey)
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    return
+  }
+
   const hasContent = hasAnyDraftContent(data)
   const payload = {
     draftId: activeDraftId,
@@ -1233,6 +1250,12 @@ const saveSharedDraft = useCallback((data: any) => {
         body: JSON.stringify({ variant, draftId: activeDraftId, data: payload.data }),
       })
         .then(async (res) => {
+          if (res.status === 410) {
+            finalizedDraftRef.current = true
+            window.localStorage.removeItem(sharedStorageKey)
+            window.localStorage.removeItem(storageKey)
+            return
+          }
           if (res.status !== 409) return
           const json = await res.json().catch(() => ({}))
           setLockConflictMessage(
@@ -1255,6 +1278,79 @@ const saveSharedDraft = useCallback((data: any) => {
   storageKey,
   getFreshAccessToken,
   lockConflictMessage,
+])
+
+const saveDraftNow = useCallback(async (data: any): Promise<boolean> => {
+  if (finalizedDraftRef.current || typeof window === "undefined") return true
+
+  const payload = {
+    draftId: activeDraftId,
+    variant,
+    updatedAt: new Date().toISOString(),
+    ownerUserId: userId,
+    inspectorName: loggedInspectorName || selectedInspector || "Unknown inspector",
+    driverName: data?.driverName || "",
+    data: {
+      ...data,
+      selectedInspector: loggedInspectorName || selectedInspector || data?.selectedInspector || "",
+    },
+  }
+
+  window.localStorage.setItem(sharedStorageKey, JSON.stringify(payload))
+  window.localStorage.setItem(storageKey, JSON.stringify(data))
+  if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+
+  const token = await getFreshAccessToken()
+  if (!token) {
+    window.alert("Could not save this checklist because your session is not active. Please sign in again.")
+    return false
+  }
+
+  try {
+    const res = await fetch("/api/adr-draft", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ variant, draftId: activeDraftId, data: payload.data }),
+    })
+    const json = await res.json().catch(() => ({}))
+
+    if (res.status === 410 || json?.code === "DRAFT_COMPLETED") {
+      finalizedDraftRef.current = true
+      window.localStorage.removeItem(sharedStorageKey)
+      window.localStorage.removeItem(storageKey)
+      return true
+    }
+
+    if (res.status === 409) {
+      setLockConflictMessage(
+        json?.message ||
+          `This checklist was taken over by ${json?.lockedByInspectorName || "another user"}. Please go back to the main menu.`,
+      )
+      return false
+    }
+
+    if (!res.ok || !json?.success) {
+      window.alert(json?.message || "Could not save this checklist. Please check your connection and try again.")
+      return false
+    }
+
+    return true
+  } catch {
+    window.alert("Could not save this checklist. Please check your connection and try again.")
+    return false
+  }
+}, [
+  activeDraftId,
+  variant,
+  userId,
+  loggedInspectorName,
+  selectedInspector,
+  sharedStorageKey,
+  storageKey,
+  getFreshAccessToken,
 ])
 
 
@@ -2367,6 +2463,7 @@ unCodesDone,
             checklistHash,
             emailSent: false,
             meta: {
+              draftId: activeDraftId,
               variant,
               driverName,
               truckPlate,
@@ -2434,7 +2531,7 @@ unCodesDone,
       a.remove()
 
       // Keep the same behavior as Send Email: after generating/downloading, reset the checklist.
-      resetForm()
+      await resetForm()
 
       setTimeout(() => {
         try {
@@ -2448,7 +2545,13 @@ unCodesDone,
     }
   }
 
-  const resetForm = useCallback(() => {
+  const resetForm = useCallback(async () => {
+    // Mark the current draft as finalized before changing React state. This closes a
+    // race where the autosave effect could write the just-completed data back after
+    // localStorage had already been cleared.
+    finalizedDraftRef.current = true
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+
     setDriverName("")
     setTruckPlate("")
     setTrailerPlate("")
@@ -2557,20 +2660,39 @@ unCodesDone,
       localStorage.removeItem(sharedStorageKey)
     }
 
-    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
-    void (async () => {
-      const token = await getFreshAccessToken()
-      if (!token) return
-      fetch("/api/adr-draft", {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ variant, draftId: activeDraftId }),
-      }).catch(() => {})
-    })()
-  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey, sharedStorageKey, getFreshAccessToken, variant, activeDraftId])
+    const token = await getFreshAccessToken()
+    if (token) {
+      try {
+        const res = await fetch("/api/adr-draft", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ action: "complete", variant, draftId: activeDraftId }),
+          keepalive: true,
+        })
+        const json = await res.json().catch(() => ({}))
+        if (res.status === 409) {
+          setLockConflictMessage(
+            json?.message ||
+              `This checklist was taken over by ${json?.lockedByInspectorName || "another user"}. Please go back to the main menu.`,
+          )
+          return
+        }
+        if (!res.ok || !json?.success) {
+          console.warn("Could not mark completed draft as finished:", json?.message || `HTTP ${res.status}`)
+        }
+      } catch (error) {
+        console.warn("Could not mark completed draft as finished:", error)
+      }
+    }
+
+    // A finalized checklist must not keep using the same draft id. The parent creates
+    // a fresh id so the form can stay open and immediately be used for the next truck.
+    if (onCompleted) onCompleted()
+    else onBack?.()
+  }, [equipmentItems, beforeLoadingItems, afterLoadingItems, clearSignature, clearInspectorSignature, loggedInspectorName, storageKey, sharedStorageKey, getFreshAccessToken, variant, activeDraftId, onBack, onCompleted])
 
   // Initialize component
   useEffect(() => {
@@ -3150,6 +3272,7 @@ unCodesDone,
           variant,
           checklistHash,
           meta: {
+            draftId: activeDraftId,
             variant,
             driverName,
             truckPlate,
@@ -3172,7 +3295,7 @@ unCodesDone,
 
       if (data.success) {
         setEmailStatus("Email sent successfully!")
-        resetForm()
+        await resetForm()
       } else {
         setEmailStatus(data.message || "Email sent successfully!")
       }
@@ -3479,6 +3602,9 @@ unCodesDone,
               const currentData = buildCurrentDraftData()
               if (!hasAnyDraftContent(currentData)) {
                 await deleteEmptyDraftNow()
+              } else {
+                const saved = await saveDraftNow(currentData)
+                if (!saved) return
               }
               onBack()
             }}

@@ -202,6 +202,29 @@ function HomePageInner() {
     return drafts.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
   }
 
+  const removeLocalDraftCache = (draft: InProgressDraft) => {
+    if (typeof window === "undefined") return
+    window.localStorage.removeItem(`adrSharedChecklistData_${draft.draftId}`)
+
+    // Remove the per-user form cache only when it belongs to the currently logged-in user.
+    // Shared draft keys can also contain leftovers from another user who used this browser.
+    if (!draft.ownerUserId || draft.ownerUserId === userId) {
+      window.localStorage.removeItem(`adrChecklistData_${draft.variant}_${userId}_${draft.draftId}`)
+    }
+
+    // Legacy versions used one shared key per variant. Remove it only when it points
+    // to the same draft that the server says no longer exists.
+    const legacyKey = `adrSharedChecklistData_${draft.variant}`
+    try {
+      const raw = window.localStorage.getItem(legacyKey)
+      const parsed = raw ? JSON.parse(raw) : null
+      const legacyDraftId = String(parsed?.draftId || parsed?.data?.draftId || draft.variant)
+      if (legacyDraftId === draft.draftId) window.localStorage.removeItem(legacyKey)
+    } catch {
+      // Ignore invalid legacy cache entries.
+    }
+  }
+
   const loadInProgressDrafts = async () => {
     if (!session || typeof window === "undefined") return
 
@@ -221,10 +244,28 @@ function HomePageInner() {
             .map((d: any) => normalizeDraft(d, d?.draftId || d?.variant || "remote"))
             .filter(Boolean) as InProgressDraft[]
 
-          const byId = new Map<string, InProgressDraft>()
-          drafts.forEach((d) => byId.set(d.draftId, d))
-          remoteDrafts.forEach((d) => byId.set(d.draftId, d))
-          drafts = Array.from(byId.values()).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+          // Supabase is the source of truth when it is reachable. Older app versions
+          // could leave shared localStorage entries behind after completion, which made
+          // finished checklists reappear forever. Keep only a very recent local-only
+          // entry (to protect an in-flight autosave); remove older/cross-user ghosts.
+          const remoteIds = new Set(remoteDrafts.map((d) => d.draftId))
+          const now = Date.now()
+          const recentUnsyncedLocal = drafts.filter((draft) => {
+            if (remoteIds.has(draft.draftId)) return false
+
+            const updatedAt = Date.parse(String(draft.updatedAt || ""))
+            const isVeryRecent = Number.isFinite(updatedAt) && now - updatedAt < 30_000
+            const belongsToCurrentUser = !draft.ownerUserId || draft.ownerUserId === userId
+
+            if (isVeryRecent && belongsToCurrentUser) return true
+
+            removeLocalDraftCache(draft)
+            return false
+          })
+
+          drafts = [...remoteDrafts, ...recentUnsyncedLocal.map((d) => ({ ...d, syncError: true }))].sort((a, b) =>
+            String(b.updatedAt).localeCompare(String(a.updatedAt)),
+          )
         } else {
           drafts = drafts.map((d) => ({ ...d, syncError: true }))
         }
@@ -361,6 +402,11 @@ function HomePageInner() {
       <ADRChecklist
         variant={variant}
         draftId={activeDraftId}
+        onCompleted={() => {
+          // Keep the reset behavior after Send/Download, but never reuse the id of a
+          // completed checklist. The next checklist starts with a brand-new draft id.
+          setActiveDraftId(createDraftId())
+        }}
         onBack={() => {
           // Clear the persisted "active" screen only when the user explicitly goes back.
           setActiveDraftId("")
