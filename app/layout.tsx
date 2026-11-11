@@ -10,25 +10,13 @@ export const metadata: Metadata = {
   description: "ADR Equipment Checklist for Transport Safety",
   icons: {
     icon: [
-      {
-        url: "/adr-icon.jpg",
-        sizes: "32x32",
-        type: "image/jpeg",
-      },
-      {
-        url: "/adr-icon.jpg",
-        sizes: "16x16",
-        type: "image/jpeg",
-      },
+      { url: "/adr-checklist-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/adr-checklist-16.png", sizes: "16x16", type: "image/png" },
     ],
     apple: [
-      {
-        url: "/adr-icon.jpg",
-        sizes: "180x180",
-        type: "image/jpeg",
-      },
+      { url: "/adr-checklist-180.png", sizes: "180x180", type: "image/png" },
     ],
-    shortcut: "/adr-icon.jpg",
+    shortcut: "/adr-checklist-32.png",
   },
   manifest: "/manifest.json",
     generator: 'v0.dev'
@@ -42,10 +30,6 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <link rel="icon" type="image/jpeg" sizes="32x32" href="/adr-icon.jpg" />
-        <link rel="icon" type="image/jpeg" sizes="16x16" href="/adr-icon.jpg" />
-        <link rel="apple-touch-icon" sizes="180x180" href="/adr-icon.jpg" />
-        <link rel="shortcut icon" href="/adr-icon.jpg" />
         <meta name="theme-color" content="#ffffff" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
